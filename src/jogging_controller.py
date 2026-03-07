@@ -266,6 +266,14 @@ if __name__ == "__main__":
             states = jogger.update(dial_angles, dt)
             latest_states.update(states)
 
+            # --- Haptic feedback: send tracked position + bounds back to dials ---
+            for mid, state in states.items():
+                feedback_pos = jogger.joint_deg_to_dial_decideg(mid, state.planned_deg)
+                min_b, max_b = motor_bounds[mid]
+                system.set_control(
+                    mid, position=feedback_pos, min_bound=min_b, max_bound=max_b
+                )
+
             # Display at a slower rate to avoid console bottleneck
             display_elapsed = now - last_display_time
             if display_elapsed >= DISPLAY_INTERVAL_S:
@@ -299,5 +307,10 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print(f"\n\nShutting down...")
     finally:
+        # Send position=0 to all motors before stopping, so dials track back to zero
+        for mid in TEAM_1_MOTORS:
+            min_b, max_b = motor_bounds[mid]
+            system.set_control(mid, position=0, min_bound=min_b, max_bound=max_b)
+        time.sleep(0.1)  # give writer threads time to send the final C commands
         system.stop()
         print("Done.")
