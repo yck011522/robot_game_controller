@@ -24,22 +24,42 @@ Implemented in `src/haptic_serial.py` with a register-based, self-managing archi
   - **Writer thread**: 50 Hz loop, sends `C` commands from control registers + queued one-off commands
 - **`TelemetryFrame`** — Frozen dataclass (motor_id, angle, speed, torque, timestamp). Thread-safe snapshot passed to the upper app.
 - **Auto-discovery**: Enumerates COM ports by VID/PID (`1A86:7522` / `1A86:7523`), probes with `V` and `I` commands, matches motor IDs against expected set.
-- **Watchdog + reconnect**: If no telemetry received for 2 seconds, board is marked disconnected and cleaned up. Next discovery scan reconnects it (possibly on a different COM port).
+- **Watchdog + reconnect**: If no telemetry received for 0.5 seconds, board is marked disconnected and cleaned up. Next discovery scan reconnects it (possibly on a different COM port).
 - **Motor IDs**: Already provisioned as 11–16 (Team 1). Future Team 2 will be 21–26.
 - **Control gating**: Writer thread only sends `C` commands after the upper app has called `set_control()` at least once, avoiding unexpected motor movement on connect.
 
 ### Tests to Run
-- [ ] All 3 boards discovered and identified automatically
-- [ ] Motor IDs 11–16 read correctly from the 3 boards
-- [ ] Telemetry streams from all 6 motors simultaneously without data loss
-- [ ] Dial positions read correctly (turn each dial, verify decidegree values make sense)
-- [ ] Sequence numbers increment and echo correctly
-- [ ] FOC rate reported in a reasonable range (~500–600 Hz)
-- [ ] System handles USB disconnect/reconnect gracefully
+- [x] All 3 boards discovered and identified automatically
+- [x] Motor IDs 11–16 read correctly from the 3 boards
+- [x] Telemetry streams from all 6 motors simultaneously without data loss
+- [x] Dial positions read correctly (turn each dial, verify decidegree values make sense)
+- [ ] Sequence numbers increment and echo correctly — *not explicitly verified in standalone test (no C commands sent), but infrastructure is in place*
+- [ ] FOC rate reported in a reasonable range (~500–600 Hz) — *not displayed in standalone test, but parsed and stored internally*
+- [x] System handles USB disconnect/reconnect gracefully
 
 ### Test Results
 
-_No tests run yet._
+**Date: 2026-03-08**
+
+**Test 1 — Initial run (before DTR fix):**
+- All 3 boards were discovered and connected, but took ~8 seconds due to an ESP32 reset caused by pyserial toggling DTR/RTS on serial open. The boards entered their calibration mode before resuming normal operation.
+- After the reset delay, all 6 motors (IDs 11–16) were correctly identified across COM7, COM8, COM9.
+- Telemetry streamed for all 6 motors. Dial angles displayed correctly in degrees.
+- USB unplug/replug test: detected disconnect instantly (serial error) and reconnected on next discovery scan (~3s). Worked very smoothly.
+- Board reset button test: the 2.0s watchdog timeout was too close to the ESP32 reboot time (~2s), so the gap was not detected — the board recovered before the watchdog triggered.
+
+**Fix applied — DTR/RTS disabled, watchdog tightened to 0.5s:**
+- Serial port now opened with `dtr=False, rts=False` to prevent ESP32 auto-reset.
+- Watchdog timeout reduced from 2.0s to 0.5s.
+
+**Test 2 — After DTR fix:**
+- All 3 boards connected immediately on first run (no reset). Connection completed in under 1 second.
+- Second run also connected immediately — no difference between first and subsequent runs.
+- Board reset button: now correctly detected as a disconnect within 0.5s, board reconnects after reboot.
+- USB unplug/replug: continues to work instantly as before.
+- All 6 motor angles displayed correctly and updated in real-time.
+
+**Conclusion:** All primary Phase 1 goals met. Sequence number echo and FOC rate display not explicitly tested in the standalone script but are implemented and can be verified in Phase 3 when the control loop is active.
 
 ---
 
