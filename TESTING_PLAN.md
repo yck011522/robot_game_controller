@@ -15,12 +15,18 @@ This document outlines the phased testing plan for the robot game controller. Ea
 Establish reliable simultaneous communication with all 3 ESP32 boards.
 
 ### What to Implement
-- **Device discovery**: Enumerate COM ports by VID/PID (`1A86:7522` / `1A86:7523`), probe each with `V` command, read motor IDs with `I` command
-- **Device map**: Build mapping of `motor_id → COM port` for all 6 motors
-- **Motor ID provisioning**: Motor IDs are already assigned (11–16 for Team 1, 21–26 for future Team 2). Discovery reads these IDs to build the device map.
-- **Telemetry reader**: Open all 3 serial ports, parse `T` frames at 50 Hz, aggregate into a unified data structure (6 motor angles, speeds, torques, FOC rates)
-- **Command sender**: Send `C` commands at 50 Hz to each board
-- **Sequence tracking**: Maintain per-board sequence counters, detect command lag via telemetry seq echo
+
+Implemented in `src/haptic_serial.py` with a register-based, self-managing architecture:
+
+- **`HapticSystem`** — Top-level class. Upper app creates it with expected motor IDs (e.g. `[11..16]`), calls `start()`. Background discovery thread auto-finds and connects boards. Upper app reads/writes motor state by motor ID — no COM ports or board knowledge needed.
+- **`_BoardConnection`** — Internal, one per ESP32 board. Owns two threads:
+  - **Reader thread**: Blocking `readline()`, parses `T` frames, updates telemetry registers
+  - **Writer thread**: 50 Hz loop, sends `C` commands from control registers + queued one-off commands
+- **`TelemetryFrame`** — Frozen dataclass (motor_id, angle, speed, torque, timestamp). Thread-safe snapshot passed to the upper app.
+- **Auto-discovery**: Enumerates COM ports by VID/PID (`1A86:7522` / `1A86:7523`), probes with `V` and `I` commands, matches motor IDs against expected set.
+- **Watchdog + reconnect**: If no telemetry received for 2 seconds, board is marked disconnected and cleaned up. Next discovery scan reconnects it (possibly on a different COM port).
+- **Motor IDs**: Already provisioned as 11–16 (Team 1). Future Team 2 will be 21–26.
+- **Control gating**: Writer thread only sends `C` commands after the upper app has called `set_control()` at least once, avoiding unexpected motor movement on connect.
 
 ### Tests to Run
 - [ ] All 3 boards discovered and identified automatically
