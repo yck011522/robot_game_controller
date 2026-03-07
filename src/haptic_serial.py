@@ -390,13 +390,22 @@ class HapticSystem:
     The upper application does NOT need to know about COM ports or boards.
     """
 
-    def __init__(self, expected_motor_ids: list[int]):
+    def __init__(
+        self,
+        expected_motor_ids: list[int],
+        motor_bounds: Optional[dict[int, tuple[int, int]]] = None,
+    ):
         self.expected_motor_ids = set(expected_motor_ids)
 
         # port → _BoardConnection
         self._boards: dict[str, _BoardConnection] = {}
         # motor_id → _BoardConnection
         self._motor_to_board: dict[int, _BoardConnection] = {}
+
+        # Bounds applied to each motor on connect: {motor_id: (min_decideg, max_decideg)}
+        self._motor_bounds: dict[int, tuple[int, int]] = (
+            dict(motor_bounds) if motor_bounds else {}
+        )
 
         self._discovery_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
@@ -576,6 +585,9 @@ class HapticSystem:
             board = _BoardConnection(port, id0, id1)
             board.connect()
 
+            # Apply default bounds on connect so dials have correct range immediately
+            self._apply_motor_bounds(board)
+
             with self._lock:
                 self._boards[port] = board
                 if id0 in self.expected_motor_ids:
@@ -588,6 +600,24 @@ class HapticSystem:
     def _get_managed_ports(self) -> set[str]:
         with self._lock:
             return set(self._boards.keys())
+
+    def _apply_motor_bounds(self, board: _BoardConnection):
+        """Send configured bounds to a newly connected board."""
+        for motor_id in board.motor_ids:
+            bounds = self._motor_bounds.get(motor_id)
+            if bounds:
+                min_b, max_b = bounds
+                # Use position=0 with bounds; the main loop will update
+                # position shortly. The brief tracking-to-0 force is minimal.
+                board.set_control(
+                    motor_id, position=0, min_bound=min_b, max_bound=max_b
+                )
+                logger.info(
+                    "Applied bounds to motor %d: [%d, %d] decideg",
+                    motor_id,
+                    min_b,
+                    max_b,
+                )
 
     @staticmethod
     def _probe_port(port: str) -> Optional[tuple[int, int]]:
