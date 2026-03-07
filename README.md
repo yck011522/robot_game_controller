@@ -27,37 +27,46 @@ Each team's robotic arm has 6 joints. The game controller host reads the haptic 
 ## Software Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Game Controller Host (PC)                 │
-│                                                              │
-│  ┌──────────┐   ┌──────────────┐   ┌───────────────────┐   │
-│  │  Serial   │──▶│   Input      │──▶│  Joint Pipeline   │   │
-│  │  Manager  │   │  Processor   │   │                   │   │
-│  │ (3 ports) │   │  (gearing,   │   │  1. Gearing Ratio │   │
-│  │           │   │   mapping)   │   │  2. Range Clamp   │   │
-│  └──────────┘   └──────────────┘   │  3. Rate Limiter   │   │
-│       ▲                            │  4. Collision Check │   │
-│       │                            └────────┬──────────┘   │
-│  ┌──────────┐   ┌──────────────┐            │              │
-│  │  Haptic   │◀──│  Feedback    │◀───────────┘              │
-│  │  Feedback │   │  Generator   │                           │
-│  │  Sender   │   │              │──▶ Robot Arm Interface    │
-│  └──────────┘   └──────────────┘     (real or simulated)    │
-└─────────────────────────────────────────────────────────────┘
+┌────────────────────────── Main Game Loop (~50 Hz) ──────────────────────────┐
+│                                                                              │
+│  1. Read haptic dials    ← HapticSystem     (self-threaded, register model) │
+│  2. Read robot position  ← RobotInterface   (self-threaded, register model) │
+│  3. Jog processing       ← JoggingController (called each tick, stateful)   │
+│  4. Motion planning      ← MotionPlanner     (called each tick, collision)  │
+│  5. Send to robot        ← RobotInterface.set_target()                      │
+│  6. Haptic feedback      ← HapticSystem.set_control()                       │
+│  7. Scoring / display    ← ScoringSystem, DisplaySystem (self-threaded)     │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Joint Processing Pipeline
+**I/O subsystems** (haptic controllers, robot arm, load cells, displays) are each self-threaded with a register model — they manage their own communication timing internally. The main game loop reads and writes to them as shared registers.
 
-Raw dial positions go through the following stages before being sent to the robot:
+**Processing stages** (jogging controller, motion planner) are stateful processors called synchronously by the main game loop each tick. They are not threaded — game logic stays sequential and easy to reason about.
 
-1. **Gearing Ratio** — Maps dial rotations to joint rotations (e.g., 10 dial turns = 1 joint rotation)
-2. **Range Clamping** — Constrains commanded angles to each joint's allowable range
-3. **Rate Limiting** — Caps the speed at which a joint command can change, producing smooth motion
-4. **Collision Detection** — Checks that the commanded pose won't cause the robot to collide with itself or its environment
+### Haptic Controllers (`HapticSystem`)
+
+See [PROTOCOL.md](PROTOCOL.md) for the ESP32 communication protocol. The `HapticSystem` auto-discovers controllers by USB VID/PID, manages reader/writer threads per board, and provides a motor-ID-based register interface.
+
+### Robot Arm (`RobotInterface`)
+
+Each team's robotic arm is a UR robot communicated with via the **RTDE (Real-Time Data Exchange)** protocol library. RTDE supports up to 500 Hz bidirectional communication. The `RobotInterface` runs its own thread at the RTDE native rate and exposes a register model:
+- **Read**: current joint positions (updated at up to 500 Hz internally)
+- **Write**: target joint positions (sent at up to 500 Hz internally)
+
+The main game loop reads the current robot position early in each tick and writes the planned target at the end — decoupled from the RTDE update rate.
+
+### Jogging Controller
+
+Processes raw dial inputs into throttled joint targets: unit conversion → gearing → static range clamping → rate limiting. Stateful (tracks rate-limited positions). Does not handle collision detection.
+
+### Motion Planner
+
+Synthesizes all 6 joint targets with collision awareness. Takes the throttled targets from the jogging controller, checks for self-collision and environment collision, and produces the final planned target for each joint. May constrain some joints while allowing others to move freely.
 
 ### Haptic Feedback Loop
 
-The filtered position (or the robot's actual position) is sent back to the haptic controllers as a tracking target. The ESP32's PD controller creates a restoring force, so players feel:
+The planned position (or the robot's actual position) is sent back to the haptic controllers as a tracking target. The ESP32's PD controller creates a restoring force, so players feel:
 
 - **Tracking resistance** — When the player leads ahead of the rate-limited target
 - **Bounds restoration + OOB kick** — When the player pushes past a joint limit or into a detected collision zone
