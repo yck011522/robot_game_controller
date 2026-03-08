@@ -88,8 +88,8 @@ Implemented in `src/jogging_controller.py` with three classes:
 ### Tests to Run
 - [x] Raw dial angle correctly converted through gear ratio for each joint
 - [x] Output clamped at joint limits (command past limit, verify output stays at limit)
-- [ ] Rate limiter works: spin dial quickly, verify output ramps smoothly at configured max velocity — *rate limiter code and `*` flag in place; loop confirmed at 48.8 Hz with correct dt (20.3 ms). Will be stress-tested in Phase 3 when tracking feedback makes rate limiting physically observable.*
-- [ ] Rate limiter tracks: when dial stops, output eventually reaches the dial's commanded position — *same as above, deferred to Phase 3*
+- [x] Rate limiter works: spin dial quickly, verify output ramps smoothly at configured max velocity
+- [x] Rate limiter tracks: when dial stops, output eventually reaches the dial's commanded position
 - [x] Collision stub passes through values unchanged
 - [x] All 6 joints process independently and correctly
 
@@ -156,18 +156,30 @@ Every 20ms:
 | `oob_kick_pulse_interval_ms` | 40 ms | Kick repetition rate. |
 
 ### Tests to Run
-- [ ] Tracking force felt when dial leads ahead of rate-limited output
-- [ ] Tracking force disappears when robot "catches up" to dial position
-- [ ] Hard stop felt at joint limits
-- [ ] OOB kick vibration felt when pushing past joint limits
-- [ ] Feedback feels natural and responsive at 50 Hz update rate
-- [ ] No oscillation or instability in the tracking feedback loop
-- [ ] Bounds correctly update if joint limits are changed at runtime
-- [ ] Tune `tracking_kp`/`tracking_kd` for comfortable feel — record chosen values
+- [x] Tracking force felt when dial leads ahead of rate-limited output
+- [x] Tracking force disappears when robot "catches up" to dial position
+- [x] Hard stop felt at joint limits
+- [x] OOB kick vibration felt when pushing past joint limits
+- [x] Feedback feels natural and responsive at 50 Hz update rate
+- [x] No oscillation or instability in the tracking feedback loop
+- [ ] Bounds correctly update if joint limits are changed at runtime — *deferred: no runtime limit changes implemented yet*
+- [ ] Tune `tracking_kp`/`tracking_kd` for comfortable feel — record chosen values — *firmware defaults (kp=5.0, kd=0.1) feel acceptable; will tune during Phase 4 end-to-end testing*
 
 ### Test Results
 
-_No tests run yet._
+**Date: 2026-03-08**
+
+**Test — Standalone jogging_controller.py with haptic feedback loop:**
+- Tracking force clearly felt when spinning a dial quickly — rate limiter holds `planned_deg` back, creating a spring force via the ESP32's tracking PD controller.
+- Tracking force disappears after the rate-limited position catches up to the dial.
+- Hard stop felt at ±180° joint limits (M16 confirmed clamped at +180.0° after 18+ turns).
+- OOB kick vibration felt when pushing past joint limits.
+- Feedback responsive at 48.6 Hz game loop (dt ~20.6 ms).
+- No oscillation or instability observed.
+- On exit, dials track back toward zero (position=0 sent in finally block with 100ms flush delay).
+- Firmware defaults used: tracking_kp=5.0, tracking_kd=0.1, bounds_kp=20.0.
+
+**Conclusion:** All primary Phase 3 goals met. Haptic feedback loop is closed and working. Runtime bounds update and parameter tuning deferred to Phase 4.
 
 ---
 
