@@ -193,7 +193,10 @@ if __name__ == "__main__":
     sys.path.insert(0, os.path.dirname(__file__))
     from haptic_serial import HapticSystem
 
+    # --- Settings ---
     TEAM_1_MOTORS = [11, 12, 13, 14, 15, 16]
+    GAME_LOOP_HZ = 50
+    DISPLAY_HZ = 20
 
     # Configure joints — same defaults for all for now
     configs = [
@@ -233,7 +236,7 @@ if __name__ == "__main__":
         print(f"\nAll {len(TEAM_1_MOTORS)} motors connected!\n")
 
         # --- Print header ---
-        DISPLAY_INTERVAL_S = 0.050  # Update display at ~5 Hz (printing is slow)
+        DISPLAY_INTERVAL_S = 1.0 / DISPLAY_HZ
 
         header = "  Motor | Commanded(°) | Clamped(°) | Throttled(°) | Rate-limited?"
         separator = "  ------+--------------+------------+--------------+--------------"
@@ -292,7 +295,9 @@ if __name__ == "__main__":
                         lines.append(
                             f"  M{mid:>2}   |         --- |       --- |         --- |  "
                         )
-                lines.append(f"  Loop: {hz:5.1f} Hz  dt: {dt*1000:5.1f} ms")
+                lines.append(
+                    f"  Game Loop Frequency: {hz:5.1f} Hz  dt: {dt*1000:5.1f} ms"
+                )
 
                 # Move cursor up and overwrite
                 num_lines = len(TEAM_1_MOTORS) + 1  # data lines + status bar
@@ -302,7 +307,7 @@ if __name__ == "__main__":
                 last_display_time = now
                 loop_count = 0
 
-            time.sleep(0.020)  # ~50 Hz control loop
+            time.sleep(1.0 / GAME_LOOP_HZ)
 
     except KeyboardInterrupt:
         print(f"\n\nShutting down...")

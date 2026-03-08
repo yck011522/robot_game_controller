@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 _CH340_VID_PIDS = {(0x1A86, 0x7522), (0x1A86, 0x7523)}
 
 _BAUDRATE = 230400
-_CONTROL_SEND_INTERVAL_S = 0.020  # 50 Hz writer loop
+_HAPTIC_UPDATE_HZ = 50
 _DISCOVERY_INTERVAL_S = 3.0  # seconds between discovery scans
 _WATCHDOG_TIMEOUT_S = 0.5  # no telemetry for this long = disconnected
 _PROBE_TIMEOUT_S = 1.5  # timeout when probing a new port
@@ -368,7 +368,7 @@ class _BoardConnection:
 
             # 3. Sleep for remainder of cycle
             elapsed = time.time() - cycle_start
-            sleep_time = _CONTROL_SEND_INTERVAL_S - elapsed
+            sleep_time = (1.0 / _HAPTIC_UPDATE_HZ) - elapsed
             if sleep_time > 0:
                 self._stop_event.wait(sleep_time)
 
