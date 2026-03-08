@@ -1,4 +1,8 @@
 {
     "python-envs.defaultEnvManager": "ms-python.python:conda",
-    "python-envs.defaultPackageManager": "ms-python.python:conda"
+    "python-envs.defaultPackageManager": "ms-python.python:conda",
+    "chat.tools.terminal.autoApprove": {
+        "C:\\Users\\leungp\\anaconda3\\envs\\telemetry-display\\python.exe": true,
+        "Start-Process": true
+    }
 }
