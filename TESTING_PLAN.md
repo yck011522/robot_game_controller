@@ -189,32 +189,59 @@ Every 20ms:
 A mock robot arm with simple dynamics, so the full end-to-end experience can be tested and tuned without real robot hardware.
 
 ### What to Implement
-- **First-order dynamics**: Each joint moves toward its filtered target at a configurable max speed, simulating real robot lag. E.g., a simple model: `position += clamp(target - position, -max_speed * dt, +max_speed * dt)`
-- **Joint state**: Maintain the "actual" position of all 6 joints
-- **Exchangeable interface**: The simulated arm exposes the same interface as a future real robot driver:
-  - `send_target(joint_angles: [6])` — command the arm
-  - `get_current_position() → [6]` — read current joint positions
+
+Implemented in `src/simulated_robot.py` with the same threaded register-model pattern as `HapticSystem`:
+
+- **`SimulatedRobotInterface`** — Self-threaded simulated robot arm. Internal physics thread runs at 200 Hz, computing first-order dynamics (speed-limited ramp toward target).
+  - `send_target(joint_targets: dict[int, float])` — write target positions (degrees)
+  - `get_position(joint_id) → float` — read actual position (degrees)
+  - `get_all_positions() → dict[int, float]` — read all positions
+  - `start()` / `stop()` — lifecycle management
+- **First-order dynamics**: `position += clamp(target - position, -max_velocity * dt, +max_velocity * dt)`
+- **Same interface pattern as future `URRobotInterface`** — game loop code won't change when the real robot arrives.
+- **Haptic feedback tracks robot actual position** — not the rate-limited planned position. The user feels where the robot *is*, creating a natural two-layer resistance (rate limiter + robot lag).
 
 ### Configuration Parameters
 
 | Parameter | Per-joint | Example Value |
 |-----------|-----------|---------------|
-| Simulated max joint speed | Yes | 30°/s |
-| Response time constant | Yes | ~200 ms |
+| Simulated max joint speed | All (single value) | 30°/s |
+| Physics update rate | All | 200 Hz |
 
 ### Tests to Run
-- [ ] Simulated arm position lags behind commanded target
-- [ ] Simulated arm eventually reaches the commanded position
-- [ ] Full end-to-end loop works: Dial → Pipeline → Sim Arm → Haptic Feedback → Dial
-- [ ] Turning a dial quickly: feel tracking resistance, then arm catches up
-- [ ] Pushing past a joint limit: feel hard stop + kick
-- [ ] All 6 joints behave independently and correctly
-- [ ] System runs stably over extended periods (minutes)
-- [ ] Tune gear ratios, rate limits, and haptic gains for good game feel — record chosen values
+- [x] Simulated arm position lags behind commanded target
+- [x] Simulated arm eventually reaches the commanded position
+- [x] Full end-to-end loop works: Dial → Pipeline → Sim Arm → Haptic Feedback → Dial
+- [x] Turning a dial quickly: feel tracking resistance, then arm catches up
+- [x] Pushing past a joint limit: feel hard stop + kick
+- [x] All 6 joints behave independently and correctly
+- [x] System runs stably over extended periods (minutes)
+- [ ] Tune gear ratios, rate limits, and haptic gains for good game feel — record chosen values — *deferred to game design phase*
 
 ### Test Results
 
-_No tests run yet._
+**Date: 2026-03-08**
+
+**Test — Standalone jogging_controller.py with SimulatedRobotInterface:**
+- SimulatedRobotInterface runs on a separate physics thread at 200 Hz (measured 199.6 Hz).
+  - Initial implementation hit 64 Hz due to Windows timer resolution (15.6ms granularity). Fixed with hybrid sleep + spin-wait using `time.perf_counter()` and `time.sleep(0)` to yield the GIL.
+- Game loop steady at ~49 Hz (50 Hz target).
+- Haptic feedback now tracks **robot actual position** instead of planned position, creating natural two-layer resistance.
+- Latency simulation tested at 0, 50, 100, and 200 ms:
+  - All values: haptic feel remains stable with no oscillation or instability.
+  - Observable effect: Robot(°) column in CLI shows delayed response when starting/stopping dial movement. Delay proportional to configured latency.
+  - Haptic feel largely unchanged across latency values — the tracking PD controller on the ESP32 handles the lag gracefully.
+- Robot position correctly lags behind commanded target (visible in CLI when spinning dial quickly).
+- Robot position catches up to commanded target when dial stops (verified via CLI readout converging).
+- Hard stops and OOB kicks still felt at joint limits (unchanged from Phase 3).
+- All 6 joints behave independently.
+- System ran for multiple minutes of testing across many runs without any stability issues.
+- Firmware defaults still in use: tracking_kp=5.0, tracking_kd=0.1, bounds_kp=20.0.
+
+**Technical note — Windows high-frequency timer:**
+The physics thread uses a hybrid timing strategy. For short cycle times (< 20ms), `Event.wait()` is skipped entirely in favor of a spin-wait loop using `time.perf_counter()`. Each spin iteration calls `time.sleep(0)` to yield the GIL so serial I/O threads can run. For longer cycle times, `Event.wait()` handles the bulk of the delay with spin-wait only for the final portion.
+
+**Conclusion:** All primary Phase 4 goals met. Simulated robot arm integrates cleanly into the end-to-end loop. Latency simulation works correctly but haptic feel is robust across tested range (0–200ms). Parameter tuning deferred to game design phase.
 
 ---
 

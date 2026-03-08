@@ -192,11 +192,16 @@ if __name__ == "__main__":
     # Add src directory to path for importing haptic_serial
     sys.path.insert(0, os.path.dirname(__file__))
     from haptic_serial import HapticSystem
+    from robot_interface import SimulatedRobotInterface
 
     # --- Settings ---
     TEAM_1_MOTORS = [11, 12, 13, 14, 15, 16]
     GAME_LOOP_HZ = 50
     DISPLAY_HZ = 20
+    ROBOT_MAX_VELOCITY_DPS = (
+        30.0  # Simulated robot max velocity in degrees/second (same for all joints)
+    )
+    ROBOT_LATENCY_MS = 50.0  # simulated round-trip latency (try 50, 100, 200 to test)
 
     # Configure joints — same defaults for all for now
     configs = [
@@ -217,7 +222,13 @@ if __name__ == "__main__":
         mid: jogger.joint_limits_to_dial_bounds(mid) for mid in TEAM_1_MOTORS
     }
     system = HapticSystem(expected_motor_ids=TEAM_1_MOTORS, motor_bounds=motor_bounds)
+    robot = SimulatedRobotInterface(
+        joint_ids=TEAM_1_MOTORS,
+        max_velocity_dps=ROBOT_MAX_VELOCITY_DPS,
+        latency_ms=ROBOT_LATENCY_MS,
+    )
     system.start()
+    robot.start()
 
     print(f"Looking for motors: {TEAM_1_MOTORS}")
     print("Waiting for all motors to connect...")
@@ -238,8 +249,8 @@ if __name__ == "__main__":
         # --- Print header ---
         DISPLAY_INTERVAL_S = 1.0 / DISPLAY_HZ
 
-        header = "  Motor | Commanded(°) | Clamped(°) | Throttled(°) | Rate-limited?"
-        separator = "  ------+--------------+------------+--------------+--------------"
+        header = "  Motor | Commanded(°) | Clamped(°) | Throttled(°) | Robot(°) | Rate-limited?"
+        separator = "  ------+--------------+------------+--------------+----------+--------------"
         print(header)
         print(separator)
         # Pre-print blank lines for cursor-up overwrite
@@ -269,9 +280,17 @@ if __name__ == "__main__":
             states = jogger.update(dial_angles, dt)
             latest_states.update(states)
 
-            # --- Haptic feedback: send tracked position + bounds back to dials ---
-            for mid, state in states.items():
-                feedback_pos = jogger.joint_deg_to_dial_decideg(mid, state.planned_deg)
+            # Send rate-limited targets to the simulated robot
+            robot_targets = {mid: s.planned_deg for mid, s in states.items()}
+            robot.send_target(robot_targets)
+
+            # Read robot actual positions for haptic feedback
+            robot_positions = robot.get_all_positions()
+
+            # --- Haptic feedback: track robot ACTUAL position, not planned ---
+            for mid in states:
+                robot_deg = robot_positions.get(mid, 0.0)
+                feedback_pos = jogger.joint_deg_to_dial_decideg(mid, robot_deg)
                 min_b, max_b = motor_bounds[mid]
                 system.set_control(
                     mid, position=feedback_pos, min_bound=min_b, max_bound=max_b
@@ -284,19 +303,20 @@ if __name__ == "__main__":
                 lines = []
                 for mid in TEAM_1_MOTORS:
                     s = latest_states.get(mid)
+                    r_deg = robot_positions.get(mid, 0.0)
                     if s:
                         rate_flag = (
                             "*" if abs(s.commanded_deg - s.throttled_deg) > 0.1 else " "
                         )
                         lines.append(
-                            f"  M{mid:>2}   | {s.commanded_deg:>+11.1f} | {s.clamped_deg:>+9.1f} | {s.throttled_deg:>+11.1f} | {rate_flag}"
+                            f"  M{mid:>2}   | {s.commanded_deg:>+11.1f} | {s.clamped_deg:>+9.1f} | {s.throttled_deg:>+11.1f} | {r_deg:>+7.1f} | {rate_flag}"
                         )
                     else:
                         lines.append(
-                            f"  M{mid:>2}   |         --- |       --- |         --- |  "
+                            f"  M{mid:>2}   |         --- |       --- |         --- |     --- |  "
                         )
                 lines.append(
-                    f"  Game Loop Frequency: {hz:5.1f} Hz  dt: {dt*1000:5.1f} ms"
+                    f"  Game Loop: {hz:5.1f} Hz | Robot Physics: {robot.actual_hz:5.1f} Hz | Latency: {ROBOT_LATENCY_MS:.0f} ms"
                 )
 
                 # Move cursor up and overwrite
@@ -317,5 +337,6 @@ if __name__ == "__main__":
             min_b, max_b = motor_bounds[mid]
             system.set_control(mid, position=0, min_bound=min_b, max_bound=max_b)
         time.sleep(0.1)  # give writer threads time to send the final C commands
+        robot.stop()
         system.stop()
         print("Done.")
