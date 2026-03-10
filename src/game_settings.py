@@ -84,6 +84,15 @@ class GameSettings:
     # Latest robot actual joint positions (degrees)
     robot_actual_deg: Dict[int, float] = field(default_factory=dict)
 
+    # --- Simulation ---
+    # When True, use simulated haptic controllers instead of real hardware
+    simulate_mode: bool = False
+    # Simulated dial angles in joint degrees, keyed by motor ID.
+    # Written by the simulator UI panel, read by SimulatedHapticSystem.
+    sim_dial_angles: Dict[int, float] = field(
+        default_factory=lambda: {mid: 0.0 for mid in range(11, 17)}
+    )
+
     # --- Scoring ---
     # Current team scores (weights). Separate fields for clarity.
     # Units: arbitrary score/weight (e.g. total weight in buckets)

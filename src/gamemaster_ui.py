@@ -38,7 +38,11 @@ class GameMasterUI:
         self._settings = settings
 
         self._root = tk.Tk()
-        self._root.title("Game Master — Robot Game Controller")
+        sim = settings.get("simulate_mode")
+        title = "Game Master — Robot Game Controller"
+        if sim:
+            title += "  [SIMULATE MODE]"
+        self._root.title(title)
         self._root.geometry("1280x720")
         self._root.configure(bg="#1e1e1e")
 
@@ -70,21 +74,48 @@ class GameMasterUI:
         panel_bg = "#252526"
 
         self._style.configure("TFrame", background=panel_bg)
-        self._style.configure("TLabel", background=panel_bg, foreground=fg, font=("Consolas", 9))
-        self._style.configure("Title.TLabel", background=panel_bg, foreground="#ffffff", font=("Consolas", 11, "bold"))
-        self._style.configure("Value.TLabel", background=panel_bg, foreground=accent, font=("Consolas", 10))
-        self._style.configure("Stage.TLabel", background=panel_bg, foreground="#4ec9b0", font=("Consolas", 14, "bold"))
-        self._style.configure("Emergency.TButton", foreground="#ffffff", background="#cc0000", font=("Consolas", 10, "bold"))
+        self._style.configure(
+            "TLabel", background=panel_bg, foreground=fg, font=("Consolas", 9)
+        )
+        self._style.configure(
+            "Title.TLabel",
+            background=panel_bg,
+            foreground="#ffffff",
+            font=("Consolas", 11, "bold"),
+        )
+        self._style.configure(
+            "Value.TLabel",
+            background=panel_bg,
+            foreground=accent,
+            font=("Consolas", 10),
+        )
+        self._style.configure(
+            "Stage.TLabel",
+            background=panel_bg,
+            foreground="#4ec9b0",
+            font=("Consolas", 14, "bold"),
+        )
+        self._style.configure(
+            "Emergency.TButton",
+            foreground="#ffffff",
+            background="#cc0000",
+            font=("Consolas", 10, "bold"),
+        )
         self._style.configure("TButton", font=("Consolas", 9))
         self._style.configure("TLabelframe", background=panel_bg, foreground=fg)
-        self._style.configure("TLabelframe.Label", background=panel_bg, foreground=fg, font=("Consolas", 10, "bold"))
+        self._style.configure(
+            "TLabelframe.Label",
+            background=panel_bg,
+            foreground=fg,
+            font=("Consolas", 10, "bold"),
+        )
         self._style.configure("TScale", background=panel_bg)
         self._style.configure("TSpinbox", font=("Consolas", 9))
 
     # --- Layout -----------------------------------------------------------
 
     def _build_ui(self):
-        # Main container with 3 columns
+        # Main container with 3 columns (+ optional 4th for simulator)
         self._root.columnconfigure(0, weight=3)  # Joint visualizer
         self._root.columnconfigure(1, weight=2)  # Game state & frequencies
         self._root.columnconfigure(2, weight=2)  # Parameters & scoring
@@ -93,6 +124,12 @@ class GameMasterUI:
         self._build_joint_panel()
         self._build_state_panel()
         self._build_params_panel()
+
+        # Add simulator panel if in simulate mode
+        if self._settings.get("simulate_mode"):
+            self._root.columnconfigure(3, weight=2)
+            self._root.geometry("1600x720")
+            self._build_simulator_panel()
 
     # --- Left panel: Joint Visualizer -------------------------------------
 
@@ -114,22 +151,30 @@ class GameMasterUI:
             joint_frame.rowconfigure(1, weight=1)
 
             # Header
-            ttk.Label(joint_frame, text=f"J{i+1}", style="Title.TLabel", anchor="center").grid(
-                row=0, column=0, columnspan=2, sticky="ew"
-            )
+            ttk.Label(
+                joint_frame, text=f"J{i+1}", style="Title.TLabel", anchor="center"
+            ).grid(row=0, column=0, columnspan=2, sticky="ew")
             ttk.Label(joint_frame, text=label, anchor="center").grid(
                 row=5, column=0, columnspan=2, sticky="ew"
             )
 
             # Column headers
-            ttk.Label(joint_frame, text="Rob", anchor="center").grid(row=1, column=0, sticky="ew")
-            ttk.Label(joint_frame, text="Dial", anchor="center").grid(row=1, column=1, sticky="ew")
+            ttk.Label(joint_frame, text="Rob", anchor="center").grid(
+                row=1, column=0, sticky="ew"
+            )
+            ttk.Label(joint_frame, text="Dial", anchor="center").grid(
+                row=1, column=1, sticky="ew"
+            )
 
             # Robot position scale (read-only visual)
             robot_var = tk.DoubleVar(value=0.0)
             robot_scale = ttk.Scale(
-                joint_frame, from_=_SLIDER_MAX, to=_SLIDER_MIN,
-                orient="vertical", variable=robot_var, length=250,
+                joint_frame,
+                from_=_SLIDER_MAX,
+                to=_SLIDER_MIN,
+                orient="vertical",
+                variable=robot_var,
+                length=250,
             )
             robot_scale.grid(row=2, column=0, sticky="ns", padx=2)
             robot_scale.state(["disabled"])
@@ -138,19 +183,27 @@ class GameMasterUI:
             # Dial/clamped position scale (read-only visual)
             dial_var = tk.DoubleVar(value=0.0)
             dial_scale = ttk.Scale(
-                joint_frame, from_=_SLIDER_MAX, to=_SLIDER_MIN,
-                orient="vertical", variable=dial_var, length=250,
+                joint_frame,
+                from_=_SLIDER_MAX,
+                to=_SLIDER_MIN,
+                orient="vertical",
+                variable=dial_var,
+                length=250,
             )
             dial_scale.grid(row=2, column=1, sticky="ns", padx=2)
             dial_scale.state(["disabled"])
             self._dial_scales[mid] = dial_var
 
             # Numeric readouts
-            robot_lbl = ttk.Label(joint_frame, text="0.0°", style="Value.TLabel", anchor="center")
+            robot_lbl = ttk.Label(
+                joint_frame, text="0.0°", style="Value.TLabel", anchor="center"
+            )
             robot_lbl.grid(row=3, column=0, sticky="ew")
             self._robot_labels[mid] = robot_lbl
 
-            dial_lbl = ttk.Label(joint_frame, text="0.0°", style="Value.TLabel", anchor="center")
+            dial_lbl = ttk.Label(
+                joint_frame, text="0.0°", style="Value.TLabel", anchor="center"
+            )
             dial_lbl.grid(row=3, column=1, sticky="ew")
             self._dial_labels[mid] = dial_lbl
 
@@ -158,6 +211,83 @@ class GameMasterUI:
             ttk.Label(joint_frame, text=f"M{mid}", anchor="center").grid(
                 row=4, column=0, columnspan=2, sticky="ew"
             )
+
+    # --- Simulator panel: Draggable dial sliders ----------------------------
+
+    def _build_simulator_panel(self):
+        """Build a panel with 6 draggable sliders to simulate haptic controllers."""
+        frame = ttk.LabelFrame(self._root, text="Haptic Simulator", padding=5)
+        frame.grid(row=0, column=3, sticky="nsew", padx=5, pady=5)
+
+        self._sim_vars = {}
+        self._sim_labels = {}
+
+        for i, (mid, label) in enumerate(zip(_MOTOR_IDS, _JOINT_LABELS)):
+            frame.columnconfigure(i, weight=1)
+
+            col_frame = ttk.Frame(frame)
+            col_frame.grid(row=0, column=i, sticky="nsew", padx=3, pady=2)
+            col_frame.rowconfigure(2, weight=1)
+
+            # Header
+            ttk.Label(
+                col_frame, text=f"J{i+1}", style="Title.TLabel", anchor="center"
+            ).grid(row=0, column=0, sticky="ew")
+            ttk.Label(col_frame, text=label, anchor="center").grid(
+                row=5, column=0, sticky="ew"
+            )
+
+            # Slider variable — joint degrees
+            var = tk.DoubleVar(value=0.0)
+            self._sim_vars[mid] = var
+
+            # Draggable slider (from +180 at top to -180 at bottom)
+            scale = ttk.Scale(
+                col_frame,
+                from_=_SLIDER_MAX,
+                to=_SLIDER_MIN,
+                orient="vertical",
+                variable=var,
+                length=250,
+                command=lambda val, m=mid: self._on_sim_slider(m, float(val)),
+            )
+            scale.grid(row=2, column=0, sticky="ns", padx=2)
+
+            # Numeric readout
+            lbl = ttk.Label(
+                col_frame, text="0.0°", style="Value.TLabel", anchor="center"
+            )
+            lbl.grid(row=3, column=0, sticky="ew")
+            self._sim_labels[mid] = lbl
+
+            # Motor ID label
+            ttk.Label(col_frame, text=f"M{mid}", anchor="center").grid(
+                row=4, column=0, sticky="ew"
+            )
+
+        # Reset all button
+        reset_btn = ttk.Button(
+            frame, text="Reset All to 0°", command=self._reset_sim_sliders
+        )
+        reset_btn.grid(
+            row=1, column=0, columnspan=len(_MOTOR_IDS), sticky="ew", pady=(5, 0)
+        )
+
+    def _on_sim_slider(self, motor_id: int, value: float):
+        """Called when a simulator slider is dragged."""
+        # Update the label
+        self._sim_labels[motor_id].configure(text=f"{value:+.1f}°")
+        # Write to shared settings register
+        sim_angles = self._settings.get("sim_dial_angles")
+        sim_angles[motor_id] = value
+        self._settings.set("sim_dial_angles", sim_angles)
+
+    def _reset_sim_sliders(self):
+        """Reset all simulator sliders to zero."""
+        for mid in _MOTOR_IDS:
+            self._sim_vars[mid].set(0.0)
+            self._sim_labels[mid].configure(text="0.0°")
+        self._settings.set("sim_dial_angles", {mid: 0.0 for mid in _MOTOR_IDS})
 
     # --- Center panel: Game State & Frequencies ---------------------------
 
@@ -174,7 +304,9 @@ class GameMasterUI:
         stage_frame.columnconfigure(0, weight=1)
         row += 1
 
-        self._stage_label = ttk.Label(stage_frame, text="Idle", style="Stage.TLabel", anchor="center")
+        self._stage_label = ttk.Label(
+            stage_frame, text="Idle", style="Stage.TLabel", anchor="center"
+        )
         self._stage_label.grid(row=0, column=0, sticky="ew")
 
         self._countdown_label = ttk.Label(stage_frame, text="", anchor="center")
@@ -184,20 +316,32 @@ class GameMasterUI:
         btn_frame = ttk.Frame(stage_frame)
         btn_frame.grid(row=2, column=0, sticky="ew", pady=5)
         for i, stage in enumerate(_STAGES):
-            btn = ttk.Button(btn_frame, text=stage, width=10,
-                             command=lambda s=stage: self._override_stage(s))
+            btn = ttk.Button(
+                btn_frame,
+                text=stage,
+                width=10,
+                command=lambda s=stage: self._override_stage(s),
+            )
             btn.grid(row=0, column=i, padx=1)
 
         # Auto-cycle toggle
         self._auto_cycle_var = tk.BooleanVar(value=self._settings.get("auto_cycle"))
-        auto_cb = ttk.Checkbutton(stage_frame, text="Auto-cycle", variable=self._auto_cycle_var,
-                                  command=self._on_auto_cycle_toggle)
+        auto_cb = ttk.Checkbutton(
+            stage_frame,
+            text="Auto-cycle",
+            variable=self._auto_cycle_var,
+            command=self._on_auto_cycle_toggle,
+        )
         auto_cb.grid(row=3, column=0, sticky="w")
 
         # Emergency stop
         self._estop_btn = tk.Button(
-            stage_frame, text="EMERGENCY STOP", bg="#cc0000", fg="white",
-            font=("Consolas", 12, "bold"), height=2,
+            stage_frame,
+            text="EMERGENCY STOP",
+            bg="#cc0000",
+            fg="white",
+            font=("Consolas", 12, "bold"),
+            height=2,
             command=self._toggle_estop,
         )
         self._estop_btn.grid(row=4, column=0, sticky="ew", pady=5)
@@ -215,10 +359,18 @@ class GameMasterUI:
             ("reset_duration_s", "Reset Duration"),
         ]
         for i, (key, label) in enumerate(timing_fields):
-            ttk.Label(timing_frame, text=label).grid(row=i, column=0, sticky="w", padx=5)
+            ttk.Label(timing_frame, text=label).grid(
+                row=i, column=0, sticky="w", padx=5
+            )
             var = tk.IntVar(value=self._settings.get(key))
-            spinbox = ttk.Spinbox(timing_frame, from_=5, to=600, width=6, textvariable=var,
-                                  command=lambda k=key, v=var: self._settings.set(k, v.get()))
+            spinbox = ttk.Spinbox(
+                timing_frame,
+                from_=5,
+                to=600,
+                width=6,
+                textvariable=var,
+                command=lambda k=key, v=var: self._settings.set(k, v.get()),
+            )
             spinbox.grid(row=i, column=1, sticky="e", padx=5)
             self._timing_vars[key] = var
 
@@ -243,15 +395,21 @@ class GameMasterUI:
         self._foc_labels = {}
         for i, mid in enumerate(_MOTOR_IDS):
             r = self._foc_label_start_row + i
-            ttk.Label(freq_frame, text=f"FOC M{mid}").grid(row=r, column=0, sticky="w", padx=5)
+            ttk.Label(freq_frame, text=f"FOC M{mid}").grid(
+                row=r, column=0, sticky="w", padx=5
+            )
             lbl = ttk.Label(freq_frame, text="-- Hz", style="Value.TLabel", anchor="e")
             lbl.grid(row=r, column=1, sticky="e", padx=5)
             self._foc_labels[mid] = lbl
 
         # Connection status
         conn_row = self._foc_label_start_row + len(_MOTOR_IDS)
-        ttk.Label(freq_frame, text="Haptic Connected").grid(row=conn_row, column=0, sticky="w", padx=5)
-        self._conn_label = ttk.Label(freq_frame, text="--", style="Value.TLabel", anchor="e")
+        ttk.Label(freq_frame, text="Haptic Connected").grid(
+            row=conn_row, column=0, sticky="w", padx=5
+        )
+        self._conn_label = ttk.Label(
+            freq_frame, text="--", style="Value.TLabel", anchor="e"
+        )
         self._conn_label.grid(row=conn_row, column=1, sticky="e", padx=5)
 
     # --- Right panel: Parameters & Scoring --------------------------------
@@ -277,19 +435,32 @@ class GameMasterUI:
             ("oob_kick_amplitude", "OOB Kick Amp", 0.0, 5.0, 0.1),
         ]
         for i, (key, label, lo, hi, step) in enumerate(haptic_fields):
-            ttk.Label(haptic_frame, text=label).grid(row=i, column=0, sticky="w", padx=5)
+            ttk.Label(haptic_frame, text=label).grid(
+                row=i, column=0, sticky="w", padx=5
+            )
             var = tk.DoubleVar(value=self._settings.get(key))
-            spinbox = ttk.Spinbox(haptic_frame, from_=lo, to=hi, increment=step,
-                                  width=8, textvariable=var, format="%.2f",
-                                  command=lambda k=key, v=var: self._settings.set(k, v.get()))
+            spinbox = ttk.Spinbox(
+                haptic_frame,
+                from_=lo,
+                to=hi,
+                increment=step,
+                width=8,
+                textvariable=var,
+                format="%.2f",
+                command=lambda k=key, v=var: self._settings.set(k, v.get()),
+            )
             spinbox.grid(row=i, column=1, sticky="e", padx=5)
             self._haptic_vars[key] = var
 
         # OOB kick toggle
         oob_row = len(haptic_fields)
         self._oob_var = tk.BooleanVar(value=self._settings.get("oob_kick_enabled"))
-        oob_cb = ttk.Checkbutton(haptic_frame, text="OOB Kick Enabled", variable=self._oob_var,
-                                 command=lambda: self._settings.set("oob_kick_enabled", self._oob_var.get()))
+        oob_cb = ttk.Checkbutton(
+            haptic_frame,
+            text="OOB Kick Enabled",
+            variable=self._oob_var,
+            command=lambda: self._settings.set("oob_kick_enabled", self._oob_var.get()),
+        )
         oob_cb.grid(row=oob_row, column=0, columnspan=2, sticky="w", padx=5)
 
         # --- Control Parameters ---
@@ -306,9 +477,16 @@ class GameMasterUI:
         for i, (key, label, lo, hi, step) in enumerate(ctrl_fields):
             ttk.Label(ctrl_frame, text=label).grid(row=i, column=0, sticky="w", padx=5)
             var = tk.DoubleVar(value=self._settings.get(key))
-            spinbox = ttk.Spinbox(ctrl_frame, from_=lo, to=hi, increment=step,
-                                  width=8, textvariable=var, format="%.1f",
-                                  command=lambda k=key, v=var: self._settings.set(k, v.get()))
+            spinbox = ttk.Spinbox(
+                ctrl_frame,
+                from_=lo,
+                to=hi,
+                increment=step,
+                width=8,
+                textvariable=var,
+                format="%.1f",
+                command=lambda k=key, v=var: self._settings.set(k, v.get()),
+            )
             spinbox.grid(row=i, column=1, sticky="e", padx=5)
             self._ctrl_vars[key] = var
 
@@ -318,15 +496,23 @@ class GameMasterUI:
         row += 1
 
         ttk.Label(score_frame, text="Team 1").grid(row=0, column=0, sticky="w", padx=5)
-        self._score1_label = ttk.Label(score_frame, text="0.0", style="Value.TLabel", anchor="e")
+        self._score1_label = ttk.Label(
+            score_frame, text="0.0", style="Value.TLabel", anchor="e"
+        )
         self._score1_label.grid(row=0, column=1, sticky="e", padx=5)
 
         ttk.Label(score_frame, text="Team 2").grid(row=1, column=0, sticky="w", padx=5)
-        self._score2_label = ttk.Label(score_frame, text="0.0", style="Value.TLabel", anchor="e")
+        self._score2_label = ttk.Label(
+            score_frame, text="0.0", style="Value.TLabel", anchor="e"
+        )
         self._score2_label.grid(row=1, column=1, sticky="e", padx=5)
 
-        ttk.Label(score_frame, text="High Score").grid(row=2, column=0, sticky="w", padx=5)
-        self._high_score_label = ttk.Label(score_frame, text="0.0", style="Value.TLabel", anchor="e")
+        ttk.Label(score_frame, text="High Score").grid(
+            row=2, column=0, sticky="w", padx=5
+        )
+        self._high_score_label = ttk.Label(
+            score_frame, text="0.0", style="Value.TLabel", anchor="e"
+        )
         self._high_score_label.grid(row=2, column=1, sticky="e", padx=5)
 
         # --- Profiles (placeholder) ---
@@ -334,9 +520,15 @@ class GameMasterUI:
         profile_frame.grid(row=row, column=0, sticky="ew", pady=(0, 5))
         row += 1
 
-        ttk.Label(profile_frame, text="Save/Load presets").grid(row=0, column=0, sticky="w", padx=5)
-        ttk.Button(profile_frame, text="Save", state="disabled").grid(row=0, column=1, padx=2)
-        ttk.Button(profile_frame, text="Load", state="disabled").grid(row=0, column=2, padx=2)
+        ttk.Label(profile_frame, text="Save/Load presets").grid(
+            row=0, column=0, sticky="w", padx=5
+        )
+        ttk.Button(profile_frame, text="Save", state="disabled").grid(
+            row=0, column=1, padx=2
+        )
+        ttk.Button(profile_frame, text="Load", state="disabled").grid(
+            row=0, column=2, padx=2
+        )
 
     # --- Callbacks --------------------------------------------------------
 
@@ -351,7 +543,9 @@ class GameMasterUI:
         new_val = not current
         self._settings.set("emergency_stop", new_val)
         if new_val:
-            self._estop_btn.configure(bg="#ff4444", text="E-STOP ACTIVE (click to release)")
+            self._estop_btn.configure(
+                bg="#ff4444", text="E-STOP ACTIVE (click to release)"
+            )
         else:
             self._estop_btn.configure(bg="#cc0000", text="EMERGENCY STOP")
 
@@ -402,7 +596,9 @@ class GameMasterUI:
             self._countdown_label.configure(text="")
 
         if estop:
-            self._estop_btn.configure(bg="#ff4444", text="E-STOP ACTIVE (click to release)")
+            self._estop_btn.configure(
+                bg="#ff4444", text="E-STOP ACTIVE (click to release)"
+            )
         else:
             self._estop_btn.configure(bg="#cc0000", text="EMERGENCY STOP")
 

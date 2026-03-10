@@ -21,7 +21,7 @@ from typing import Optional
 
 from game_settings import GameSettings
 from jogging_controller import JoggingController, JointConfig, JointState
-from haptic_serial import HapticSystem
+from haptic_serial import HapticSystem, SimulatedHapticSystem
 from robot_interface import SimulatedRobotInterface
 
 # Game loop target frequency
@@ -91,10 +91,17 @@ class GameController:
         }
 
         # Create subsystems
-        self._haptic = HapticSystem(
-            expected_motor_ids=self._motor_ids,
-            motor_bounds=self._motor_bounds,
-        )
+        if s.get("simulate_mode"):
+            self._haptic = SimulatedHapticSystem(
+                expected_motor_ids=self._motor_ids,
+                settings=s,
+                motor_bounds=self._motor_bounds,
+            )
+        else:
+            self._haptic = HapticSystem(
+                expected_motor_ids=self._motor_ids,
+                motor_bounds=self._motor_bounds,
+            )
         self._robot = SimulatedRobotInterface(
             joint_ids=self._motor_ids,
             max_velocity_dps=s.get("robot_max_velocity_dps"),
@@ -126,7 +133,9 @@ class GameController:
         if self._haptic and self._motor_bounds:
             for mid in self._motor_ids:
                 min_b, max_b = self._motor_bounds.get(mid, (0, 0))
-                self._haptic.set_control(mid, position=0, min_bound=min_b, max_bound=max_b)
+                self._haptic.set_control(
+                    mid, position=0, min_bound=min_b, max_bound=max_b
+                )
             time.sleep(0.1)
 
         if self._robot:
