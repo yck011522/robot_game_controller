@@ -141,10 +141,8 @@ class GameMasterUI:
         # Add simulator panel if in simulate mode
         if self._settings.get("simulate_mode"):
             self._root.columnconfigure(3, weight=2)
-            self._root.rowconfigure(1, weight=1)
-            self._root.geometry("1600x900")
-            self._build_simulator_panel()
-            self._build_weight_simulator_panel()
+            self._root.geometry("1600x720")
+            self._build_simulator_column()
 
     # --- Left panel: Joint Visualizer -------------------------------------
 
@@ -227,12 +225,23 @@ class GameMasterUI:
                 row=4, column=0, columnspan=2, sticky="ew"
             )
 
-    # --- Simulator panel: Draggable dial sliders ----------------------------
+    # --- Simulator column: All simulation controls in one column -----------
 
-    def _build_simulator_panel(self):
-        """Build a panel with 6 draggable sliders to simulate haptic controllers."""
-        frame = ttk.LabelFrame(self._root, text="Haptic Simulator", padding=5)
-        frame.grid(row=0, column=3, sticky="nsew", padx=5, pady=5)
+    def _build_simulator_column(self):
+        """Build column 3 with haptic sim sliders on top and weight sim below."""
+        outer = ttk.Frame(self._root, padding=0)
+        outer.grid(row=0, column=3, sticky="nsew", padx=5, pady=5)
+        outer.columnconfigure(0, weight=1)
+        outer.rowconfigure(0, weight=3)  # haptic sim gets more space
+        outer.rowconfigure(1, weight=2)  # weight sim
+
+        self._build_haptic_sim(outer)
+        self._build_weight_sim(outer)
+
+    def _build_haptic_sim(self, parent):
+        """Haptic dial simulator — 6 vertical sliders."""
+        frame = ttk.LabelFrame(parent, text="Haptic Simulator", padding=5)
+        frame.grid(row=0, column=0, sticky="nsew", pady=(0, 3))
 
         self._sim_vars = {}
         self._sim_labels = {}
@@ -244,7 +253,6 @@ class GameMasterUI:
             col_frame.grid(row=0, column=i, sticky="nsew", padx=3, pady=2)
             col_frame.rowconfigure(2, weight=1)
 
-            # Header
             ttk.Label(
                 col_frame, text=f"J{i+1}", style="Title.TLabel", anchor="center"
             ).grid(row=0, column=0, sticky="ew")
@@ -252,40 +260,96 @@ class GameMasterUI:
                 row=5, column=0, sticky="ew"
             )
 
-            # Slider variable — joint degrees
             var = tk.DoubleVar(value=0.0)
             self._sim_vars[mid] = var
 
-            # Draggable slider (from +180 at top to -180 at bottom)
             scale = ttk.Scale(
                 col_frame,
                 from_=_SLIDER_MAX,
                 to=_SLIDER_MIN,
                 orient="vertical",
                 variable=var,
-                length=250,
+                length=200,
                 command=lambda val, m=mid: self._on_sim_slider(m, float(val)),
             )
             scale.grid(row=2, column=0, sticky="ns", padx=2)
 
-            # Numeric readout
             lbl = ttk.Label(
                 col_frame, text="0.0°", style="Value.TLabel", anchor="center"
             )
             lbl.grid(row=3, column=0, sticky="ew")
             self._sim_labels[mid] = lbl
 
-            # Motor ID label
             ttk.Label(col_frame, text=f"M{mid}", anchor="center").grid(
                 row=4, column=0, sticky="ew"
             )
 
-        # Reset all button
         reset_btn = ttk.Button(
             frame, text="Reset All to 0°", command=self._reset_sim_sliders
         )
         reset_btn.grid(
             row=1, column=0, columnspan=len(_MOTOR_IDS), sticky="ew", pady=(5, 0)
+        )
+
+    def _build_weight_sim(self, parent):
+        """Weight sensor simulator — 6 vertical sliders mirroring the haptic sim above."""
+        frame = ttk.LabelFrame(parent, text="Weight Sensor Simulator", padding=5)
+        frame.grid(row=1, column=0, sticky="nsew", pady=(3, 0))
+
+        self._weight_sim_vars = {}
+        self._weight_sim_labels = {}
+
+        multipliers = self._settings.get("bucket_multipliers")
+
+        for i, bid in enumerate(_ALL_BUCKET_IDS):
+            frame.columnconfigure(i, weight=1)
+
+            col_frame = ttk.Frame(frame)
+            col_frame.grid(row=0, column=i, sticky="nsew", padx=3, pady=2)
+            col_frame.rowconfigure(1, weight=1)
+
+            # Team header above first/fourth bucket
+            team_text = "T1" if bid < 20 else "T2"
+            ttk.Label(
+                col_frame, text=team_text, style="Title.TLabel", anchor="center"
+            ).grid(row=0, column=0, sticky="ew")
+
+            var = tk.DoubleVar(value=0.0)
+            self._weight_sim_vars[bid] = var
+
+            scale = ttk.Scale(
+                col_frame,
+                from_=500,
+                to=0,
+                orient="vertical",
+                variable=var,
+                length=120,
+                command=lambda val, b=bid: self._on_weight_sim_slider(b, float(val)),
+            )
+            scale.grid(row=1, column=0, sticky="ns", padx=2)
+
+            # Bucket label + multiplier
+            mult = multipliers.get(bid, 1.0)
+            label = _BUCKET_LABELS[bid]
+            ttk.Label(col_frame, text=f"{label}", anchor="center").grid(
+                row=2, column=0, sticky="ew"
+            )
+            ttk.Label(col_frame, text=f"×{mult:.0f}", anchor="center").grid(
+                row=3, column=0, sticky="ew"
+            )
+
+            # Value readout
+            lbl = ttk.Label(
+                col_frame, text="0 g", style="Value.TLabel", anchor="center"
+            )
+            lbl.grid(row=4, column=0, sticky="ew")
+            self._weight_sim_labels[bid] = lbl
+
+        reset_btn = ttk.Button(
+            frame, text="Reset All to 0g", command=self._reset_weight_sim_sliders
+        )
+        reset_btn.grid(
+            row=1, column=0, columnspan=len(_ALL_BUCKET_IDS), sticky="ew", pady=(5, 0)
         )
 
     def _on_sim_slider(self, motor_id: int, value: float):
@@ -304,67 +368,6 @@ class GameMasterUI:
             self._sim_labels[mid].configure(text="0.0°")
         self._settings.set("sim_dial_angles", {mid: 0.0 for mid in _MOTOR_IDS})
 
-    # --- Weight simulator panel: Bucket weight sliders --------------------
-
-    def _build_weight_simulator_panel(self):
-        """Build a panel with 6 sliders to simulate bucket weight sensors."""
-        frame = ttk.LabelFrame(self._root, text="Weight Sensor Simulator", padding=5)
-        frame.grid(row=1, column=0, columnspan=4, sticky="nsew", padx=5, pady=5)
-
-        self._weight_sim_vars = {}
-        self._weight_sim_labels = {}
-
-        for i, bid in enumerate(_ALL_BUCKET_IDS):
-            frame.columnconfigure(i, weight=1)
-
-            col_frame = ttk.Frame(frame)
-            col_frame.grid(row=0, column=i, sticky="nsew", padx=3, pady=2)
-            col_frame.rowconfigure(1, weight=1)
-
-            # Header — bucket label
-            label = _BUCKET_LABELS[bid]
-            ttk.Label(
-                col_frame, text=label, style="Title.TLabel", anchor="center"
-            ).grid(row=0, column=0, sticky="ew")
-
-            # Slider variable — weight in grams (0 to 500g)
-            var = tk.DoubleVar(value=0.0)
-            self._weight_sim_vars[bid] = var
-
-            # Horizontal slider for weight
-            scale = ttk.Scale(
-                col_frame,
-                from_=0,
-                to=500,
-                orient="horizontal",
-                variable=var,
-                length=150,
-                command=lambda val, b=bid: self._on_weight_sim_slider(b, float(val)),
-            )
-            scale.grid(row=1, column=0, sticky="ew", padx=2)
-
-            # Numeric readout
-            lbl = ttk.Label(
-                col_frame, text="0.0 g", style="Value.TLabel", anchor="center"
-            )
-            lbl.grid(row=2, column=0, sticky="ew")
-            self._weight_sim_labels[bid] = lbl
-
-            # Show multiplier
-            multipliers = self._settings.get("bucket_multipliers")
-            mult = multipliers.get(bid, 1.0)
-            ttk.Label(col_frame, text=f"×{mult:.1f}", anchor="center").grid(
-                row=3, column=0, sticky="ew"
-            )
-
-        # Reset all button
-        reset_btn = ttk.Button(
-            frame, text="Reset All to 0g", command=self._reset_weight_sim_sliders
-        )
-        reset_btn.grid(
-            row=1, column=0, columnspan=len(_ALL_BUCKET_IDS), sticky="ew", pady=(5, 0)
-        )
-
     def _on_weight_sim_slider(self, bucket_id: int, value: float):
         """Called when a weight simulator slider is dragged."""
         self._weight_sim_labels[bucket_id].configure(text=f"{value:.0f} g")
@@ -376,7 +379,7 @@ class GameMasterUI:
         """Reset all weight simulator sliders to zero."""
         for bid in _ALL_BUCKET_IDS:
             self._weight_sim_vars[bid].set(0.0)
-            self._weight_sim_labels[bid].configure(text="0.0 g")
+            self._weight_sim_labels[bid].configure(text="0 g")
         self._settings.set("sim_bucket_weights", {bid: 0.0 for bid in _ALL_BUCKET_IDS})
 
     # --- Center panel: Game State & Frequencies ---------------------------
