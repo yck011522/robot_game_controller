@@ -92,6 +92,33 @@ class GameSettings:
     sim_dial_angles: Dict[int, float] = field(
         default_factory=lambda: {mid: 0.0 for mid in range(11, 17)}
     )
+    # Simulated bucket weights in grams, keyed by bucket ID (11-13, 21-23).
+    # Written by the simulator UI panel, read by SimulatedWeightSensorSystem.
+    sim_bucket_weights: Dict[int, float] = field(
+        default_factory=lambda: {bid: 0.0 for bid in [11, 12, 13, 21, 22, 23]}
+    )
+
+    # --- Weight sensors ---
+    # Latest raw weight readings from load cells in grams, keyed by bucket ID.
+    # Bucket IDs: 11, 12, 13 (Team 1), 21, 22, 23 (Team 2)
+    bucket_weights: Dict[int, float] = field(
+        default_factory=lambda: {bid: 0.0 for bid in [11, 12, 13, 21, 22, 23]}
+    )
+    # Score multiplier per bucket. Harder-to-reach buckets get higher multipliers.
+    bucket_multipliers: Dict[int, float] = field(
+        default_factory=lambda: {
+            11: 1.0,
+            12: 2.0,
+            13: 3.0,  # Team 1: easy, medium, hard
+            21: 1.0,
+            22: 2.0,
+            23: 3.0,  # Team 2: easy, medium, hard
+        }
+    )
+    # Weight sensor connection status string (e.g. "6/6")
+    weight_sensor_connected_count: str = "0/6"
+    # Weight sensor read frequency (Hz)
+    weight_sensor_hz: float = 0.0
 
     # --- Scoring ---
     # Current team scores (weights). Separate fields for clarity.

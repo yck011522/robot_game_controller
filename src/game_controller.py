@@ -24,6 +24,13 @@ from game_settings import GameSettings
 from jogging_controller import JoggingController, JointConfig, JointState
 from haptic_serial import HapticSystem, SimulatedHapticSystem
 from robot_interface import SimulatedRobotInterface
+from weight_sensor import (
+    WeightSensorSystem,
+    SimulatedWeightSensorSystem,
+    ALL_BUCKET_IDS,
+    TEAM1_BUCKET_IDS,
+    TEAM2_BUCKET_IDS,
+)
 
 # Game loop target frequency
 _GAME_LOOP_HZ = 100
@@ -77,8 +84,9 @@ class GameController:
       3. Send targets to robot
       4. Read robot positions
       5. Send haptic feedback
-      6. Update GameSettings with observable state
-      7. Advance game stage if needed
+      6. Read weight sensors and compute scores
+      7. Update GameSettings with observable state
+      8. Advance game stage if needed
     """
 
     def __init__(self, settings: GameSettings):
@@ -93,6 +101,7 @@ class GameController:
         self._jogger: Optional[JoggingController] = None
         self._haptic: Optional[HapticSystem] = None
         self._robot: Optional[SimulatedRobotInterface] = None
+        self._weight_sensor = None
         self._motor_bounds: dict[int, tuple[int, int]] = {}
 
         # Stage timer
@@ -148,9 +157,21 @@ class GameController:
             latency_ms=0.0,
         )
 
+        # Weight sensor system
+        if s.get("simulate_mode"):
+            self._weight_sensor = SimulatedWeightSensorSystem(
+                bucket_ids=ALL_BUCKET_IDS,
+                settings=s,
+            )
+        else:
+            self._weight_sensor = WeightSensorSystem(
+                bucket_ids=ALL_BUCKET_IDS,
+            )
+
         # Start subsystems
         self._haptic.start()
         self._robot.start()
+        self._weight_sensor.start()
 
         # Initialize stage
         s.set("current_stage", "Idle")
@@ -182,6 +203,8 @@ class GameController:
             self._robot.stop()
         if self._haptic:
             self._haptic.stop()
+        if self._weight_sensor:
+            self._weight_sensor.stop()
 
         _restore_timer_resolution()
 
@@ -247,10 +270,13 @@ class GameController:
                     mid, position=feedback_pos, min_bound=min_b, max_bound=max_b
                 )
 
-            # --- 6. Update settings with observable state ---
+            # --- 6. Read weight sensors and compute scores ---
+            self._update_scores()
+
+            # --- 7. Update settings with observable state ---
             self._update_observable_state(latest_states, robot_positions)
 
-            # --- 7. Advance game stage ---
+            # --- 8. Advance game stage ---
             self._advance_stage()
 
             # Sleep — hybrid with Windows 1ms timer resolution.
@@ -318,6 +344,42 @@ class GameController:
             connected = self._haptic.connected_motor_ids
             total = len(self._motor_ids)
             s.set("haptic_connected_count", f"{len(connected)}/{total}")
+
+        # Weight sensor status
+        if self._weight_sensor:
+            c, t = self._weight_sensor.connected_count
+            s.set("weight_sensor_connected_count", f"{c}/{t}")
+            s.set("weight_sensor_hz", self._weight_sensor.actual_hz)
+
+    def _update_scores(self):
+        """Read weight sensors and compute real-time scores."""
+        if not self._weight_sensor:
+            return
+
+        s = self._settings
+        weights = self._weight_sensor.get_all_weights()
+        multipliers = s.get("bucket_multipliers")
+
+        # Store raw weights
+        s.set("bucket_weights", weights)
+
+        # Compute team scores: sum(weight * multiplier) for each team's buckets
+        team1_score = sum(
+            weights.get(bid, 0.0) * multipliers.get(bid, 1.0)
+            for bid in TEAM1_BUCKET_IDS
+        )
+        team2_score = sum(
+            weights.get(bid, 0.0) * multipliers.get(bid, 1.0)
+            for bid in TEAM2_BUCKET_IDS
+        )
+
+        s.set("team1_score", team1_score)
+        s.set("team2_score", team2_score)
+
+        # Update high score
+        for score, label in [(team1_score, "Team 1"), (team2_score, "Team 2")]:
+            if score > s.get("high_score"):
+                s.update(high_score=score, high_score_holder=label)
 
     def _advance_stage(self):
         """Auto-advance through game stages based on timers."""

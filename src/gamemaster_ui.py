@@ -27,6 +27,19 @@ _SLIDER_MAX = 180
 _MOTOR_IDS = [11, 12, 13, 14, 15, 16]
 _JOINT_LABELS = ["Base", "Shoulder", "Elbow", "Wrist 1", "Wrist 2", "Wrist 3"]
 
+# Bucket IDs and labels
+_TEAM1_BUCKET_IDS = [11, 12, 13]
+_TEAM2_BUCKET_IDS = [21, 22, 23]
+_ALL_BUCKET_IDS = _TEAM1_BUCKET_IDS + _TEAM2_BUCKET_IDS
+_BUCKET_LABELS = {
+    11: "T1-B1",
+    12: "T1-B2",
+    13: "T1-B3",
+    21: "T2-B1",
+    22: "T2-B2",
+    23: "T2-B3",
+}
+
 # Game stages
 _STAGES = ["Idle", "Tutorial", "GameOn", "Conclusion", "Reset"]
 
@@ -128,8 +141,10 @@ class GameMasterUI:
         # Add simulator panel if in simulate mode
         if self._settings.get("simulate_mode"):
             self._root.columnconfigure(3, weight=2)
-            self._root.geometry("1600x720")
+            self._root.rowconfigure(1, weight=1)
+            self._root.geometry("1600x900")
             self._build_simulator_panel()
+            self._build_weight_simulator_panel()
 
     # --- Left panel: Joint Visualizer -------------------------------------
 
@@ -289,6 +304,81 @@ class GameMasterUI:
             self._sim_labels[mid].configure(text="0.0°")
         self._settings.set("sim_dial_angles", {mid: 0.0 for mid in _MOTOR_IDS})
 
+    # --- Weight simulator panel: Bucket weight sliders --------------------
+
+    def _build_weight_simulator_panel(self):
+        """Build a panel with 6 sliders to simulate bucket weight sensors."""
+        frame = ttk.LabelFrame(self._root, text="Weight Sensor Simulator", padding=5)
+        frame.grid(row=1, column=0, columnspan=4, sticky="nsew", padx=5, pady=5)
+
+        self._weight_sim_vars = {}
+        self._weight_sim_labels = {}
+
+        for i, bid in enumerate(_ALL_BUCKET_IDS):
+            frame.columnconfigure(i, weight=1)
+
+            col_frame = ttk.Frame(frame)
+            col_frame.grid(row=0, column=i, sticky="nsew", padx=3, pady=2)
+            col_frame.rowconfigure(1, weight=1)
+
+            # Header — bucket label
+            label = _BUCKET_LABELS[bid]
+            ttk.Label(
+                col_frame, text=label, style="Title.TLabel", anchor="center"
+            ).grid(row=0, column=0, sticky="ew")
+
+            # Slider variable — weight in grams (0 to 500g)
+            var = tk.DoubleVar(value=0.0)
+            self._weight_sim_vars[bid] = var
+
+            # Horizontal slider for weight
+            scale = ttk.Scale(
+                col_frame,
+                from_=0,
+                to=500,
+                orient="horizontal",
+                variable=var,
+                length=150,
+                command=lambda val, b=bid: self._on_weight_sim_slider(b, float(val)),
+            )
+            scale.grid(row=1, column=0, sticky="ew", padx=2)
+
+            # Numeric readout
+            lbl = ttk.Label(
+                col_frame, text="0.0 g", style="Value.TLabel", anchor="center"
+            )
+            lbl.grid(row=2, column=0, sticky="ew")
+            self._weight_sim_labels[bid] = lbl
+
+            # Show multiplier
+            multipliers = self._settings.get("bucket_multipliers")
+            mult = multipliers.get(bid, 1.0)
+            ttk.Label(col_frame, text=f"×{mult:.1f}", anchor="center").grid(
+                row=3, column=0, sticky="ew"
+            )
+
+        # Reset all button
+        reset_btn = ttk.Button(
+            frame, text="Reset All to 0g", command=self._reset_weight_sim_sliders
+        )
+        reset_btn.grid(
+            row=1, column=0, columnspan=len(_ALL_BUCKET_IDS), sticky="ew", pady=(5, 0)
+        )
+
+    def _on_weight_sim_slider(self, bucket_id: int, value: float):
+        """Called when a weight simulator slider is dragged."""
+        self._weight_sim_labels[bucket_id].configure(text=f"{value:.0f} g")
+        sim_weights = self._settings.get("sim_bucket_weights")
+        sim_weights[bucket_id] = value
+        self._settings.set("sim_bucket_weights", sim_weights)
+
+    def _reset_weight_sim_sliders(self):
+        """Reset all weight simulator sliders to zero."""
+        for bid in _ALL_BUCKET_IDS:
+            self._weight_sim_vars[bid].set(0.0)
+            self._weight_sim_labels[bid].configure(text="0.0 g")
+        self._settings.set("sim_bucket_weights", {bid: 0.0 for bid in _ALL_BUCKET_IDS})
+
     # --- Center panel: Game State & Frequencies ---------------------------
 
     def _build_state_panel(self):
@@ -383,6 +473,7 @@ class GameMasterUI:
         freq_fields = [
             ("game_loop_hz", "Game Loop"),
             ("robot_physics_hz", "Robot Physics"),
+            ("weight_sensor_hz", "Weight Sensor"),
         ]
         for i, (key, label) in enumerate(freq_fields):
             ttk.Label(freq_frame, text=label).grid(row=i, column=0, sticky="w", padx=5)
@@ -411,6 +502,16 @@ class GameMasterUI:
             freq_frame, text="--", style="Value.TLabel", anchor="e"
         )
         self._conn_label.grid(row=conn_row, column=1, sticky="e", padx=5)
+
+        # Weight sensor connection status
+        ws_row = conn_row + 1
+        ttk.Label(freq_frame, text="Weight Sensors").grid(
+            row=ws_row, column=0, sticky="w", padx=5
+        )
+        self._weight_conn_label = ttk.Label(
+            freq_frame, text="--", style="Value.TLabel", anchor="e"
+        )
+        self._weight_conn_label.grid(row=ws_row, column=1, sticky="e", padx=5)
 
     # --- Right panel: Parameters & Scoring --------------------------------
 
@@ -495,25 +596,55 @@ class GameMasterUI:
         score_frame.grid(row=row, column=0, sticky="ew", pady=(0, 5))
         row += 1
 
-        ttk.Label(score_frame, text="Team 1").grid(row=0, column=0, sticky="w", padx=5)
+        r = 0
+        ttk.Label(score_frame, text="Team 1", style="Title.TLabel").grid(
+            row=r, column=0, sticky="w", padx=5
+        )
         self._score1_label = ttk.Label(
             score_frame, text="0.0", style="Value.TLabel", anchor="e"
         )
-        self._score1_label.grid(row=0, column=1, sticky="e", padx=5)
+        self._score1_label.grid(row=r, column=1, sticky="e", padx=5)
+        r += 1
 
-        ttk.Label(score_frame, text="Team 2").grid(row=1, column=0, sticky="w", padx=5)
+        # Team 1 bucket breakdown
+        self._bucket_weight_labels = {}
+        for bid in _TEAM1_BUCKET_IDS:
+            mult = self._settings.get("bucket_multipliers").get(bid, 1.0)
+            ttk.Label(score_frame, text=f"  {_BUCKET_LABELS[bid]} (×{mult:.0f})").grid(
+                row=r, column=0, sticky="w", padx=10
+            )
+            lbl = ttk.Label(score_frame, text="0.0 g", style="Value.TLabel", anchor="e")
+            lbl.grid(row=r, column=1, sticky="e", padx=5)
+            self._bucket_weight_labels[bid] = lbl
+            r += 1
+
+        ttk.Label(score_frame, text="Team 2", style="Title.TLabel").grid(
+            row=r, column=0, sticky="w", padx=5
+        )
         self._score2_label = ttk.Label(
             score_frame, text="0.0", style="Value.TLabel", anchor="e"
         )
-        self._score2_label.grid(row=1, column=1, sticky="e", padx=5)
+        self._score2_label.grid(row=r, column=1, sticky="e", padx=5)
+        r += 1
+
+        # Team 2 bucket breakdown
+        for bid in _TEAM2_BUCKET_IDS:
+            mult = self._settings.get("bucket_multipliers").get(bid, 1.0)
+            ttk.Label(score_frame, text=f"  {_BUCKET_LABELS[bid]} (×{mult:.0f})").grid(
+                row=r, column=0, sticky="w", padx=10
+            )
+            lbl = ttk.Label(score_frame, text="0.0 g", style="Value.TLabel", anchor="e")
+            lbl.grid(row=r, column=1, sticky="e", padx=5)
+            self._bucket_weight_labels[bid] = lbl
+            r += 1
 
         ttk.Label(score_frame, text="High Score").grid(
-            row=2, column=0, sticky="w", padx=5
+            row=r, column=0, sticky="w", padx=5
         )
         self._high_score_label = ttk.Label(
             score_frame, text="0.0", style="Value.TLabel", anchor="e"
         )
-        self._high_score_label.grid(row=2, column=1, sticky="e", padx=5)
+        self._high_score_label.grid(row=r, column=1, sticky="e", padx=5)
 
         # --- Profiles (placeholder) ---
         profile_frame = ttk.LabelFrame(frame, text="Profiles (Coming Soon)", padding=5)
@@ -605,9 +736,11 @@ class GameMasterUI:
     def _update_frequencies(self, snap: dict):
         game_hz = snap.get("game_loop_hz", 0.0)
         robot_hz = snap.get("robot_physics_hz", 0.0)
+        weight_hz = snap.get("weight_sensor_hz", 0.0)
 
         self._freq_labels["game_loop_hz"].configure(text=f"{game_hz:.1f} Hz")
         self._freq_labels["robot_physics_hz"].configure(text=f"{robot_hz:.1f} Hz")
+        self._freq_labels["weight_sensor_hz"].configure(text=f"{weight_hz:.1f} Hz")
 
         foc = snap.get("foc_hz", {})
         for mid in _MOTOR_IDS:
@@ -617,7 +750,16 @@ class GameMasterUI:
         conn = snap.get("haptic_connected_count", "--")
         self._conn_label.configure(text=str(conn))
 
+        ws_conn = snap.get("weight_sensor_connected_count", "--")
+        self._weight_conn_label.configure(text=str(ws_conn))
+
     def _update_scores(self, snap: dict):
         self._score1_label.configure(text=f"{snap.get('team1_score', 0.0):.1f}")
         self._score2_label.configure(text=f"{snap.get('team2_score', 0.0):.1f}")
         self._high_score_label.configure(text=f"{snap.get('high_score', 0.0):.1f}")
+
+        # Per-bucket weights
+        weights = snap.get("bucket_weights", {})
+        for bid, lbl in self._bucket_weight_labels.items():
+            w = weights.get(bid, 0.0)
+            lbl.configure(text=f"{w:.0f} g")
