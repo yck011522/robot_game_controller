@@ -31,6 +31,7 @@ from weight_sensor import (
     TEAM1_BUCKET_IDS,
     TEAM2_BUCKET_IDS,
 )
+from state_publisher import StatePublisher
 
 # Game loop target frequency
 _GAME_LOOP_HZ = 100
@@ -102,6 +103,7 @@ class GameController:
         self._haptic: Optional[HapticSystem] = None
         self._robot: Optional[SimulatedRobotInterface] = None
         self._weight_sensor = None
+        self._publisher: Optional[StatePublisher] = None
         self._motor_bounds: dict[int, tuple[int, int]] = {}
 
         # Stage timer
@@ -173,6 +175,15 @@ class GameController:
         self._robot.start()
         self._weight_sensor.start()
 
+        # State publisher
+        self._publisher = StatePublisher(
+            settings=s,
+            broadcast_addr=s.get("broadcast_addr"),
+            port=s.get("broadcast_port"),
+            publish_hz=s.get("publish_hz"),
+        )
+        self._publisher.start()
+
         # Initialize stage
         s.set("current_stage", "Idle")
         self._stage_start_time = time.time()
@@ -205,6 +216,8 @@ class GameController:
             self._haptic.stop()
         if self._weight_sensor:
             self._weight_sensor.stop()
+        if self._publisher:
+            self._publisher.stop()
 
         _restore_timer_resolution()
 

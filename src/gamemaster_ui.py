@@ -13,8 +13,21 @@ Layout zones:
 import tkinter as tk
 from tkinter import ttk
 from typing import Optional
+import socket
 
 from game_settings import GameSettings
+
+
+def _get_local_ip() -> str:
+    """Return the local machine's primary IP address (best-effort)."""
+    try:
+        # Connect to an external address (no packet is actually sent)
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+    except Exception:
+        return "127.0.0.1"
+
 
 # UI refresh rate
 _UI_UPDATE_MS = 20  # 50 Hz
@@ -477,6 +490,7 @@ class GameMasterUI:
             ("game_loop_hz", "Game Loop"),
             ("robot_physics_hz", "Robot Physics"),
             ("weight_sensor_hz", "Weight Sensor"),
+            ("publisher_hz", "UDP Publisher"),
         ]
         for i, (key, label) in enumerate(freq_fields):
             ttk.Label(freq_frame, text=label).grid(row=i, column=0, sticky="w", padx=5)
@@ -515,6 +529,29 @@ class GameMasterUI:
             freq_frame, text="--", style="Value.TLabel", anchor="e"
         )
         self._weight_conn_label.grid(row=ws_row, column=1, sticky="e", padx=5)
+
+        # Broadcast address and local IP
+        pub_addr_row = ws_row + 1
+        ttk.Label(freq_frame, text="Broadcast Addr").grid(
+            row=pub_addr_row, column=0, sticky="w", padx=5
+        )
+        ttk.Label(
+            freq_frame,
+            text=self._settings.get("broadcast_addr"),
+            style="Value.TLabel",
+            anchor="e",
+        ).grid(row=pub_addr_row, column=1, sticky="e", padx=5)
+
+        local_ip_row = pub_addr_row + 1
+        ttk.Label(freq_frame, text="This PC IP").grid(
+            row=local_ip_row, column=0, sticky="w", padx=5
+        )
+        ttk.Label(
+            freq_frame,
+            text=_get_local_ip(),
+            style="Value.TLabel",
+            anchor="e",
+        ).grid(row=local_ip_row, column=1, sticky="e", padx=5)
 
     # --- Right panel: Parameters & Scoring --------------------------------
 
@@ -740,10 +777,12 @@ class GameMasterUI:
         game_hz = snap.get("game_loop_hz", 0.0)
         robot_hz = snap.get("robot_physics_hz", 0.0)
         weight_hz = snap.get("weight_sensor_hz", 0.0)
+        publisher_hz = snap.get("publisher_hz", 0.0)
 
         self._freq_labels["game_loop_hz"].configure(text=f"{game_hz:.1f} Hz")
         self._freq_labels["robot_physics_hz"].configure(text=f"{robot_hz:.1f} Hz")
         self._freq_labels["weight_sensor_hz"].configure(text=f"{weight_hz:.1f} Hz")
+        self._freq_labels["publisher_hz"].configure(text=f"{publisher_hz:.1f} Hz")
 
         foc = snap.get("foc_hz", {})
         for mid in _MOTOR_IDS:

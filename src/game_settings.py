@@ -120,6 +120,16 @@ class GameSettings:
     # Weight sensor read frequency (Hz)
     weight_sensor_hz: float = 0.0
 
+    # --- State publisher ---
+    # UDP broadcast address for the state publisher (subnet broadcast)
+    broadcast_addr: str = "255.255.255.255"
+    # UDP port for the state publisher
+    broadcast_port: int = 9000
+    # Target publish frequency (Hz)
+    publish_hz: float = 50.0
+    # Observed publish frequency (Hz) written back by StatePublisher
+    publisher_hz: float = 0.0
+
     # --- Scoring ---
     # Current team scores (weights). Separate fields for clarity.
     # Units: arbitrary score/weight (e.g. total weight in buckets)
