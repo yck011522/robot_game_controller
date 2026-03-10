@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 *.so
 *.pyd
+*.pyc
 
 # Distribution / packaging
 *.egg
@@ -15,3 +16,4 @@ build/
 .venv/
 env/
 venv/
+
