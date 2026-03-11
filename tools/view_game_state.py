@@ -167,7 +167,16 @@ class GameStateViewer:
             foreground=fg,
             font=("Consolas", 10, "bold"),
         )
-        style.configure("TScale", background=panel)
+        style.configure(
+            "TScale",
+            background=panel,
+            troughcolor="#333333",  # darker track for contrast
+        )
+        style.map(
+            "TScale",
+            background=[("disabled", "#5a5a5a")],  # visible thumb even when disabled
+            troughcolor=[("disabled", "#333333")],
+        )
 
         self._build_ui()
         self._root.after(_UI_MS, self._update_loop)
@@ -198,7 +207,7 @@ class GameStateViewer:
         self._dial_lbls: dict[str, ttk.Label] = {}
 
         for i, (mid, label) in enumerate(zip(_MOTOR_IDS, _JOINT_LABELS)):
-            frame.columnconfigure(i, weight=1)
+            frame.columnconfigure(i, weight=1, uniform="joints")
 
             col = ttk.Frame(frame)
             col.grid(row=0, column=i, sticky="nsew", padx=3, pady=2)
@@ -245,12 +254,17 @@ class GameStateViewer:
             dial_scale.state(["disabled"])
             self._dial_vars[mid] = dial_var
 
-            # Numeric readouts
-            r_lbl = ttk.Label(col, text="0.0°", style="Value.TLabel", anchor="center")
+            # Numeric readouts — fixed width=7 prevents layout jitter when
+            # value changes between e.g. "0.0°" and "+180.0°"
+            r_lbl = ttk.Label(
+                col, text="0.0°", style="Value.TLabel", anchor="center", width=7
+            )
             r_lbl.grid(row=3, column=0, sticky="ew")
             self._robot_lbls[mid] = r_lbl
 
-            d_lbl = ttk.Label(col, text="0.0°", style="Value.TLabel", anchor="center")
+            d_lbl = ttk.Label(
+                col, text="0.0°", style="Value.TLabel", anchor="center", width=7
+            )
             d_lbl.grid(row=3, column=1, sticky="ew")
             self._dial_lbls[mid] = d_lbl
 

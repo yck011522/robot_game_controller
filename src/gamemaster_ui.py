@@ -135,7 +135,16 @@ class GameMasterUI:
             foreground=fg,
             font=("Consolas", 10, "bold"),
         )
-        self._style.configure("TScale", background=panel_bg)
+        self._style.configure(
+            "TScale",
+            background=panel_bg,
+            troughcolor="#333333",  # darker track for contrast
+        )
+        self._style.map(
+            "TScale",
+            background=[("disabled", "#5a5a5a")],  # visible thumb even when disabled
+            troughcolor=[("disabled", "#333333")],
+        )
         self._style.configure("TSpinbox", font=("Consolas", 9))
 
     # --- Layout -----------------------------------------------------------
@@ -170,7 +179,7 @@ class GameMasterUI:
         self._dial_labels = {}
 
         for i, (mid, label) in enumerate(zip(_MOTOR_IDS, _JOINT_LABELS)):
-            frame.columnconfigure(i, weight=1)
+            frame.columnconfigure(i, weight=1, uniform="joints")
 
             joint_frame = ttk.Frame(frame)
             joint_frame.grid(row=0, column=i, sticky="nsew", padx=3, pady=2)
@@ -220,15 +229,24 @@ class GameMasterUI:
             dial_scale.state(["disabled"])
             self._dial_scales[mid] = dial_var
 
-            # Numeric readouts
+            # Numeric readouts — fixed width=7 prevents layout jitter when
+            # value changes between e.g. "0.0°" and "+180.0°"
             robot_lbl = ttk.Label(
-                joint_frame, text="0.0°", style="Value.TLabel", anchor="center"
+                joint_frame,
+                text="0.0°",
+                style="Value.TLabel",
+                anchor="center",
+                width=7,
             )
             robot_lbl.grid(row=3, column=0, sticky="ew")
             self._robot_labels[mid] = robot_lbl
 
             dial_lbl = ttk.Label(
-                joint_frame, text="0.0°", style="Value.TLabel", anchor="center"
+                joint_frame,
+                text="0.0°",
+                style="Value.TLabel",
+                anchor="center",
+                width=7,
             )
             dial_lbl.grid(row=3, column=1, sticky="ew")
             self._dial_labels[mid] = dial_lbl
