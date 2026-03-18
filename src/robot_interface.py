@@ -206,19 +206,17 @@ class SimulatedRobotInterface:
                 else:
                     self._feedback_positions = dict(self._positions)
 
-            # Hybrid sleep: coarse sleep + spin-wait for precision.
-            # Windows Event.wait() has ~15.6ms resolution, so we only
-            # use it when remaining time exceeds that granularity.
+            # Hybrid sleep: sleep most of the budget, then spin-wait.
+            # time.sleep(0) in the spin loop yields the GIL so other
+            # Python threads (game loop, serial I/O) can run.
             elapsed = time.perf_counter() - cycle_start
-            sleep_time = dt - elapsed
-            if sleep_time > 0.02:
-                self._stop_event.wait(sleep_time - 0.015)
-            # Spin-wait for remaining time, yielding GIL each iteration
-            # so other Python threads (serial I/O) can run.
+            remaining = dt - elapsed
+            if remaining > 0.0015:
+                self._stop_event.wait(remaining - 0.0015)
             while time.perf_counter() - cycle_start < dt:
                 if self._stop_event.is_set():
                     return
-                time.sleep(0)
+                time.sleep(0)  # yield GIL to other threads
 
 
 # ---------------------------------------------------------------------------

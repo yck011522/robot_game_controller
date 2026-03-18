@@ -4,7 +4,7 @@ Owns all subsystems (HapticSystem, JoggingController, SimulatedRobotInterface)
 and the 5-stage game state machine. Reads/writes GameSettings as a shared
 register so the Game Master UI can observe and control the game.
 
-Runs its own thread (the "game loop" at ~50 Hz). NOT the main thread —
+Runs its own thread (the "game loop" at ~100 Hz). NOT the main thread —
 Tkinter needs the main thread.
 
 Usage:
@@ -17,16 +17,61 @@ Usage:
 
 import time
 import threading
+import sys
 from typing import Optional
 
 from game_settings import GameSettings
 from jogging_controller import JoggingController, JointConfig, JointState
-from haptic_serial import HapticSystem
+from haptic_serial import HapticSystem, SimulatedHapticSystem
 from robot_interface import SimulatedRobotInterface
 from led_animation_controller import LEDAnimationController
+from weight_sensor import (
+    WeightSensorSystem,
+    SimulatedWeightSensorSystem,
+    ALL_BUCKET_IDS,
+    TEAM1_BUCKET_IDS,
+    TEAM2_BUCKET_IDS,
+)
+from state_publisher import StatePublisher
 
 # Game loop target frequency
-_GAME_LOOP_HZ = 50
+_GAME_LOOP_HZ = 100
+
+# ---------------------------------------------------------------------------
+# Windows high-resolution timer helpers
+# ---------------------------------------------------------------------------
+# Windows default timer resolution is 15.625ms (64 Hz).  Requesting 1ms
+# resolution via timeBeginPeriod allows time.sleep / Event.wait to wake
+# at ~1ms granularity, which is essential for hitting 100 Hz loops.
+
+_timer_period_set = False
+
+
+def _set_high_resolution_timer():
+    """Request 1ms timer resolution on Windows. No-op on other platforms."""
+    global _timer_period_set
+    if sys.platform == "win32" and not _timer_period_set:
+        try:
+            import ctypes
+
+            ctypes.windll.winmm.timeBeginPeriod(1)
+            _timer_period_set = True
+        except Exception:
+            pass
+
+
+def _restore_timer_resolution():
+    """Restore default timer resolution on Windows."""
+    global _timer_period_set
+    if sys.platform == "win32" and _timer_period_set:
+        try:
+            import ctypes
+
+            ctypes.windll.winmm.timeEndPeriod(1)
+            _timer_period_set = False
+        except Exception:
+            pass
+
 
 # Game stages in order
 STAGES = ["Idle", "Tutorial", "GameOn", "Conclusion", "Reset"]
@@ -35,14 +80,15 @@ STAGES = ["Idle", "Tutorial", "GameOn", "Conclusion", "Reset"]
 class GameController:
     """Central orchestrator — game loop + state machine.
 
-    The game loop runs at ~50 Hz on its own thread:
+    The game loop runs at ~100 Hz on its own thread:
       1. Read dials via HapticSystem
       2. Process through JoggingController
       3. Send targets to robot
       4. Read robot positions
       5. Send haptic feedback
-      6. Update GameSettings with observable state
-      7. Advance game stage if needed
+      6. Read weight sensors and compute scores
+      7. Update GameSettings with observable state
+      8. Advance game stage if needed
     """
 
     def __init__(self, settings: GameSettings):
@@ -58,6 +104,8 @@ class GameController:
         self._haptic: Optional[HapticSystem] = None
         self._robot: Optional[SimulatedRobotInterface] = None
         self._led_display: Optional[LEDAnimationController] = None
+        self._weight_sensor = None
+        self._publisher: Optional[StatePublisher] = None
         self._motor_bounds: dict[int, tuple[int, int]] = {}
 
         # Stage timer
@@ -71,6 +119,9 @@ class GameController:
 
     def start(self):
         """Build subsystems from current settings and start the game loop thread."""
+        # Raise Windows timer resolution before starting any timed loops
+        _set_high_resolution_timer()
+
         s = self._settings
 
         # Build joint configs from settings
@@ -93,10 +144,17 @@ class GameController:
         }
 
         # Create subsystems
-        self._haptic = HapticSystem(
-            expected_motor_ids=self._motor_ids,
-            motor_bounds=self._motor_bounds,
-        )
+        if s.get("simulate_mode"):
+            self._haptic = SimulatedHapticSystem(
+                expected_motor_ids=self._motor_ids,
+                settings=s,
+                motor_bounds=self._motor_bounds,
+            )
+        else:
+            self._haptic = HapticSystem(
+                expected_motor_ids=self._motor_ids,
+                motor_bounds=self._motor_bounds,
+            )
         self._robot = SimulatedRobotInterface(
             joint_ids=self._motor_ids,
             max_velocity_dps=s.get("robot_max_velocity_dps"),
@@ -104,10 +162,31 @@ class GameController:
         )
         self._led_display = LEDAnimationController()
 
+        # Weight sensor system
+        if s.get("simulate_mode"):
+            self._weight_sensor = SimulatedWeightSensorSystem(
+                bucket_ids=ALL_BUCKET_IDS,
+                settings=s,
+            )
+        else:
+            self._weight_sensor = WeightSensorSystem(
+                bucket_ids=ALL_BUCKET_IDS,
+            )
+
         # Start subsystems
         self._haptic.start()
         self._robot.start()
         self._led_display.start()
+        self._weight_sensor.start()
+
+        # State publisher
+        self._publisher = StatePublisher(
+            settings=s,
+            broadcast_addr=s.get("broadcast_addr"),
+            port=s.get("broadcast_port"),
+            publish_hz=s.get("publish_hz"),
+        )
+        self._publisher.start()
 
         # Initialize stage
         s.set("current_stage", "Idle")
@@ -130,7 +209,9 @@ class GameController:
         if self._haptic and self._motor_bounds:
             for mid in self._motor_ids:
                 min_b, max_b = self._motor_bounds.get(mid, (0, 0))
-                self._haptic.set_control(mid, position=0, min_bound=min_b, max_bound=max_b)
+                self._haptic.set_control(
+                    mid, position=0, min_bound=min_b, max_bound=max_b
+                )
             time.sleep(0.1)
 
         if self._robot:
@@ -139,6 +220,12 @@ class GameController:
             self._haptic.stop()
         if self._led_display:
             self._led_display.stop()
+        if self._weight_sensor:
+            self._weight_sensor.stop()
+        if self._publisher:
+            self._publisher.stop()
+
+        _restore_timer_resolution()
 
     # --- Properties --------------------------------------------------------
 
@@ -206,17 +293,26 @@ class GameController:
                     mid, position=feedback_pos, min_bound=min_b, max_bound=max_b
                 )
 
-            # --- 6. Update settings with observable state ---
+            # --- 6. Read weight sensors and compute scores ---
+            self._update_scores()
+
+            # --- 7. Update settings with observable state ---
             self._update_observable_state(latest_states, robot_positions)
 
-            # --- 7. Advance game stage ---
+            # --- 8. Advance game stage ---
             self._advance_stage()
 
-            # Sleep
-            elapsed = time.time() - now
-            sleep_time = dt_target - elapsed
-            if sleep_time > 0:
-                self._stop_event.wait(sleep_time)
+            # Sleep — hybrid with Windows 1ms timer resolution.
+            # With timeBeginPeriod(1), Event.wait has ~1ms granularity.
+            # Sleep to within 1.5ms of deadline, then spin-wait the rest.
+            deadline = now + dt_target
+            remaining = deadline - time.time()
+            if remaining > 0.0015:
+                self._stop_event.wait(remaining - 0.0015)
+            while time.time() < deadline:
+                if self._stop_event.is_set():
+                    return
+                time.sleep(0)  # yield GIL to other threads
 
     def _update_observable_state(
         self,
@@ -271,6 +367,42 @@ class GameController:
             connected = self._haptic.connected_motor_ids
             total = len(self._motor_ids)
             s.set("haptic_connected_count", f"{len(connected)}/{total}")
+
+        # Weight sensor status
+        if self._weight_sensor:
+            c, t = self._weight_sensor.connected_count
+            s.set("weight_sensor_connected_count", f"{c}/{t}")
+            s.set("weight_sensor_hz", self._weight_sensor.actual_hz)
+
+    def _update_scores(self):
+        """Read weight sensors and compute real-time scores."""
+        if not self._weight_sensor:
+            return
+
+        s = self._settings
+        weights = self._weight_sensor.get_all_weights()
+        multipliers = s.get("bucket_multipliers")
+
+        # Store raw weights
+        s.set("bucket_weights", weights)
+
+        # Compute team scores: sum(weight * multiplier) for each team's buckets
+        team1_score = sum(
+            weights.get(bid, 0.0) * multipliers.get(bid, 1.0)
+            for bid in TEAM1_BUCKET_IDS
+        )
+        team2_score = sum(
+            weights.get(bid, 0.0) * multipliers.get(bid, 1.0)
+            for bid in TEAM2_BUCKET_IDS
+        )
+
+        s.set("team1_score", team1_score)
+        s.set("team2_score", team2_score)
+
+        # Update high score
+        for score, label in [(team1_score, "Team 1"), (team2_score, "Team 2")]:
+            if score > s.get("high_score"):
+                s.update(high_score=score, high_score_holder=label)
 
     def _advance_stage(self):
         """Auto-advance through game stages based on timers."""

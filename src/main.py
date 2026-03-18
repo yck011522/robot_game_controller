@@ -7,11 +7,13 @@ Threading model:
   - Robot thread: physics simulation (managed by SimulatedRobotInterface)
 
 Usage:
-    python main.py
+    python main.py              # Normal mode (requires hardware)
+    python main.py --simulate   # Simulated haptic controllers (no hardware)
 """
 
 import sys
 import os
+import argparse
 
 # Ensure src directory is on the path
 sys.path.insert(0, os.path.dirname(__file__))
@@ -22,7 +24,18 @@ from gamemaster_ui import GameMasterUI
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Robot Game Controller")
+    parser.add_argument(
+        "--simulate",
+        action="store_true",
+        help="Use simulated haptic controllers (no hardware required)",
+    )
+    args = parser.parse_args()
+
     settings = GameSettings()
+    if args.simulate:
+        settings.set("simulate_mode", True)
+
     controller = GameController(settings)
     ui = GameMasterUI(settings)
 

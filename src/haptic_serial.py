@@ -684,6 +684,90 @@ class HapticSystem:
 
 
 # ---------------------------------------------------------------------------
+# SimulatedHapticSystem — drop-in replacement for testing without hardware
+# ---------------------------------------------------------------------------
+
+
+class SimulatedHapticSystem:
+    """Simulated haptic controllers for software testing without hardware.
+
+    Drop-in replacement for HapticSystem. Reads simulated dial angles from
+    GameSettings.sim_dial_angles (joint degrees) and converts them to
+    TelemetryFrame objects in decidegrees (dial space) using the gear ratio.
+
+    All motors report as connected immediately on start().
+    """
+
+    def __init__(
+        self,
+        expected_motor_ids: list[int],
+        settings,
+        motor_bounds: Optional[dict[int, tuple[int, int]]] = None,
+    ):
+        self.expected_motor_ids = set(expected_motor_ids)
+        self._settings = settings
+        self._motor_bounds = dict(motor_bounds) if motor_bounds else {}
+        self._started = False
+
+    def start(self):
+        self._started = True
+        logger.info(
+            "SimulatedHapticSystem started (motors: %s)",
+            sorted(self.expected_motor_ids),
+        )
+
+    def stop(self):
+        self._started = False
+        logger.info("SimulatedHapticSystem stopped")
+
+    def get_telemetry(self, motor_id: int) -> Optional[TelemetryFrame]:
+        if not self._started or motor_id not in self.expected_motor_ids:
+            return None
+        sim_angles = self._settings.get("sim_dial_angles")
+        joint_deg = sim_angles.get(motor_id, 0.0)
+        gear_ratio = self._settings.get("gear_ratio")
+        decideg = int(round(joint_deg * gear_ratio * 10.0))
+        return TelemetryFrame(
+            motor_id=motor_id,
+            angle=decideg,
+            speed=0,
+            torque=0,
+            timestamp=time.time(),
+        )
+
+    def get_all_telemetry(self) -> dict[int, Optional[TelemetryFrame]]:
+        return {mid: self.get_telemetry(mid) for mid in self.expected_motor_ids}
+
+    def set_control(
+        self,
+        motor_id: int,
+        position: int,
+        min_bound: Optional[int] = None,
+        max_bound: Optional[int] = None,
+    ):
+        pass  # No physical motors to drive
+
+    def set_motor_param(self, motor_id: int, param_base_name: str, value: int):
+        pass
+
+    def set_board_param(self, motor_id: int, param_name: str, value: int):
+        pass
+
+    def is_motor_connected(self, motor_id: int) -> bool:
+        return self._started and motor_id in self.expected_motor_ids
+
+    @property
+    def all_connected(self) -> bool:
+        return self._started
+
+    @property
+    def connected_motor_ids(self) -> set[int]:
+        if self._started:
+            return set(self.expected_motor_ids)
+        return set()
+
+
+# ---------------------------------------------------------------------------
 # Standalone test
 # ---------------------------------------------------------------------------
 
