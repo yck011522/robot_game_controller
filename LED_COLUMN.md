@@ -346,3 +346,19 @@ Recommendation:
 - Avoid assuming 50 FPS for multi-strip updates at 115200 baud.
 - Prefer updating only changed strips per frame where possible.
 
+### Note on Practical 35 FPS Observation
+
+In tests, around 35 FPS was observed for dual-strip animation despite the conservative
+`~26.5 FPS` estimate above.
+
+Reason: there are two pacing models:
+
+- **between-all-commands** (safer): delay is enforced after every command
+	- For 2 strips with 10 ms gap: about `26.5 FPS` max
+- **between-strips-only** (faster): delay only between A/B commands within one frame
+	- For 2 strips with 10 ms gap: about `35.9 FPS` max
+
+The higher observed value matches the **between-strips-only** model.
+For production reliability, prefer **between-all-commands** unless additional testing
+proves long-run stability at the faster mode.
+
