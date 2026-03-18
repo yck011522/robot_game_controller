@@ -39,6 +39,8 @@ from typing import Optional
 import serial
 import serial.tools.list_ports
 
+import port_registry
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -566,7 +568,13 @@ class HapticSystem:
         for port in candidates:
             if self._stop_event.is_set():
                 return
-            probe_result = self._probe_port(port)
+            # Acquire exclusive access before probing
+            if not port_registry.acquire_port(port, owner="haptic"):
+                continue
+            try:
+                probe_result = self._probe_port(port)
+            finally:
+                port_registry.release_port(port)
             if probe_result is None:
                 continue
 

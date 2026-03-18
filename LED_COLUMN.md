@@ -156,18 +156,81 @@ Even though labeled differently:
 
 ---
 
-### RS485 Communication Bus
+### RS485 Communication Buses (Dual-Bus Architecture)
 
-All controllers are connected in parallel:
+The 8 controllers are split across **two RS485 buses** for improved throughput.
+Each bus is served by its own USB-to-RS485 adapter on the control PC.
 
+```
 Control PC
+├── USB → RS485 Adapter A  (Bus A)
+│   ├── Controller 1
+│   ├── Controller 2
+│   ├── Controller 3
+│   └── Controller 4
 │
-USB → RS485 Adapter
-│
-├── Controller 1
-├── Controller 2
-├── ...
-└── Controller 8
+└── USB → RS485 Adapter B  (Bus B)
+    ├── Controller 5
+    ├── Controller 6
+    ├── Controller 7
+    └── Controller 8
+```
+
+> The exact grouping is flexible.  The software auto-discovers which
+> controllers are on which bus by probing device addresses on each port.
+
+#### Auto-Discovery
+
+The discovery system tracks which controller addresses (1–8) are
+**missing** and actively searches for them:
+
+1. On start-up, scan all candidate USB-RS485 COM ports (by VID/PID)
+   and send a **query-device-address** command (function `0x94`) to
+   addresses 1–8 with a 300 ms read timeout.
+2. A background thread runs every 5 seconds:
+   - **Quick-probe** missing addresses on already-open buses (20 ms
+     timeout — does not block the animation sender thread).
+   - If still missing, look for newly-plugged USB-RS485 adapters,
+     open them, and full-probe for the missing addresses only.
+   - Close any bus that ends up with zero controllers.
+3. Ports are only kept open while they have at least one controller.
+4. If a controller is moved to a different bus, the next probe round
+   detects it on the new port and updates the mapping automatically.
+
+#### Probe Command (Function 0x94 — Query Device Address)
+
+```
+DD 55 EE  00 00  00 <addr>  00  94  02  00 00  00 03  00 01  00 00 00  AA BB
+```
+
+- 21 bytes, same frame structure as display commands.
+- `<addr>` = device address to query (01–08).
+- Reply when present (15 bytes, two lines):
+  ```
+  RecvEnd\r\n
+  0001\r\n
+  ```
+  The second line echoes the 4-digit hex device address.
+- No reply when absent (timeout).
+- Any response containing `\r\n` is treated as proof of a live
+  controller; bus noise (stray `0xFF`) never contains `\r\n`.
+
+See also: *LED Communication Manual.pdf*, section 2.5.10 (function 0x94).
+
+#### Supported USB-RS485 Adapter Chipsets
+
+| Chip            | VID    | PID    |
+|-----------------|--------|--------|
+| FTDI FT232R     | 0x0403 | 0x6001 |
+| FTDI FT-X       | 0x0403 | 0x6015 |
+| Silicon Labs CP210x | 0x10C4 | 0xEA60 |
+| Prolific PL2303 | 0x067B | 0x2303 |
+| CH340           | 0x1A86 | 0x7522 |
+| CH341           | 0x1A86 | 0x7523 |
+| CH343           | 0x1A86 | 0x55D3 |
+
+> CH340/CH341 adapters overlap with the haptic ESP32 controllers.
+> The software differentiates them by probing the LED protocol.
 
 
 ### Wiring Convention
@@ -181,9 +244,7 @@ USB → RS485 Adapter
 
 ## 8. Addressing Strategy
 
-Each controller must have a **unique device address**.
-
-Plan:
+Each controller must have a **unique device address** (across all buses).
 
 | Column | Controller Address |
 |--------|-------------------|
@@ -197,6 +258,8 @@ This allows:
 - Individual control per column
 - Broadcast control (all columns)
 - Group-based animations (future extension)
+- **Automatic bus routing** — the software discovers which address
+  lives on which bus and routes commands accordingly
 
 ---
 

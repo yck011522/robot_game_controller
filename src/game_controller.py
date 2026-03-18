@@ -23,6 +23,7 @@ from game_settings import GameSettings
 from jogging_controller import JoggingController, JointConfig, JointState
 from haptic_serial import HapticSystem
 from robot_interface import SimulatedRobotInterface
+from led_animation_controller import LEDAnimationController
 
 # Game loop target frequency
 _GAME_LOOP_HZ = 50
@@ -56,6 +57,7 @@ class GameController:
         self._jogger: Optional[JoggingController] = None
         self._haptic: Optional[HapticSystem] = None
         self._robot: Optional[SimulatedRobotInterface] = None
+        self._led_display: Optional[LEDAnimationController] = None
         self._motor_bounds: dict[int, tuple[int, int]] = {}
 
         # Stage timer
@@ -100,10 +102,12 @@ class GameController:
             max_velocity_dps=s.get("robot_max_velocity_dps"),
             latency_ms=0.0,
         )
+        self._led_display = LEDAnimationController()
 
         # Start subsystems
         self._haptic.start()
         self._robot.start()
+        self._led_display.start()
 
         # Initialize stage
         s.set("current_stage", "Idle")
@@ -133,6 +137,8 @@ class GameController:
             self._robot.stop()
         if self._haptic:
             self._haptic.stop()
+        if self._led_display:
+            self._led_display.stop()
 
     # --- Properties --------------------------------------------------------
 
@@ -143,6 +149,10 @@ class GameController:
     @property
     def robot(self) -> Optional[SimulatedRobotInterface]:
         return self._robot
+
+    @property
+    def led_display(self) -> Optional[LEDAnimationController]:
+        return self._led_display
 
     @property
     def motor_ids(self) -> list[int]:

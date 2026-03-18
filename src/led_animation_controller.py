@@ -5,6 +5,9 @@ LED strips at a steady frame rate (~50 Hz). It provides a register model interfa
 the GameController can queue animations, change colors, or set static states without
 managing threads or timing.
 
+Supports multi-bus RS485 topologies: the underlying LEDSystem auto-discovers which
+LED controllers are reachable on which COM port and routes commands accordingly.
+
 Usage:
     controller = LEDAnimationController(serial_port='COM3')
     controller.start()
@@ -40,22 +43,32 @@ class LEDAnimationController:
     def __init__(
         self,
         serial_port: Optional[str] = None,
+        serial_ports: Optional[List[str]] = None,
         baudrate: int = 921600,
         inter_command_delay_s: float = 0.002,
         debug_hex: bool = False,
+        auto_discover: bool = True,
+        exclude_ports: Optional[set] = None,
     ):
         """
         Args:
-            serial_port: RS485 port (auto-detected if None)
+            serial_port: RS485 port (auto-detected if None). Legacy single-bus.
+            serial_ports: Explicit list of RS485 ports (multi-bus).
             baudrate: RS485 baud rate (default 921600)
             inter_command_delay_s: Delay between RS485 packets for parser stability
             debug_hex: If True, logs outgoing packet bytes
+            auto_discover: If True, background-scan for RS485 adapters and probe
+                           for LED controllers.
+            exclude_ports: COM ports to skip during auto-discovery.
         """
         self._serial = LEDSystem(
             serial_port=serial_port,
+            serial_ports=serial_ports,
             baudrate=baudrate,
             inter_command_delay_s=inter_command_delay_s,
             debug_hex=debug_hex,
+            auto_discover=auto_discover,
+            exclude_ports=exclude_ports,
         )
         self._animation_queue: deque[LEDAnimation] = deque()
         self._current_animation: Optional[LEDAnimation] = None
@@ -144,6 +157,14 @@ class LEDAnimationController:
     def get_all_strip_states(self) -> Dict[int, LEDStripState]:
         """Get snapshot of all strips."""
         return self._serial.get_all_strip_states()
+
+    def get_discovered_mapping(self) -> Dict[int, str]:
+        """Return current strip_id → COM port mapping."""
+        return self._serial.get_discovered_mapping()
+
+    def get_bus_info(self) -> Dict[str, set]:
+        """Return port → set-of-controller-addresses mapping."""
+        return self._serial.get_bus_info()
 
     # ─────────────────────────────────────────────────────────────────────────
     # Private: Render Loop

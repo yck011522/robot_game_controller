@@ -29,21 +29,56 @@ Each strip has **28 addressable LEDs**.
 
 ## Basic Usage
 
-### Option 1: Simple Direct Control
+### Option 1: Auto-Discovery (Recommended)
 
 ```python
 from led_animation_controller import LEDAnimationController
 from led_serial import RED, BLUE, GREEN
 
-controller = LEDAnimationController(serial_port='COM3')
+# Auto-discovers RS485 adapters and probes for LED controllers
+controller = LEDAnimationController()
 controller.start()
 
-# Set a single strip to red
+# Set a single strip to red (routed to the correct bus automatically)
 controller.set_strip_color(11, RED)
 
 # Set all strips to blue
 controller.set_all_strips_color(BLUE)
 
+# Inspect discovered mapping
+print(controller.get_bus_info())           # e.g. {'COM3': {1,2,3,4}, 'COM5': {5,6,7,8}}
+print(controller.get_discovered_mapping()) # e.g. {11: 'COM3', 12: 'COM3', ...}
+
+controller.stop()
+```
+
+### Option 2: Explicit Dual-Bus Ports
+
+```python
+from led_animation_controller import LEDAnimationController
+from led_serial import RED, BLUE
+
+# Provide both COM ports explicitly
+controller = LEDAnimationController(
+    serial_ports=['COM3', 'COM5'],
+    auto_discover=True,   # still probes for controllers on each port
+)
+controller.start()
+
+controller.set_strip_color(11, RED)
+controller.stop()
+```
+
+### Option 3: Single-Bus (Legacy)
+
+```python
+from led_animation_controller import LEDAnimationController
+from led_serial import RED
+
+controller = LEDAnimationController(serial_port='COM3')
+controller.start()
+
+controller.set_strip_color(11, RED)
 controller.stop()
 ```
 
@@ -76,17 +111,22 @@ time.sleep(3)
 controller.stop()
 ```
 
-### Option 3: Standalone LEDSystem (Lower Level)
+### Option 4: Standalone LEDSystem (Lower Level)
 
 ```python
 from led_serial import LEDSystem, RED, BLUE
 
-system = LEDSystem()
+# Multi-bus with auto-discovery
+system = LEDSystem(auto_discover=True)
 system.start()
 
 # Direct control without animation queue
 system.set_strip_color(11, RED)
 system.set_strip_fill(12, 14, BLUE)  # Fill first 14 LEDs in strip 12
+
+# Query discovery results
+print(system.get_bus_info())
+print(system.get_discovered_mapping())
 
 system.stop()
 ```
@@ -189,12 +229,12 @@ This runs four tests:
 
 ---
 
-## Hardware Setup (Minimal Configuration)
+## Hardware Setup
 
-For testing with limited hardware:
+### Minimal Configuration (Testing)
 
 **Required:**
-- 1 RS485 USB adapter (CH340 or similar)
+- 1 USB-to-RS485 adapter (FTDI, CP210x, CH340, or similar)
 - 1 LED controller (RS485 address 0x01)
 - 2 WS2811 LED strips (12V, ~1m, 28 LEDs each)
 
@@ -213,6 +253,32 @@ Controller (Address 0x01)
 ├─ Channel 2 (DAT) → Strip 12 Data line
 └─ Channel 2 (CLK) → Strip 12 Data line
 ```
+
+### Full Dual-Bus Configuration (Production)
+
+**Required:**
+- 2 USB-to-RS485 adapters
+- 8 LED controllers (addresses 1–8)
+- 16 WS2811 LED strips
+
+**Wiring:**
+```
+Control PC
+├─ USB → RS485 Adapter A  (Bus A)
+│   ├─ A/B → Controller 1
+│   ├─ A/B → Controller 2
+│   ├─ A/B → Controller 3
+│   └─ A/B → Controller 4
+│
+└─ USB → RS485 Adapter B  (Bus B)
+    ├─ A/B → Controller 5
+    ├─ A/B → Controller 6
+    ├─ A/B → Controller 7
+    └─ A/B → Controller 8
+```
+
+The exact controller-to-bus assignment is flexible. The software auto-
+discovers which controllers are on which bus by probing.
 
 ---
 
@@ -241,9 +307,16 @@ color = Color.from_hex("#FF00FF")
 ## Troubleshooting
 
 ### No Serial Connection
-- Check USB RS485 adapter is plugged in
-- Verify device appears in Device Manager (COM port)
-- Logs will show "WARNING: Could not connect to hardware. Running in simulation mode."
+- Check USB RS485 adapters are plugged in
+- Verify devices appear in Device Manager (COM ports)
+- Logs will show "No LED RS485 buses found" if no adapters are detected
+- Use `controller.get_bus_info()` to inspect discovered buses
+
+### Strips Not Responding
+- Use `controller.get_discovered_mapping()` to check which strips were found
+- If a strip shows no mapping, the controller may not be responding to probes
+- Verify RS485 wiring and controller address (DIP switches)
+- Check that the adapter VID/PID is in the supported list
 
 ### Animations Not Playing
 - Ensure `controller.start()` was called
@@ -263,5 +336,6 @@ color = Color.from_hex("#FF00FF")
 2. **Team Visualization** — Alternate colors for red/blue teams
 3. **Score Bar** — Dynamic fill based on game score
 4. **Collision Indicator** — Flash strips when collisions detected
+5. **Bus health monitoring** — Surface per-bus latency/error stats in the UI
 
 See comments in `led_animations.py` for extension points.
