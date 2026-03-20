@@ -11,7 +11,8 @@ Scenarios:
 Examples:
   python src/test_led_animation_rate.py --port COM19 --mode single --strip-a 11 --fps 20
   python src/test_led_animation_rate.py --port COM19 --mode dual-same --strip-a 11 --strip-b 12 --fps 15
-  python src/test_led_animation_rate.py --port COM19 --mode dual-different --strip-a 11 --strip-b 12 --fps 12
+  python src/test_led_animation_rate.py --port COM19 --mode dual-different --strip-a 11 --strip-b 12 --fps 30
+  python src/test_led_animation_rate.py --port COM19 --mode dual-different --strip-a 11 --strip-b 12 --fps 60 --duration-s 150
 
 Max A speed achieved during testing with 921600 baud and 2 ms inter-command delay:
   python src/test_led_animation_rate.py --port COM19 --mode all-strips --fps 20 --inter-cmd-ms 2 --duration-s 10 --cycle-s 2
