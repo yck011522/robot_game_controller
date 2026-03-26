@@ -71,18 +71,30 @@ The planned position (or the robot's actual position) is sent back to the haptic
 - **Tracking resistance** — When the player leads ahead of the rate-limited target
 - **Bounds restoration + OOB kick** — When the player pushes past a joint limit or into a detected collision zone
 
-## Long-Term Plan
+## Current Status
 
-1. **Serial communication layer** — Reliable multi-board communication, device discovery, motor ID provisioning
-2. **Input processing pipeline** — Gearing, clamping, rate limiting, collision detection (stubbed)
-3. **Haptic feedback loop** — Closed-loop feedback from processed position back to dials
-4. **Simulated robot arm** — Mock arm with simple dynamics for testing without hardware
-5. **Real robot arm integration** — Connect to actual robot arm, replace simulated interface
-6. **Collision detection** — Implement real collision checking against robot self-collision and environment
-7. **Game logic** — Scoring, timing, team management, game modes
-8. **Monitoring & tuning UI** — Real-time dashboard for diagnostics and parameter adjustment
+Implemented in the current repository:
+
+1. **Serial communication layer** — multi-board discovery, telemetry, reconnect, control writes
+2. **Input processing pipeline** — gearing, clamping, rate limiting
+3. **Haptic feedback loop** — closed-loop feedback from simulated/robot position back to the dials
+4. **Simulated robot arm** — threaded mock robot with simple joint-space dynamics
+5. **Autonomous game loop skeleton** — 5-stage state machine, countdowns, idle-to-start detection, manual override, software e-stop
+6. **Game Master UI** — Tkinter monitoring/control panel with simulator tools
+7. **UDP state publisher** — broadcast game state for remote display nodes
+8. **Scoring pipeline (simulated/live interface)** — score calculation and simulated bucket weights
+
+Still outstanding:
+
+1. **Real robot arm integration** — connect to actual UR robot / RTDE path
+2. **Collision-aware motion planning** — replace the current pass-through `planned_deg = throttled_deg`
+3. **Real weight sensor integration** — implement the RS-485 load-cell protocol
+4. **Runtime parameter plumbing** — ensure all UI controls reconfigure the live system immediately
+5. **Hardware validation and tuning** — finish end-to-end test coverage and record chosen settings
+6. **Profiles / persistence / logging** — presets, session logs, high-score persistence, analytics
 
 ## Documentation
 
 - [PROTOCOL.md](PROTOCOL.md) — ESP32 haptic controller communication protocol
 - [TESTING_PLAN.md](TESTING_PLAN.md) — Phased testing plan and test results log
+- [GAMEMASTER_UI_FEATURES.md](GAMEMASTER_UI_FEATURES.md) — UI feature checklist and current implementation notes

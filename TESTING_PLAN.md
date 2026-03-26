@@ -251,6 +251,18 @@ The physics thread uses a hybrid timing strategy. For short cycle times (< 20ms)
 Real-time visibility into system state for debugging and parameter tuning.
 
 ### What to Implement
+Implemented so far in `src/gamemaster_ui.py`, `src/game_controller.py`, and `src/state_publisher.py`:
+- Tkinter Game Master UI with:
+  - stage indicator, countdown, auto-cycle toggle, manual stage override, software e-stop
+  - real-time joint visualization (robot vs clamped position)
+  - timing controls
+  - haptic/control parameter controls
+  - score display and per-bucket breakdown
+  - simulator sliders for haptic dials and bucket weights
+  - aggregate system-health display
+- UDP state publisher for remote display nodes
+
+Still to validate and/or complete:
 - Real-time display of:
   - 6 dial raw positions (decidegrees)
   - 6 geared joint commands (degrees)
@@ -270,6 +282,44 @@ Real-time visibility into system state for debugging and parameter tuning.
 _No tests run yet._
 
 ---
+
+## Additional Outstanding Test Items
+
+Add these after the original phase list so the testing plan matches the current codebase.
+
+### Runtime Parameter Propagation
+
+- [ ] Changing haptic parameters in the Game Master UI updates the live ESP32 controllers immediately
+- [ ] Changing `gear_ratio` at runtime updates dial-to-joint conversion and feedback consistently
+- [ ] Changing `dial_max_velocity_dps` at runtime updates the active rate limiter without restarting
+- [ ] Changing `robot_max_velocity_dps` at runtime updates the active simulated/live robot interface without restarting
+- [ ] Changing joint limits at runtime updates both software clamping and haptic dial bounds immediately
+- [ ] OOB kick enable/disable and pulse settings are applied live and verified physically
+
+### Health / Telemetry Visibility
+
+- [ ] FOC rate parsed from ESP32 telemetry is surfaced correctly in the UI
+- [ ] Sequence-number echo / ack is exposed in diagnostics and verified during closed-loop operation
+- [ ] UI health metrics remain accurate during disconnect/reconnect events
+
+### Autonomous Stage Logic
+
+- [ ] Idle exits only on intended dial-motion threshold and does not false-trigger
+- [ ] Manual stage override behaves correctly from every stage
+- [ ] Software e-stop halts output safely and system resumes cleanly after release
+- [ ] Reset stage returns gameplay state to a known baseline
+
+### State Publisher / Display Network
+
+- [ ] UDP state packets match `NETWORK_PROTOCOL.md`
+- [ ] One or more receiver nodes can join mid-session and recover without restart
+- [ ] Receiver handles stale/no-signal conditions correctly
+
+### Future Hardware Integration
+
+- [ ] Real RS-485 weight sensor protocol implemented and validated on all buckets
+- [ ] Real robot interface implemented and validated for startup, motion, shutdown, and fault handling
+- [ ] Collision-aware motion planner validated against self-collision and environment constraints
 
 ## Notes & Observations
 
