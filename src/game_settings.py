@@ -39,6 +39,12 @@ class GameSettings:
     # Max velocity for the simulated/real robot (degrees per second)
     robot_max_velocity_dps: float = 30.0
 
+    # --- Robot connection ---
+    # When True, use a simulated robot instead of connecting via RTDE
+    simulate_robot: bool = True
+    # IP address of the UR robot (used when simulate_robot is False)
+    robot_ip: str = "192.168.56.101"
+
     # --- Joint limits ---
     # Per-joint minimum angle (degrees). Keys are motor IDs (e.g. 11..16)
     joint_min_deg: Dict[int, float] = field(
@@ -85,8 +91,10 @@ class GameSettings:
     robot_actual_deg: Dict[int, float] = field(default_factory=dict)
 
     # --- Simulation ---
-    # When True, use simulated haptic controllers instead of real hardware
-    simulate_mode: bool = False
+    # When True, use simulated haptic dial controllers instead of real ESP32 hardware
+    simulate_haptics: bool = False
+    # When True, use simulated weight sensors instead of real load cells
+    simulate_weight_sensors: bool = False
     # Simulated dial angles in joint degrees, keyed by motor ID.
     # Written by the simulator UI panel, read by SimulatedHapticSystem.
     sim_dial_angles: Dict[int, float] = field(

@@ -309,13 +309,13 @@ the RTDE read/write path that will replace `SimulatedRobotInterface`.
 ### Tests to Run
 
 **6.1 — ur_rtde library import test**
-- [ ] `python tests/test_ur_rtde_import.py` passes: `rtde_control`, `rtde_receive`, `rtde_io` all import
-- [ ] `RTDEControlInterface` flags are accessible (FLAG_VERBOSE, FLAG_UPLOAD_SCRIPT, etc.)
+- [x] `python tests/test_ur_rtde_import.py` passes: `rtde_control`, `rtde_receive`, `rtde_io` all import
+- [x] `RTDEControlInterface` flags are accessible (FLAG_VERBOSE, FLAG_UPLOAD_SCRIPT, etc.)
 
 **6.2 — RTDE read connection (receive interface)**
-- [ ] `RTDEReceiveInterface` connects to the simulator without error
-- [ ] `getActualQ()` returns a 6-element list of joint positions (radians)
-- [ ] `getTimestamp()` returns a valid robot timestamp
+- [x] `RTDEReceiveInterface` connects to the simulator without error
+- [x] `getActualQ()` returns a 6-element list of joint positions (radians)
+- [x] `getTimestamp()` returns a valid robot timestamp
 - [ ] `disconnect()` completes cleanly
 
 Test code:
@@ -329,10 +329,10 @@ rtde_r.disconnect()
 ```
 
 **6.3 — RTDE servoJ control loop**
-- [ ] `RTDEControlInterface` connects to the simulator without error
-- [ ] `servoJ()` executes in a 500 Hz loop without timeout or disconnection
-- [ ] Robot base joint visibly moves in the simulator
-- [ ] `servoStop()` and `stopScript()` complete cleanly
+- [x] `RTDEControlInterface` connects to the simulator without error
+- [x] `servoJ()` executes in a 500 Hz loop without timeout or disconnection
+- [x] Robot base joint visibly moves in the simulator
+- [x] `servoStop()` and `stopScript()` complete cleanly
 
 Test code:
 ```python
@@ -397,9 +397,28 @@ psutil.Process(os.getpid()).nice(psutil.REALTIME_PRIORITY_CLASS)
 
 ### Test Results
 
-_No tests run yet._
+**Date: 2026-04-06**
 
----
+**Test 6.1 — Library import:**
+- All three modules (`rtde_control`, `rtde_receive`, `rtde_io`) import successfully.
+- `RTDEControlInterface` flags (FLAG_VERBOSE, FLAG_UPLOAD_SCRIPT, etc.) accessible.
+
+**Test 6.2 — RTDE read connection:**
+- Connected to VirtualBox UR simulator at `192.168.56.101` (host-only adapter).
+- `getActualQ()` returns 6 joint positions in radians, updating in real-time.
+- `getTimestamp()` returns valid robot timestamp.
+- Continuous read loop confirmed: values change live when jogging robot in simulator UI.
+- `disconnect()` not explicitly tested yet.
+
+**Test 6.3 — servoJ control loop:**
+- `RTDEControlInterface` connected without error.
+- 500 Hz servoJ loop ran for 10 seconds (5000 iterations), wall time 10.016s — accurate timing.
+- Base joint moved 1 radian smoothly; consistent ~0.012 rad tracking lag throughout (expected with `lookahead_time=0.1`, `gain=300`).
+- Direction logic verified: moves toward zero from both positive and negative starting positions.
+- `servoStop()` halted servo mode cleanly; robot settled within ±0.015 rad immediately.
+- `stopScript()` and `disconnect()` completed without error.
+
+**Remaining:** Tests 6.4 (RT priority) and 6.5 (URRobotInterface implementation) not yet run.
 
 ## Additional Outstanding Test Items
 

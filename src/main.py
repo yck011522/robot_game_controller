@@ -26,15 +26,42 @@ from gamemaster_ui import GameMasterUI
 def main():
     parser = argparse.ArgumentParser(description="Robot Game Controller")
     parser.add_argument(
-        "--simulate",
+        "--sim-haptics",
         action="store_true",
-        help="Use simulated haptic controllers (no hardware required)",
+        help="Use simulated haptic dial controllers (no ESP32 hardware required)",
+    )
+    parser.add_argument(
+        "--sim-robot",
+        action="store_true",
+        help="Use simulated robot instead of connecting via RTDE",
+    )
+    parser.add_argument(
+        "--sim-weights",
+        action="store_true",
+        help="Use simulated weight sensors instead of real load cells",
+    )
+    parser.add_argument(
+        "--sim-all",
+        action="store_true",
+        help="Enable all simulations (haptics, robot, weight sensors)",
+    )
+    parser.add_argument(
+        "--robot-ip",
+        metavar="IP",
+        help="IP address of the UR robot (default: 192.168.56.101)",
     )
     args = parser.parse_args()
 
     settings = GameSettings()
-    if args.simulate:
-        settings.set("simulate_mode", True)
+    if args.sim_all or args.sim_haptics:
+        settings.set("simulate_haptics", True)
+    if args.sim_all or args.sim_robot:
+        settings.set("simulate_robot", True)
+    if args.sim_all or args.sim_weights:
+        settings.set("simulate_weight_sensors", True)
+    if args.robot_ip:
+        settings.set("simulate_robot", False)
+        settings.set("robot_ip", args.robot_ip)
 
     controller = GameController(settings)
     ui = GameMasterUI(settings)

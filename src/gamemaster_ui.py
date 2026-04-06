@@ -64,10 +64,16 @@ class GameMasterUI:
         self._settings = settings
 
         self._root = tk.Tk()
-        sim = settings.get("simulate_mode")
+        sim_haptics = settings.get("simulate_haptics")
+        sim_weights = settings.get("simulate_weight_sensors")
         title = "Game Master — Robot Game Controller"
-        if sim:
-            title += "  [SIMULATE MODE]"
+        if sim_haptics or sim_weights:
+            title += "  [SIMULATE"
+            if sim_haptics:
+                title += " HAPTICS"
+            if sim_weights:
+                title += " WEIGHTS"
+            title += "]"
         self._root.title(title)
         self._root.geometry("1280x720")
         self._root.configure(bg="#1e1e1e")
@@ -160,8 +166,8 @@ class GameMasterUI:
         self._build_state_panel()
         self._build_params_panel()
 
-        # Add simulator panel if in simulate mode
-        if self._settings.get("simulate_mode"):
+        # Add simulator panel if any simulation is active
+        if self._settings.get("simulate_haptics") or self._settings.get("simulate_weight_sensors"):
             self._root.columnconfigure(3, weight=2)
             self._root.geometry("1600x720")
             self._build_simulator_column()
@@ -770,6 +776,16 @@ class GameMasterUI:
 
             self._robot_labels[mid].configure(text=f"{r_val:+.1f}°")
             self._dial_labels[mid].configure(text=f"{d_val:+.1f}°")
+
+        # Keep sim slider widgets in sync with sim_dial_angles
+        # (e.g. after Sync state writes robot positions into the settings)
+        if hasattr(self, "_sim_vars"):
+            sim_angles = snap.get("sim_dial_angles", {})
+            for mid, var in self._sim_vars.items():
+                new_val = sim_angles.get(mid, 0.0)
+                if abs(var.get() - new_val) > 0.05:
+                    var.set(new_val)
+                    self._sim_labels[mid].configure(text=f"{new_val:+.1f}°")
 
     def _update_stage(self, snap: dict):
         stage = snap.get("current_stage", "Idle")

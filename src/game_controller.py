@@ -23,7 +23,7 @@ from typing import Optional
 from game_settings import GameSettings
 from jogging_controller import JoggingController, JointConfig, JointState
 from haptic_serial import HapticSystem, SimulatedHapticSystem
-from robot_interface import SimulatedRobotInterface
+from robot_interface import SimulatedRobotInterface, URRobotInterface
 from led_animation_controller import LEDAnimationController
 from weight_sensor import (
     WeightSensorSystem,
@@ -74,7 +74,10 @@ def _restore_timer_resolution():
 
 
 # Game stages in order
-STAGES = ["Idle", "Tutorial", "GameOn", "Conclusion", "Reset"]
+STAGES = ["Sync", "Idle", "Tutorial", "GameOn", "Conclusion", "Reset"]
+
+# Sync stage: max error (degrees, joint space) before dials are considered synced
+_SYNC_TOLERANCE_DEG = 2.0
 
 
 class GameController:
@@ -144,7 +147,7 @@ class GameController:
         }
 
         # Create subsystems
-        if s.get("simulate_mode"):
+        if s.get("simulate_haptics"):
             self._haptic = SimulatedHapticSystem(
                 expected_motor_ids=self._motor_ids,
                 settings=s,
@@ -155,15 +158,21 @@ class GameController:
                 expected_motor_ids=self._motor_ids,
                 motor_bounds=self._motor_bounds,
             )
-        self._robot = SimulatedRobotInterface(
-            joint_ids=self._motor_ids,
-            max_velocity_dps=s.get("robot_max_velocity_dps"),
-            latency_ms=0.0,
-        )
+        if not s.get("simulate_robot"):
+            self._robot = URRobotInterface(
+                joint_ids=self._motor_ids,
+                robot_ip=s.get("robot_ip"),
+            )
+        else:
+            self._robot = SimulatedRobotInterface(
+                joint_ids=self._motor_ids,
+                max_velocity_dps=s.get("robot_max_velocity_dps"),
+                latency_ms=0.0,
+            )
         self._led_display = LEDAnimationController()
 
         # Weight sensor system
-        if s.get("simulate_mode"):
+        if s.get("simulate_weight_sensors"):
             self._weight_sensor = SimulatedWeightSensorSystem(
                 bucket_ids=ALL_BUCKET_IDS,
                 settings=s,
@@ -188,8 +197,8 @@ class GameController:
         )
         self._publisher.start()
 
-        # Initialize stage
-        s.set("current_stage", "Idle")
+        # Initialize stage — Sync first, then Idle once dials match robot
+        s.set("current_stage", "Sync")
         self._stage_start_time = time.time()
 
         # Start game loop thread
@@ -234,7 +243,7 @@ class GameController:
         return self._haptic
 
     @property
-    def robot(self) -> Optional[SimulatedRobotInterface]:
+    def robot(self):
         return self._robot
 
     @property
@@ -264,6 +273,20 @@ class GameController:
             if self._settings.get("emergency_stop"):
                 # Send zero velocity / hold position
                 time.sleep(dt_target)
+                continue
+
+            # --- Sync state: align haptic dials to robot position ---
+            if self._settings.get("current_stage") == "Sync":
+                self._sync_tick()
+                # Sleep and continue — skip the normal pipeline
+                deadline = now + dt_target
+                remaining = deadline - time.time()
+                if remaining > 0.0015:
+                    self._stop_event.wait(remaining - 0.0015)
+                while time.time() < deadline:
+                    if self._stop_event.is_set():
+                        return
+                    time.sleep(0)
                 continue
 
             # --- 1. Read dials ---
@@ -434,14 +457,18 @@ class GameController:
             if elapsed >= duration:
                 self._next_stage()
         else:
-            # Idle has no timer — it waits for dial movement
             s.set("stage_countdown_s", 0)
-            self._check_idle_exit()
+            if stage == "Sync":
+                pass  # Sync advances from _sync_tick()
+            elif stage == "Idle":
+                self._check_idle_exit()
 
     def _stage_duration(self, stage: str) -> float:
         """Return the duration in seconds for a given stage. 0 = no timer."""
         s = self._settings
-        if stage == "Idle":
+        if stage == "Sync":
+            return 0  # waits for dial convergence
+        elif stage == "Idle":
             return 0  # waits for player input
         elif stage == "Tutorial":
             return s.get("tutorial_duration_s")
@@ -452,6 +479,57 @@ class GameController:
         elif stage == "Reset":
             return s.get("reset_duration_s")
         return 0
+
+    def _sync_tick(self):
+        """Sync state tick: command haptic dials to match the robot position.
+
+        1. Read the robot's current joint positions.
+        2. Command each haptic dial to that position (and for simulated
+           dials, write sim_dial_angles directly).
+        3. Read the dials back and check whether they are within tolerance.
+        4. When all dials are within ``_SYNC_TOLERANCE_DEG`` of the robot,
+           reset the jogging controller and advance to Idle.
+        """
+        s = self._settings
+
+        # 1. Read robot positions (degrees, keyed by motor ID)
+        robot_positions = self._robot.get_all_positions()
+
+        # 2a. For simulated haptics, write dial angles directly so
+        #     get_telemetry() returns the correct values immediately.
+        if s.get("simulate_haptics"):
+            sim_angles = dict(s.get("sim_dial_angles"))
+            for mid, deg in robot_positions.items():
+                sim_angles[mid] = deg
+            s.set("sim_dial_angles", sim_angles)
+
+        # 2b. Command each haptic motor to the robot's position
+        for mid in self._motor_ids:
+            robot_deg = robot_positions.get(mid, 0.0)
+            feedback_pos = self._jogger.joint_deg_to_dial_decideg(mid, robot_deg)
+            min_b, max_b = self._motor_bounds[mid]
+            self._haptic.set_control(
+                mid, position=feedback_pos, min_bound=min_b, max_bound=max_b,
+            )
+
+        # 3. Read dials back and check convergence
+        telemetry = self._haptic.get_all_telemetry()
+        synced = True
+        for mid in self._motor_ids:
+            t = telemetry.get(mid)
+            if t is None:
+                synced = False
+                continue
+            dial_joint_deg = self._jogger.dial_decideg_to_joint_deg(mid, t.angle)
+            robot_deg = robot_positions.get(mid, 0.0)
+            if abs(dial_joint_deg - robot_deg) > _SYNC_TOLERANCE_DEG:
+                synced = False
+
+        # 4. If synced, reset jogging controller and advance
+        if synced:
+            self._jogger.reset()
+            print("[GameController] Sync complete — dials aligned to robot position")
+            self._next_stage()
 
     def _check_idle_exit(self):
         """In Idle stage, check if any dial has moved enough to start."""
