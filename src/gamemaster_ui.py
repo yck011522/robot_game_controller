@@ -15,7 +15,7 @@ from tkinter import ttk
 from typing import Optional
 import socket
 
-from game_settings import GameSettings
+from game_settings import GameSettings, TEAM1_MOTOR_IDS, TEAM2_MOTOR_IDS, ALL_MOTOR_IDS
 
 
 def _get_local_ip() -> str:
@@ -37,7 +37,9 @@ _SLIDER_MIN = -180
 _SLIDER_MAX = 180
 
 # Motor IDs
-_MOTOR_IDS = [11, 12, 13, 14, 15, 16]
+_MOTOR_IDS = ALL_MOTOR_IDS
+_TEAM1_MOTOR_IDS = TEAM1_MOTOR_IDS
+_TEAM2_MOTOR_IDS = TEAM2_MOTOR_IDS
 _JOINT_LABELS = ["Base", "Shoulder", "Elbow", "Wrist 1", "Wrist 2", "Wrist 3"]
 
 # Bucket IDs and labels
@@ -75,7 +77,7 @@ class GameMasterUI:
                 title += " WEIGHTS"
             title += "]"
         self._root.title(title)
-        self._root.geometry("1280x720")
+        self._root.geometry("1600x900")
         self._root.configure(bg="#1e1e1e")
 
         # Style
@@ -169,7 +171,7 @@ class GameMasterUI:
         # Add simulator panel if any simulation is active
         if self._settings.get("simulate_haptics") or self._settings.get("simulate_weight_sensors"):
             self._root.columnconfigure(3, weight=2)
-            self._root.geometry("1600x720")
+            self._root.geometry("1920x900")
             self._build_simulator_column()
 
     # --- Left panel: Joint Visualizer -------------------------------------
@@ -184,83 +186,98 @@ class GameMasterUI:
         self._robot_labels = {}
         self._dial_labels = {}
 
-        for i, (mid, label) in enumerate(zip(_MOTOR_IDS, _JOINT_LABELS)):
-            frame.columnconfigure(i, weight=1, uniform="joints")
+        # Two rows — one per team — so we only need 6 columns
+        for team_row, (team_label, team_ids) in enumerate(
+            [("Team 1", _TEAM1_MOTOR_IDS), ("Team 2", _TEAM2_MOTOR_IDS)]
+        ):
+            team_frame = ttk.Frame(frame)
+            team_frame.grid(row=team_row, column=0, sticky="nsew", pady=2)
+            frame.rowconfigure(team_row, weight=1)
+            frame.columnconfigure(0, weight=1)
 
-            joint_frame = ttk.Frame(frame)
-            joint_frame.grid(row=0, column=i, sticky="nsew", padx=3, pady=2)
-            joint_frame.rowconfigure(1, weight=1)
-
-            # Header
+            # Team header in column 0 (vertical label)
             ttk.Label(
-                joint_frame, text=f"J{i+1}", style="Title.TLabel", anchor="center"
-            ).grid(row=0, column=0, columnspan=2, sticky="ew")
-            ttk.Label(joint_frame, text=label, anchor="center").grid(
-                row=5, column=0, columnspan=2, sticky="ew"
-            )
+                team_frame, text=team_label, style="Title.TLabel", anchor="center"
+            ).grid(row=0, column=0, columnspan=len(team_ids), sticky="ew")
 
-            # Column headers
-            ttk.Label(joint_frame, text="Rob", anchor="center").grid(
-                row=1, column=0, sticky="ew"
-            )
-            ttk.Label(joint_frame, text="Dial", anchor="center").grid(
-                row=1, column=1, sticky="ew"
-            )
+            for j, mid in enumerate(team_ids):
+                team_frame.columnconfigure(j, weight=1, uniform="joints")
 
-            # Robot position scale (read-only visual)
-            robot_var = tk.DoubleVar(value=0.0)
-            robot_scale = ttk.Scale(
-                joint_frame,
-                from_=_SLIDER_MAX,
-                to=_SLIDER_MIN,
-                orient="vertical",
-                variable=robot_var,
-                length=250,
-            )
-            robot_scale.grid(row=2, column=0, sticky="ns", padx=2)
-            robot_scale.state(["disabled"])
-            self._robot_scales[mid] = robot_var
+                joint_frame = ttk.Frame(team_frame)
+                joint_frame.grid(row=1, column=j, sticky="nsew", padx=3, pady=2)
+                joint_frame.rowconfigure(2, weight=1)
 
-            # Dial/clamped position scale (read-only visual)
-            dial_var = tk.DoubleVar(value=0.0)
-            dial_scale = ttk.Scale(
-                joint_frame,
-                from_=_SLIDER_MAX,
-                to=_SLIDER_MIN,
-                orient="vertical",
-                variable=dial_var,
-                length=250,
-            )
-            dial_scale.grid(row=2, column=1, sticky="ns", padx=2)
-            dial_scale.state(["disabled"])
-            self._dial_scales[mid] = dial_var
+                label = _JOINT_LABELS[j]
 
-            # Numeric readouts — fixed width=7 prevents layout jitter when
-            # value changes between e.g. "0.0°" and "+180.0°"
-            robot_lbl = ttk.Label(
-                joint_frame,
-                text="0.0°",
-                style="Value.TLabel",
-                anchor="center",
-                width=7,
-            )
-            robot_lbl.grid(row=3, column=0, sticky="ew")
-            self._robot_labels[mid] = robot_lbl
+                # Header
+                ttk.Label(
+                    joint_frame, text=f"J{j+1}", style="Title.TLabel", anchor="center"
+                ).grid(row=0, column=0, columnspan=2, sticky="ew")
+                ttk.Label(joint_frame, text=label, anchor="center").grid(
+                    row=5, column=0, columnspan=2, sticky="ew"
+                )
 
-            dial_lbl = ttk.Label(
-                joint_frame,
-                text="0.0°",
-                style="Value.TLabel",
-                anchor="center",
-                width=7,
-            )
-            dial_lbl.grid(row=3, column=1, sticky="ew")
-            self._dial_labels[mid] = dial_lbl
+                # Column headers
+                ttk.Label(joint_frame, text="Rob", anchor="center").grid(
+                    row=1, column=0, sticky="ew"
+                )
+                ttk.Label(joint_frame, text="Dial", anchor="center").grid(
+                    row=1, column=1, sticky="ew"
+                )
 
-            # Motor ID
-            ttk.Label(joint_frame, text=f"M{mid}", anchor="center").grid(
-                row=4, column=0, columnspan=2, sticky="ew"
-            )
+                # Robot position scale (read-only visual)
+                robot_var = tk.DoubleVar(value=0.0)
+                robot_scale = ttk.Scale(
+                    joint_frame,
+                    from_=_SLIDER_MAX,
+                    to=_SLIDER_MIN,
+                    orient="vertical",
+                    variable=robot_var,
+                    length=200,
+                )
+                robot_scale.grid(row=2, column=0, sticky="ns", padx=2)
+                robot_scale.state(["disabled"])
+                self._robot_scales[mid] = robot_var
+
+                # Dial/clamped position scale (read-only visual)
+                dial_var = tk.DoubleVar(value=0.0)
+                dial_scale = ttk.Scale(
+                    joint_frame,
+                    from_=_SLIDER_MAX,
+                    to=_SLIDER_MIN,
+                    orient="vertical",
+                    variable=dial_var,
+                    length=200,
+                )
+                dial_scale.grid(row=2, column=1, sticky="ns", padx=2)
+                dial_scale.state(["disabled"])
+                self._dial_scales[mid] = dial_var
+
+                # Numeric readouts
+                robot_lbl = ttk.Label(
+                    joint_frame,
+                    text="0.0°",
+                    style="Value.TLabel",
+                    anchor="center",
+                    width=7,
+                )
+                robot_lbl.grid(row=3, column=0, sticky="ew")
+                self._robot_labels[mid] = robot_lbl
+
+                dial_lbl = ttk.Label(
+                    joint_frame,
+                    text="0.0°",
+                    style="Value.TLabel",
+                    anchor="center",
+                    width=7,
+                )
+                dial_lbl.grid(row=3, column=1, sticky="ew")
+                self._dial_labels[mid] = dial_lbl
+
+                # Motor ID
+                ttk.Label(joint_frame, text=f"M{mid}", anchor="center").grid(
+                    row=4, column=0, columnspan=2, sticky="ew"
+                )
 
     # --- Simulator column: All simulation controls in one column -----------
 
@@ -276,56 +293,68 @@ class GameMasterUI:
         self._build_weight_sim(outer)
 
     def _build_haptic_sim(self, parent):
-        """Haptic dial simulator — 6 vertical sliders."""
+        """Haptic dial simulator — 12 vertical sliders (6 per team)."""
         frame = ttk.LabelFrame(parent, text="Haptic Simulator", padding=5)
         frame.grid(row=0, column=0, sticky="nsew", pady=(0, 3))
 
         self._sim_vars = {}
         self._sim_labels = {}
 
-        for i, (mid, label) in enumerate(zip(_MOTOR_IDS, _JOINT_LABELS)):
-            frame.columnconfigure(i, weight=1)
-
-            col_frame = ttk.Frame(frame)
-            col_frame.grid(row=0, column=i, sticky="nsew", padx=3, pady=2)
-            col_frame.rowconfigure(2, weight=1)
-
+        col = 0
+        for team_label, team_ids in [("Team 1", _TEAM1_MOTOR_IDS), ("Team 2", _TEAM2_MOTOR_IDS)]:
+            # Team header
             ttk.Label(
-                col_frame, text=f"J{i+1}", style="Title.TLabel", anchor="center"
-            ).grid(row=0, column=0, sticky="ew")
-            ttk.Label(col_frame, text=label, anchor="center").grid(
-                row=5, column=0, sticky="ew"
-            )
+                frame, text=team_label, style="Title.TLabel", anchor="center"
+            ).grid(row=0, column=col, columnspan=len(team_ids), sticky="ew")
 
-            var = tk.DoubleVar(value=0.0)
-            self._sim_vars[mid] = var
+            for j, mid in enumerate(team_ids):
+                c = col + j
+                frame.columnconfigure(c, weight=1)
 
-            scale = ttk.Scale(
-                col_frame,
-                from_=_SLIDER_MAX,
-                to=_SLIDER_MIN,
-                orient="vertical",
-                variable=var,
-                length=200,
-                command=lambda val, m=mid: self._on_sim_slider(m, float(val)),
-            )
-            scale.grid(row=2, column=0, sticky="ns", padx=2)
+                col_frame = ttk.Frame(frame)
+                col_frame.grid(row=1, column=c, sticky="nsew", padx=2, pady=2)
+                col_frame.rowconfigure(2, weight=1)
 
-            lbl = ttk.Label(
-                col_frame, text="0.0°", style="Value.TLabel", anchor="center"
-            )
-            lbl.grid(row=3, column=0, sticky="ew")
-            self._sim_labels[mid] = lbl
+                label = _JOINT_LABELS[j]
 
-            ttk.Label(col_frame, text=f"M{mid}", anchor="center").grid(
-                row=4, column=0, sticky="ew"
-            )
+                ttk.Label(
+                    col_frame, text=f"J{j+1}", style="Title.TLabel", anchor="center"
+                ).grid(row=0, column=0, sticky="ew")
+                ttk.Label(col_frame, text=label, anchor="center").grid(
+                    row=5, column=0, sticky="ew"
+                )
+
+                var = tk.DoubleVar(value=0.0)
+                self._sim_vars[mid] = var
+
+                scale = ttk.Scale(
+                    col_frame,
+                    from_=_SLIDER_MAX,
+                    to=_SLIDER_MIN,
+                    orient="vertical",
+                    variable=var,
+                    length=200,
+                    command=lambda val, m=mid: self._on_sim_slider(m, float(val)),
+                )
+                scale.grid(row=2, column=0, sticky="ns", padx=2)
+
+                lbl = ttk.Label(
+                    col_frame, text="0.0°", style="Value.TLabel", anchor="center"
+                )
+                lbl.grid(row=3, column=0, sticky="ew")
+                self._sim_labels[mid] = lbl
+
+                ttk.Label(col_frame, text=f"M{mid}", anchor="center").grid(
+                    row=4, column=0, sticky="ew"
+                )
+
+            col += len(team_ids)
 
         reset_btn = ttk.Button(
             frame, text="Reset All to 0°", command=self._reset_sim_sliders
         )
         reset_btn.grid(
-            row=1, column=0, columnspan=len(_MOTOR_IDS), sticky="ew", pady=(5, 0)
+            row=2, column=0, columnspan=len(_MOTOR_IDS), sticky="ew", pady=(5, 0)
         )
 
     def _build_weight_sim(self, parent):
@@ -527,7 +556,8 @@ class GameMasterUI:
         self._foc_labels = {}
         for i, mid in enumerate(_MOTOR_IDS):
             r = self._foc_label_start_row + i
-            ttk.Label(freq_frame, text=f"FOC M{mid}").grid(
+            team = "T1" if mid < 20 else "T2"
+            ttk.Label(freq_frame, text=f"FOC {team}-M{mid}").grid(
                 row=r, column=0, sticky="w", padx=5
             )
             lbl = ttk.Label(freq_frame, text="-- Hz", style="Value.TLabel", anchor="e")

@@ -2,6 +2,11 @@ import threading
 from dataclasses import dataclass, field
 from typing import Dict, Any
 
+# Motor IDs per team
+TEAM1_MOTOR_IDS = list(range(11, 17))  # [11, 12, 13, 14, 15, 16]
+TEAM2_MOTOR_IDS = list(range(21, 27))  # [21, 22, 23, 24, 25, 26]
+ALL_MOTOR_IDS = TEAM1_MOTOR_IDS + TEAM2_MOTOR_IDS
+
 
 @dataclass
 class GameSettings:
@@ -42,17 +47,18 @@ class GameSettings:
     # --- Robot connection ---
     # When True, use a simulated robot instead of connecting via RTDE
     simulate_robot: bool = True
-    # IP address of the UR robot (used when simulate_robot is False)
-    robot_ip: str = "192.168.56.101"
+    # IP address per team (used when simulate_robot is False)
+    team1_robot_ip: str = "192.168.56.101"
+    team2_robot_ip: str = "192.168.56.102"
 
     # --- Joint limits ---
-    # Per-joint minimum angle (degrees). Keys are motor IDs (e.g. 11..16)
+    # Per-joint minimum angle (degrees). Keys are motor IDs (11..16, 21..26)
     joint_min_deg: Dict[int, float] = field(
-        default_factory=lambda: {mid: -180.0 for mid in range(11, 17)}
+        default_factory=lambda: {mid: -180.0 for mid in ALL_MOTOR_IDS}
     )
     # Per-joint maximum angle (degrees)
     joint_max_deg: Dict[int, float] = field(
-        default_factory=lambda: {mid: 180.0 for mid in range(11, 17)}
+        default_factory=lambda: {mid: 180.0 for mid in ALL_MOTOR_IDS}
     )
 
     # --- Stage/state ---
@@ -98,7 +104,7 @@ class GameSettings:
     # Simulated dial angles in joint degrees, keyed by motor ID.
     # Written by the simulator UI panel, read by SimulatedHapticSystem.
     sim_dial_angles: Dict[int, float] = field(
-        default_factory=lambda: {mid: 0.0 for mid in range(11, 17)}
+        default_factory=lambda: {mid: 0.0 for mid in ALL_MOTOR_IDS}
     )
     # Simulated bucket weights in grams, keyed by bucket ID (11-13, 21-23).
     # Written by the simulator UI panel, read by SimulatedWeightSensorSystem.

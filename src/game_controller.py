@@ -1,8 +1,11 @@
 """Central game controller — orchestrates subsystems and runs the game loop.
 
-Owns all subsystems (HapticSystem, JoggingController, SimulatedRobotInterface)
-and the 5-stage game state machine. Reads/writes GameSettings as a shared
-register so the Game Master UI can observe and control the game.
+Owns all subsystems for both teams (two robots, two haptic systems, two
+jogging controllers) plus shared subsystems (LED display, weight sensors,
+state publisher). Runs the 6-stage game state machine.
+
+Reads/writes GameSettings as a shared register so the Game Master UI can
+observe and control the game.
 
 Runs its own thread (the "game loop" at ~100 Hz). NOT the main thread —
 Tkinter needs the main thread.
@@ -18,9 +21,10 @@ Usage:
 import time
 import threading
 import sys
+from dataclasses import dataclass, field
 from typing import Optional
 
-from game_settings import GameSettings
+from game_settings import GameSettings, TEAM1_MOTOR_IDS, TEAM2_MOTOR_IDS
 from jogging_controller import JoggingController, JointConfig, JointState
 from haptic_serial import HapticSystem, SimulatedHapticSystem
 from robot_interface import SimulatedRobotInterface, URRobotInterface
@@ -80,18 +84,37 @@ STAGES = ["Sync", "Idle", "Tutorial", "GameOn", "Conclusion", "Reset"]
 _SYNC_TOLERANCE_DEG = 2.0
 
 
+@dataclass
+class _TeamPipeline:
+    """Per-team subsystem bundle: one robot arm + its haptics + jogging controller."""
+
+    team_id: int
+    motor_ids: list[int]
+    jogger: JoggingController
+    haptic: HapticSystem  # or SimulatedHapticSystem
+    robot: SimulatedRobotInterface  # or URRobotInterface
+    motor_bounds: dict[int, tuple[int, int]]
+    latest_states: dict[int, JointState] = field(default_factory=dict)
+
+
 class GameController:
     """Central orchestrator — game loop + state machine.
 
+    Each team has its own pipeline (robot, haptics, jogging controller).
+    Shared subsystems (LED display, weight sensors, state publisher) are
+    owned directly by this class.
+
     The game loop runs at ~100 Hz on its own thread:
-      1. Read dials via HapticSystem
-      2. Process through JoggingController
-      3. Send targets to robot
-      4. Read robot positions
-      5. Send haptic feedback
-      6. Read weight sensors and compute scores
-      7. Update GameSettings with observable state
-      8. Advance game stage if needed
+      For each team:
+        1. Read dials via HapticSystem
+        2. Read robot positions
+        3. Process through JoggingController
+        4. Send targets to robot
+        5. Send haptic feedback
+      Then (shared):
+        6. Read weight sensors and compute scores
+        7. Update GameSettings with observable state
+        8. Advance game stage if needed
     """
 
     def __init__(self, settings: GameSettings):
@@ -99,17 +122,13 @@ class GameController:
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
 
-        # Motor IDs for Team 1
-        self._motor_ids = list(range(11, 17))
+        # Per-team pipelines — built in start()
+        self._teams: list[_TeamPipeline] = []
 
-        # --- Build subsystems (using current settings) ---
-        self._jogger: Optional[JoggingController] = None
-        self._haptic: Optional[HapticSystem] = None
-        self._robot: Optional[SimulatedRobotInterface] = None
+        # Shared subsystems — built in start()
         self._led_display: Optional[LEDAnimationController] = None
         self._weight_sensor = None
         self._publisher: Optional[StatePublisher] = None
-        self._motor_bounds: dict[int, tuple[int, int]] = {}
 
         # Stage timer
         self._stage_start_time: float = 0.0
@@ -122,56 +141,68 @@ class GameController:
 
     def start(self):
         """Build subsystems from current settings and start the game loop thread."""
-        # Raise Windows timer resolution before starting any timed loops
         _set_high_resolution_timer()
 
         s = self._settings
 
-        # Build joint configs from settings
-        configs = [
-            JointConfig(
-                motor_id=mid,
-                gear_ratio=s.get("gear_ratio"),
-                min_angle_deg=s.get("joint_min_deg").get(mid, -180.0),
-                max_angle_deg=s.get("joint_max_deg").get(mid, 180.0),
-                max_velocity_dps=s.get("dial_max_velocity_dps"),
-            )
-            for mid in self._motor_ids
+        # Build per-team pipelines
+        team_defs = [
+            (1, TEAM1_MOTOR_IDS, s.get("team1_robot_ip")),
+            (2, TEAM2_MOTOR_IDS, s.get("team2_robot_ip")),
         ]
-        self._jogger = JoggingController(configs)
 
-        # Compute dial bounds
-        self._motor_bounds = {
-            mid: self._jogger.joint_limits_to_dial_bounds(mid)
-            for mid in self._motor_ids
-        }
+        for team_id, motor_ids, robot_ip in team_defs:
+            configs = [
+                JointConfig(
+                    motor_id=mid,
+                    gear_ratio=s.get("gear_ratio"),
+                    min_angle_deg=s.get("joint_min_deg").get(mid, -180.0),
+                    max_angle_deg=s.get("joint_max_deg").get(mid, 180.0),
+                    max_velocity_dps=s.get("dial_max_velocity_dps"),
+                )
+                for mid in motor_ids
+            ]
+            jogger = JoggingController(configs)
+            motor_bounds = {
+                mid: jogger.joint_limits_to_dial_bounds(mid) for mid in motor_ids
+            }
 
-        # Create subsystems
-        if s.get("simulate_haptics"):
-            self._haptic = SimulatedHapticSystem(
-                expected_motor_ids=self._motor_ids,
-                settings=s,
-                motor_bounds=self._motor_bounds,
+            if s.get("simulate_haptics"):
+                haptic = SimulatedHapticSystem(
+                    expected_motor_ids=motor_ids,
+                    settings=s,
+                    motor_bounds=motor_bounds,
+                )
+            else:
+                haptic = HapticSystem(
+                    expected_motor_ids=motor_ids,
+                    motor_bounds=motor_bounds,
+                )
+
+            if not s.get("simulate_robot"):
+                robot = URRobotInterface(
+                    joint_ids=motor_ids,
+                    robot_ip=robot_ip,
+                )
+            else:
+                robot = SimulatedRobotInterface(
+                    joint_ids=motor_ids,
+                    max_velocity_dps=s.get("robot_max_velocity_dps"),
+                    latency_ms=0.0,
+                )
+
+            pipeline = _TeamPipeline(
+                team_id=team_id,
+                motor_ids=motor_ids,
+                jogger=jogger,
+                haptic=haptic,
+                robot=robot,
+                motor_bounds=motor_bounds,
             )
-        else:
-            self._haptic = HapticSystem(
-                expected_motor_ids=self._motor_ids,
-                motor_bounds=self._motor_bounds,
-            )
-        if not s.get("simulate_robot"):
-            self._robot = URRobotInterface(
-                joint_ids=self._motor_ids,
-                robot_ip=s.get("robot_ip"),
-            )
-        else:
-            self._robot = SimulatedRobotInterface(
-                joint_ids=self._motor_ids,
-                max_velocity_dps=s.get("robot_max_velocity_dps"),
-                latency_ms=0.0,
-            )
+            self._teams.append(pipeline)
+
+        # Shared subsystems
         self._led_display = LEDAnimationController()
-
-        # Weight sensor system
         if s.get("simulate_weight_sensors"):
             self._weight_sensor = SimulatedWeightSensorSystem(
                 bucket_ids=ALL_BUCKET_IDS,
@@ -182,13 +213,15 @@ class GameController:
                 bucket_ids=ALL_BUCKET_IDS,
             )
 
-        # Start subsystems
-        self._haptic.start()
-        self._robot.start()
+        # Start per-team subsystems
+        for team in self._teams:
+            team.haptic.start()
+            team.robot.start()
+
+        # Start shared subsystems
         self._led_display.start()
         self._weight_sensor.start()
 
-        # State publisher
         self._publisher = StatePublisher(
             settings=s,
             broadcast_addr=s.get("broadcast_addr"),
@@ -197,7 +230,7 @@ class GameController:
         )
         self._publisher.start()
 
-        # Initialize stage — Sync first, then Idle once dials match robot
+        # Initialize stage
         s.set("current_stage", "Sync")
         self._stage_start_time = time.time()
 
@@ -215,18 +248,18 @@ class GameController:
             self._thread.join(timeout=3.0)
 
         # Zero out dials before stopping
-        if self._haptic and self._motor_bounds:
-            for mid in self._motor_ids:
-                min_b, max_b = self._motor_bounds.get(mid, (0, 0))
-                self._haptic.set_control(
+        for team in self._teams:
+            for mid in team.motor_ids:
+                min_b, max_b = team.motor_bounds.get(mid, (0, 0))
+                team.haptic.set_control(
                     mid, position=0, min_bound=min_b, max_bound=max_b
                 )
-            time.sleep(0.1)
+        time.sleep(0.1)
 
-        if self._robot:
-            self._robot.stop()
-        if self._haptic:
-            self._haptic.stop()
+        for team in self._teams:
+            team.robot.stop()
+            team.haptic.stop()
+
         if self._led_display:
             self._led_display.stop()
         if self._weight_sensor:
@@ -234,17 +267,14 @@ class GameController:
         if self._publisher:
             self._publisher.stop()
 
+        self._teams.clear()
         _restore_timer_resolution()
 
     # --- Properties --------------------------------------------------------
 
     @property
-    def haptic_system(self) -> Optional[HapticSystem]:
-        return self._haptic
-
-    @property
-    def robot(self):
-        return self._robot
+    def teams(self) -> list["_TeamPipeline"]:
+        return list(self._teams)
 
     @property
     def led_display(self) -> Optional[LEDAnimationController]:
@@ -252,7 +282,11 @@ class GameController:
 
     @property
     def motor_ids(self) -> list[int]:
-        return list(self._motor_ids)
+        """All motor IDs across both teams."""
+        ids: list[int] = []
+        for team in self._teams:
+            ids.extend(team.motor_ids)
+        return ids
 
     # --- Game loop ---------------------------------------------------------
 
@@ -261,7 +295,6 @@ class GameController:
         last_time = time.time()
         self._measure_start = time.time()
         self._loop_count = 0
-        latest_states: dict[int, JointState] = {}
 
         while not self._stop_event.is_set():
             now = time.time()
@@ -271,14 +304,12 @@ class GameController:
 
             # Check emergency stop
             if self._settings.get("emergency_stop"):
-                # Send zero velocity / hold position
                 time.sleep(dt_target)
                 continue
 
             # --- Sync state: align haptic dials to robot position ---
             if self._settings.get("current_stage") == "Sync":
                 self._sync_tick()
-                # Sleep and continue — skip the normal pipeline
                 deadline = now + dt_target
                 remaining = deadline - time.time()
                 if remaining > 0.0015:
@@ -289,45 +320,51 @@ class GameController:
                     time.sleep(0)
                 continue
 
-            # --- 1. Read dials ---
-            telemetry = self._haptic.get_all_telemetry()
-            dial_angles = {}
-            for mid, t in telemetry.items():
-                if t is not None:
-                    dial_angles[mid] = t.angle
+            # --- Per-team pipeline ---
+            all_states: dict[int, JointState] = {}
+            all_robot_positions: dict[int, float] = {}
 
-            # --- 2. Process through jogging controller ---
-            states = self._jogger.update(dial_angles, dt)
-            latest_states.update(states)
+            for team in self._teams:
+                # 1. Read dials
+                telemetry = team.haptic.get_all_telemetry()
+                dial_angles = {}
+                for mid, t in telemetry.items():
+                    if t is not None:
+                        dial_angles[mid] = t.angle
 
-            # --- 3. Send targets to robot ---
-            robot_targets = {mid: s.planned_deg for mid, s in states.items()}
-            self._robot.send_target(robot_targets)
+                # 2. Read robot positions (before jogging so rate limiter can anchor)
+                robot_positions = team.robot.get_all_positions()
+                all_robot_positions.update(robot_positions)
 
-            # --- 4. Read robot positions ---
-            robot_positions = self._robot.get_all_positions()
+                # 3. Process through jogging controller
+                states = team.jogger.update(dial_angles, dt, robot_positions)
+                team.latest_states.update(states)
+                all_states.update(states)
 
-            # --- 5. Send haptic feedback ---
-            for mid in states:
-                robot_deg = robot_positions.get(mid, 0.0)
-                feedback_pos = self._jogger.joint_deg_to_dial_decideg(mid, robot_deg)
-                min_b, max_b = self._motor_bounds[mid]
-                self._haptic.set_control(
-                    mid, position=feedback_pos, min_bound=min_b, max_bound=max_b
-                )
+                # 4. Send targets to robot
+                robot_targets = {mid: s.planned_deg for mid, s in states.items()}
+                team.robot.send_target(robot_targets)
 
-            # --- 6. Read weight sensors and compute scores ---
+                # 5. Send haptic feedback
+                for mid in states:
+                    robot_deg = robot_positions.get(mid, 0.0)
+                    feedback_pos = team.jogger.joint_deg_to_dial_decideg(mid, robot_deg)
+                    min_b, max_b = team.motor_bounds[mid]
+                    team.haptic.set_control(
+                        mid, position=feedback_pos, min_bound=min_b, max_bound=max_b
+                    )
+
+            # --- Shared pipeline ---
+            # 6. Read weight sensors and compute scores
             self._update_scores()
 
-            # --- 7. Update settings with observable state ---
-            self._update_observable_state(latest_states, robot_positions)
+            # 7. Update settings with observable state
+            self._update_observable_state(all_states, all_robot_positions)
 
-            # --- 8. Advance game stage ---
+            # 8. Advance game stage
             self._advance_stage()
 
             # Sleep — hybrid with Windows 1ms timer resolution.
-            # With timeBeginPeriod(1), Event.wait has ~1ms granularity.
-            # Sleep to within 1.5ms of deadline, then spin-wait the rest.
             deadline = now + dt_target
             remaining = deadline - time.time()
             if remaining > 0.0015:
@@ -335,7 +372,7 @@ class GameController:
             while time.time() < deadline:
                 if self._stop_event.is_set():
                     return
-                time.sleep(0)  # yield GIL to other threads
+                time.sleep(0)
 
     def _update_observable_state(
         self,
@@ -354,25 +391,29 @@ class GameController:
             self._loop_count = 0
             self._measure_start = now
 
-        # Robot physics Hz
-        if self._robot:
-            s.set("robot_physics_hz", self._robot.actual_hz)
+        # Robot physics Hz — report average across teams
+        robot_hz_values = [
+            team.robot.actual_hz for team in self._teams
+        ]
+        if robot_hz_values:
+            s.set("robot_physics_hz", min(robot_hz_values))
 
-        # Joint readouts
+        # Joint readouts — merged across both teams
         dial_pos = {}
         cmd_deg = {}
         clamp_deg = {}
         throttle_deg = {}
         robot_deg = {}
 
-        for mid in self._motor_ids:
-            st = states.get(mid)
-            if st:
-                dial_pos[mid] = st.dial_deg
-                cmd_deg[mid] = st.commanded_deg
-                clamp_deg[mid] = st.clamped_deg
-                throttle_deg[mid] = st.throttled_deg
-            robot_deg[mid] = robot_positions.get(mid, 0.0)
+        for team in self._teams:
+            for mid in team.motor_ids:
+                st = states.get(mid)
+                if st:
+                    dial_pos[mid] = st.dial_deg
+                    cmd_deg[mid] = st.commanded_deg
+                    clamp_deg[mid] = st.clamped_deg
+                    throttle_deg[mid] = st.throttled_deg
+                robot_deg[mid] = robot_positions.get(mid, 0.0)
 
         s.update(
             dial_position=dial_pos,
@@ -382,14 +423,12 @@ class GameController:
             robot_actual_deg=robot_deg,
         )
 
-        # FOC rates from telemetry (placeholder — needs haptic_serial to expose foc_rate)
-        # s.set("foc_hz", {...})
-
-        # Connection status
-        if self._haptic:
-            connected = self._haptic.connected_motor_ids
-            total = len(self._motor_ids)
-            s.set("haptic_connected_count", f"{len(connected)}/{total}")
+        # Connection status — merged across both teams
+        total_motors = sum(len(t.motor_ids) for t in self._teams)
+        connected_motors = sum(
+            len(t.haptic.connected_motor_ids) for t in self._teams
+        )
+        s.set("haptic_connected_count", f"{connected_motors}/{total_motors}")
 
         # Weight sensor status
         if self._weight_sensor:
@@ -481,54 +520,48 @@ class GameController:
         return 0
 
     def _sync_tick(self):
-        """Sync state tick: command haptic dials to match the robot position.
+        """Sync state tick: command haptic dials to match robot positions.
 
-        1. Read the robot's current joint positions.
-        2. Command each haptic dial to that position (and for simulated
-           dials, write sim_dial_angles directly).
-        3. Read the dials back and check whether they are within tolerance.
-        4. When all dials are within ``_SYNC_TOLERANCE_DEG`` of the robot,
-           reset the jogging controller and advance to Idle.
+        Runs independently per team. Both teams must sync before advancing.
         """
         s = self._settings
+        all_synced = True
 
-        # 1. Read robot positions (degrees, keyed by motor ID)
-        robot_positions = self._robot.get_all_positions()
+        for team in self._teams:
+            # 1. Read robot positions (degrees, keyed by motor ID)
+            robot_positions = team.robot.get_all_positions()
 
-        # 2a. For simulated haptics, write dial angles directly so
-        #     get_telemetry() returns the correct values immediately.
-        if s.get("simulate_haptics"):
-            sim_angles = dict(s.get("sim_dial_angles"))
-            for mid, deg in robot_positions.items():
-                sim_angles[mid] = deg
-            s.set("sim_dial_angles", sim_angles)
+            # 2a. For simulated haptics, write dial angles directly
+            if s.get("simulate_haptics"):
+                sim_angles = dict(s.get("sim_dial_angles"))
+                for mid, deg in robot_positions.items():
+                    sim_angles[mid] = deg
+                s.set("sim_dial_angles", sim_angles)
 
-        # 2b. Command each haptic motor to the robot's position
-        for mid in self._motor_ids:
-            robot_deg = robot_positions.get(mid, 0.0)
-            feedback_pos = self._jogger.joint_deg_to_dial_decideg(mid, robot_deg)
-            min_b, max_b = self._motor_bounds[mid]
-            self._haptic.set_control(
-                mid, position=feedback_pos, min_bound=min_b, max_bound=max_b,
-            )
+            # 2b. Command each haptic motor to the robot's position
+            for mid in team.motor_ids:
+                robot_deg = robot_positions.get(mid, 0.0)
+                feedback_pos = team.jogger.joint_deg_to_dial_decideg(mid, robot_deg)
+                min_b, max_b = team.motor_bounds[mid]
+                team.haptic.set_control(
+                    mid, position=feedback_pos, min_bound=min_b, max_bound=max_b,
+                )
 
-        # 3. Read dials back and check convergence
-        telemetry = self._haptic.get_all_telemetry()
-        synced = True
-        for mid in self._motor_ids:
-            t = telemetry.get(mid)
-            if t is None:
-                synced = False
-                continue
-            dial_joint_deg = self._jogger.dial_decideg_to_joint_deg(mid, t.angle)
-            robot_deg = robot_positions.get(mid, 0.0)
-            if abs(dial_joint_deg - robot_deg) > _SYNC_TOLERANCE_DEG:
-                synced = False
+            # 3. Read dials back and check convergence
+            telemetry = team.haptic.get_all_telemetry()
+            for mid in team.motor_ids:
+                t = telemetry.get(mid)
+                if t is None:
+                    all_synced = False
+                    continue
+                dial_joint_deg = team.jogger.dial_decideg_to_joint_deg(mid, t.angle)
+                robot_deg = robot_positions.get(mid, 0.0)
+                if abs(dial_joint_deg - robot_deg) > _SYNC_TOLERANCE_DEG:
+                    all_synced = False
 
-        # 4. If synced, reset jogging controller and advance
-        if synced:
-            self._jogger.reset()
-            print("[GameController] Sync complete — dials aligned to robot position")
+        # 4. If all teams synced, advance to next stage
+        if all_synced:
+            print("[GameController] Sync complete — all dials aligned to robot positions")
             self._next_stage()
 
     def _check_idle_exit(self):

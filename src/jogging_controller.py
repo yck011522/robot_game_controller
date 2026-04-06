@@ -4,14 +4,15 @@ Processes raw dial positions from the haptic controllers through:
   1. Unit conversion (decidegrees → degrees)
   2. Gearing (dial space → joint space)
   3. Static range clamping (fixed mechanical limits)
-  4. Rate limiting (max joint velocity)
+  4. Rate limiting (max joint velocity, anchored to actual robot position)
 
 The output is a set of JointState objects with throttled joint targets.
 The motion planner (Phase 3+) will further refine these with collision
 awareness before sending to the robot.
 
-This module is stateful (rate limiter) but not threaded — the main game
-loop calls update() each tick.
+This module is stateless — the rate limiter anchors to the robot's actual
+position each tick, so no internal state carries across calls.
+Not threaded: the main game loop calls update() each tick.
 
 Usage:
     from jogging_controller import JoggingController, JointConfig
@@ -23,12 +24,12 @@ Usage:
     jogger = JoggingController(configs)
 
     # Called each tick by the main game loop:
-    states = jogger.update(dial_angles={11: 18000, 12: -9000, ...}, dt=0.020)
+    states = jogger.update(dial_angles={11: 18000, ...}, dt=0.020,
+                           robot_positions={11: 5.2, ...})
     # states[11].throttled_deg → rate-limited joint angle in degrees
 """
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 
 # ---------------------------------------------------------------------------
@@ -51,8 +52,19 @@ class JointConfig:
 class JointState:
     """Mutable state of one joint evolving through the processing pipeline.
 
-    Created by the JoggingController, passed to the motion planner which
-    fills in planned_deg. The main game loop uses this to send feedback.
+    Created by the JoggingController, passed to the collision detector
+    which fills in planned_deg, safe_min_deg, and safe_max_deg.
+    The main game loop uses this to send robot targets and haptic feedback.
+
+    Pipeline:
+        1. JoggingController.update() fills raw → dial → commanded → clamped → throttled.
+           Sets planned_deg = throttled_deg as default.
+        2. CollisionDetector (future) overwrites planned_deg if the throttled
+           target is unreachable, and writes safe_min_deg / safe_max_deg —
+           the dynamic movable range for this joint given all other joints'
+           current positions.
+        3. GameController reads planned_deg to send to robot, and uses
+           safe_min/max to drive haptic feedback bounds + player display.
     """
 
     motor_id: int
@@ -61,7 +73,9 @@ class JointState:
     commanded_deg: float = 0.0  # after gearing (what user is asking for)
     clamped_deg: float = 0.0  # after static range clamping
     throttled_deg: float = 0.0  # after rate limiting
-    planned_deg: float = 0.0  # after motion planner (set by downstream)
+    planned_deg: float = 0.0  # after collision detection (sent to robot)
+    safe_min_deg: float = -360.0  # dynamic lower limit from collision detector
+    safe_max_deg: float = 360.0  # dynamic upper limit from collision detector
 
 
 # ---------------------------------------------------------------------------
@@ -75,36 +89,45 @@ class JoggingController:
     Handles: unit conversion, gearing, static range clamping, rate limiting.
     Does NOT handle: collision detection, motion planning, haptic feedback.
 
-    Stateful: tracks rate-limited position per joint across time steps.
+    Stateless: the rate limiter anchors to the robot's actual position
+    each tick.  No internal state carries across update() calls.
+
     Not threaded: called by the main game loop each tick.
     """
 
     def __init__(self, configs: list[JointConfig]):
         self._configs: dict[int, JointConfig] = {c.motor_id: c for c in configs}
 
-        # Rate limiter state: {motor_id: current_throttled_deg}
-        # Initialized to None — first update sets it to the clamped value.
-        self._throttled: dict[int, Optional[float]] = {
-            c.motor_id: None for c in configs
-        }
-
     @property
     def motor_ids(self) -> list[int]:
         """List of motor IDs this controller is configured for."""
         return list(self._configs.keys())
 
-    def update(self, dial_angles: dict[int, int], dt: float) -> dict[int, JointState]:
+    def update(
+        self,
+        dial_angles: dict[int, int],
+        dt: float,
+        robot_positions: dict[int, float],
+    ) -> dict[int, JointState]:
         """Process one time step.
 
         Args:
             dial_angles: {motor_id: angle_in_decidegrees} from telemetry.
                          Motors not present in this dict are skipped.
             dt: seconds since last update (e.g., 0.020 for 50 Hz).
+            robot_positions: {motor_id: angle_in_degrees} — actual robot
+                joint positions read this tick.  Used as the anchor for
+                rate limiting so the target never outruns the real arm.
+                Must contain all configured motor IDs.
 
         Returns:
             {motor_id: JointState} for each joint that had input data.
             planned_deg is set equal to throttled_deg as a default.
         """
+        assert robot_positions is not None, "robot_positions is required"
+        missing = self._configs.keys() - robot_positions.keys()
+        assert not missing, f"robot_positions missing joints: {sorted(missing)}"
+
         results: dict[int, JointState] = {}
 
         for motor_id, config in self._configs.items():
@@ -124,21 +147,17 @@ class JoggingController:
                 config.min_angle_deg, min(config.max_angle_deg, commanded_deg)
             )
 
-            # 4. Rate limiting
-            if self._throttled[motor_id] is None:
-                # First update: snap to clamped position (no startup jump)
+            # 4. Rate limiting — anchored to robot's actual position
+            #    so the target never outruns the real arm.
+            anchor = robot_positions[motor_id]
+            max_step = config.max_velocity_dps * dt
+            diff = clamped_deg - anchor
+            if abs(diff) <= max_step:
                 throttled_deg = clamped_deg
+            elif diff > 0:
+                throttled_deg = anchor + max_step
             else:
-                max_step = config.max_velocity_dps * dt
-                diff = clamped_deg - self._throttled[motor_id]
-                if abs(diff) <= max_step:
-                    throttled_deg = clamped_deg
-                elif diff > 0:
-                    throttled_deg = self._throttled[motor_id] + max_step
-                else:
-                    throttled_deg = self._throttled[motor_id] - max_step
-
-            self._throttled[motor_id] = throttled_deg
+                throttled_deg = anchor - max_step
 
             # Build state object
             state = JointState(
@@ -152,12 +171,42 @@ class JoggingController:
             )
             results[motor_id] = state
 
-        return results
+        # --------------------------------------------------------------
+        # TODO: Collision Detection (Phase — future)
+        #
+        # At this point all joints have their throttled_deg computed.
+        # The collision detector runs HERE, after the per-joint loop,
+        # because it needs the full set of joint targets simultaneously.
+        #
+        # Input:
+        #   - results: dict[int, JointState] with throttled_deg set
+        #   - robot_positions (already a parameter of update())
+        #
+        # For each joint j, holding all OTHER joints at their current
+        # actual robot positions:
+        #   1. Compute the collision-free range [safe_min, safe_max]
+        #      that joint j can move through without hitting anything.
+        #      Write to results[j].safe_min_deg / safe_max_deg.
+        #   2. If results[j].throttled_deg is outside [safe_min, safe_max],
+        #      clamp it and write the clamped value to results[j].planned_deg.
+        #      Otherwise planned_deg stays equal to throttled_deg.
+        #
+        # The safe_min/max values are used downstream by:
+        #   - Haptic feedback: convert to dial-space bounds and send to
+        #     the haptic controller so the user feels resistance at the
+        #     dynamic collision boundary (replacing the current static
+        #     _motor_bounds).
+        #   - Player display: LED column or UI shows the available range.
+        #   - Session logger: logged at 50 Hz for post-game analysis.
+        #
+        # The collision model itself is likely a separate class
+        # (CollisionDetector) that the JoggingController holds a
+        # reference to, or that is injected at construction time.
+        # It wraps a URDF/kinematic model and performs per-joint
+        # swept-volume or signed-distance checks.
+        # --------------------------------------------------------------
 
-    def reset(self):
-        """Clear rate limiter state. Next update will snap to current position."""
-        for motor_id in self._throttled:
-            self._throttled[motor_id] = None
+        return results
 
     # --- Conversion helpers ------------------------------------------------
 
@@ -276,16 +325,16 @@ if __name__ == "__main__":
                 if t is not None:
                     dial_angles[mid] = t.angle
 
+            # Read robot actual positions (before jogging so rate limiter can anchor)
+            robot_positions = robot.get_all_positions()
+
             # Process through jogging controller (runs every tick at full speed)
-            states = jogger.update(dial_angles, dt)
+            states = jogger.update(dial_angles, dt, robot_positions)
             latest_states.update(states)
 
             # Send rate-limited targets to the simulated robot
             robot_targets = {mid: s.planned_deg for mid, s in states.items()}
             robot.send_target(robot_targets)
-
-            # Read robot actual positions for haptic feedback
-            robot_positions = robot.get_all_positions()
 
             # --- Haptic feedback: track robot ACTUAL position, not planned ---
             for mid in states:

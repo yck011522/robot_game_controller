@@ -47,8 +47,9 @@ def main():
     )
     parser.add_argument(
         "--robot-ip",
-        metavar="IP",
-        help="IP address of the UR robot (default: 192.168.56.101)",
+        nargs=2,
+        metavar=("TEAM1_IP", "TEAM2_IP"),
+        help="IP addresses of the two UR robots (implies --no-sim-robot)",
     )
     args = parser.parse_args()
 
@@ -61,7 +62,8 @@ def main():
         settings.set("simulate_weight_sensors", True)
     if args.robot_ip:
         settings.set("simulate_robot", False)
-        settings.set("robot_ip", args.robot_ip)
+        settings.set("team1_robot_ip", args.robot_ip[0])
+        settings.set("team2_robot_ip", args.robot_ip[1])
 
     controller = GameController(settings)
     ui = GameMasterUI(settings)
