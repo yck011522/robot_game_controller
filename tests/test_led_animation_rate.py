@@ -9,22 +9,26 @@ Scenarios:
   - dual-different: animate two strips with opposite fill and different colors
 
 Examples:
-  python src/test_led_animation_rate.py --port COM19 --mode single --strip-a 11 --fps 20
-  python src/test_led_animation_rate.py --port COM19 --mode dual-same --strip-a 11 --strip-b 12 --fps 15
-  python src/test_led_animation_rate.py --port COM19 --mode dual-different --strip-a 11 --strip-b 12 --fps 30
-  python src/test_led_animation_rate.py --port COM19 --mode dual-different --strip-a 11 --strip-b 12 --fps 60 --duration-s 150
+  python tests/test_led_animation_rate.py --port COM19 --mode single --strip-a 11 --fps 20
+  python tests/test_led_animation_rate.py --port COM19 --mode dual-same --strip-a 11 --strip-b 12 --fps 15
+  python tests/test_led_animation_rate.py --port COM19 --mode dual-different --strip-a 11 --strip-b 12 --fps 30
+  python tests/test_led_animation_rate.py --port COM19 --mode dual-different --strip-a 11 --strip-b 12 --fps 60 --duration-s 150
 
 Max A speed achieved during testing with 921600 baud and 2 ms inter-command delay:
-  python src/test_led_animation_rate.py --port COM19 --mode all-strips --fps 20 --inter-cmd-ms 2 --duration-s 10 --cycle-s 2
+  python tests/test_led_animation_rate.py --port COM19 --mode all-strips --fps 20 --inter-cmd-ms 2 --duration-s 10 --cycle-s 2
 """
 
 from __future__ import annotations
 
 import argparse
 import math
+import os
+import sys
 import time
 from dataclasses import dataclass
 from typing import Optional
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from led_serial import LEDCommandBuilder, RS485Connection, Color, RED, BLUE, OFF
 

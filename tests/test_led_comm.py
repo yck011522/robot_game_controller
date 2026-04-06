@@ -7,15 +7,19 @@ Purpose:
   4) Verify repeated command sending with configurable inter-frame gap.
 
 Examples:
-    python src/test_led_comm.py --port COM19 --baud 921600 --device 1 --channel 1 --color red
-    python src/test_led_comm.py --port COM19 --baud 921600 --strip 11 --flash
+    python tests/test_led_comm.py --port COM19 --baud 921600 --device 1 --channel 1 --color red
+    python tests/test_led_comm.py --port COM19 --baud 921600 --strip 11 --flash
 """
 
 from __future__ import annotations
 
 import argparse
+import os
+import sys
 import time
 from typing import List
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from led_serial import (
     LEDCommandBuilder,
