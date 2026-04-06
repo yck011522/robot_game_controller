@@ -121,8 +121,11 @@ class GameSettings:
     weight_sensor_hz: float = 0.0
 
     # --- State publisher ---
-    # UDP broadcast address for the state publisher (subnet broadcast)
-    broadcast_addr: str = "255.255.255.255"
+    # UDP broadcast address for the state publisher (subnet broadcast).
+    # Use subnet-specific broadcast (192.168.1.255) instead of limited broadcast
+    # (255.255.255.255) so the OS routes packets out the correct interface on
+    # multi-homed machines.
+    broadcast_addr: str = "192.168.1.255"
     # UDP port for the state publisher
     broadcast_port: int = 9000
     # Target publish frequency (Hz)

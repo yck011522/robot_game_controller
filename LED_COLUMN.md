@@ -284,14 +284,14 @@ Arena
 | Wave Effect         | Color propagates across columns                  | Column 1 → 8 sequential activation | color, direction, speed            | Game start / transitions          |
 | Color Wipe          | One color replaces another over time             | Progressive overwrite              | from_color, to_color, speed        | Win/lose transitions              |
 
-## 14. Command Examples (RS485 Protocol)
+## 11. Command Examples (RS485 Protocol)
 
 This section documents example commands generated using the manufacturer’s software.
 These can be used as reference for implementing custom control software.
 
 ---
 
-### 14.1 Command Structure Reminder
+### 11.1 Command Structure Reminder
 
 Each command follows the format:
 [Header][Group][Device][Port][Function][LED Type][Reserved][Length][Repeat][Color Data][Tail]
@@ -311,7 +311,7 @@ Key fields:
 
 ---
 
-### 14.2 Example: Channel 1 → Full Red
+### 11.2 Example: Channel 1 → Full Red
 
 This command sets **all LEDs on Channel 1 (Port 01)** to red.
 
@@ -339,7 +339,7 @@ AA BB
 - LEDs: **28 (all set uniformly)**
 
 
-### 14.3 Example: Channel 2 → Full Blue
+### 11.3 Example: Channel 2 → Full Blue
 
 This command sets **all LEDs on Channel 2 (Port 02)** to blue.
 
@@ -368,7 +368,7 @@ AA BB
 
 ---
 
-## 15. Validated Timing Constraints (Windows + RS485)
+## 12. Validated Timing Constraints (Windows + RS485)
 
 These values were validated on the current test setup (single controller, strips 11/12):
 

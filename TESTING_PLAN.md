@@ -283,6 +283,124 @@ _No tests run yet._
 
 ---
 
+## Phase 6 — Real Robot Integration (RTDE)
+
+### Goal
+
+Connect to a real (or simulated) UR robot via the `ur_rtde` library and validate
+the RTDE read/write path that will replace `SimulatedRobotInterface`.
+
+### Prerequisites
+
+- UR simulator running in VirtualBox (or real robot on the network)
+- VirtualBox network set up using one of these methods:
+  - **Option A — NAT with port forwarding (recommended by UR):**
+    1. Devices → Network Settings → Advanced → Port Forwarding
+    2. Add rule: Host Port `30004` → Guest Port `30004` (leave IPs blank)
+    3. Connect to `localhost` (or `127.0.0.1`) from Windows
+  - **Option B — Bridged Adapter:**
+    1. Set adapter to Bridged
+    2. Get VM IP via `ifconfig` inside the simulator
+    3. Connect to that IP from Windows
+- Robot powered ON and initialized in the simulator UI (click ON → START)
+- RTDE interface enabled in robot security settings
+- `ur_rtde` installed (`pip install ur_rtde`) — verified via `tests/test_ur_rtde_import.py`
+
+### Tests to Run
+
+**6.1 — ur_rtde library import test**
+- [ ] `python tests/test_ur_rtde_import.py` passes: `rtde_control`, `rtde_receive`, `rtde_io` all import
+- [ ] `RTDEControlInterface` flags are accessible (FLAG_VERBOSE, FLAG_UPLOAD_SCRIPT, etc.)
+
+**6.2 — RTDE read connection (receive interface)**
+- [ ] `RTDEReceiveInterface` connects to the simulator without error
+- [ ] `getActualQ()` returns a 6-element list of joint positions (radians)
+- [ ] `getTimestamp()` returns a valid robot timestamp
+- [ ] `disconnect()` completes cleanly
+
+Test code:
+```python
+import rtde_receive
+
+rtde_r = rtde_receive.RTDEReceiveInterface("127.0.0.1")  # or VM IP if bridged
+actual_q = rtde_r.getActualQ()  # 6-element list, radians
+print(f"Joint positions (rad): {actual_q}")
+rtde_r.disconnect()
+```
+
+**6.3 — RTDE servoJ control loop**
+- [ ] `RTDEControlInterface` connects to the simulator without error
+- [ ] `servoJ()` executes in a 500 Hz loop without timeout or disconnection
+- [ ] Robot base joint visibly moves in the simulator
+- [ ] `servoStop()` and `stopScript()` complete cleanly
+
+Test code:
+```python
+import rtde_control
+import rtde_receive
+
+rtde_c = rtde_control.RTDEControlInterface("127.0.0.1")
+rtde_r = rtde_receive.RTDEReceiveInterface("127.0.0.1")
+
+# Parameters
+velocity = 0.5
+acceleration = 0.5
+dt = 1.0 / 500        # 2ms cycle time
+lookahead_time = 0.1  # [0.03 - 0.2] smoothing
+gain = 300            # [100 - 2000] tracking stiffness
+
+# Read current joint positions as the starting target
+joint_q = rtde_r.getActualQ()
+
+# Run a short 500Hz servoJ loop (2 seconds)
+for i in range(1000):
+    t_start = rtde_c.initPeriod()
+    rtde_c.servoJ(joint_q, velocity, acceleration, dt, lookahead_time, gain)
+    joint_q[0] += 0.001
+    rtde_c.waitPeriod(t_start)
+
+rtde_c.servoStop()
+rtde_c.stopScript()
+rtde_r.disconnect()
+print("servoJ test complete")
+```
+
+> **servoJ parameter notes:**
+> - `lookahead_time` (0.03–0.2s): Smooths incoming targets. Higher = smoother but more lag.
+> - `gain` (100–2000): How aggressively the robot tracks the target. Higher = stiffer.
+> - These will need tuning for the game to balance responsiveness vs smoothness.
+
+**6.4 — Real-time priority on Windows (optional)**
+- [ ] Running the game controller as Administrator allows RT priority to be set
+- [ ] No measurable improvement needed on dedicated machine with low load (document findings)
+
+Reference for setting RT priority:
+```python
+# In RTDEControlInterface constructor:
+rt_priority = 24  # THREAD_PRIORITY_NORMAL within REALTIME class (range 16-31)
+rtde_c = rtde_control.RTDEControlInterface("127.0.0.1", 500.0,
+    RTDEControl.FLAG_VERBOSE | RTDEControl.FLAG_UPLOAD_SCRIPT,
+    50002, rt_priority)
+
+# For the application process:
+import psutil, os
+psutil.Process(os.getpid()).nice(psutil.REALTIME_PRIORITY_CLASS)
+```
+
+**6.5 — Implement and test `URRobotInterface`**
+- [ ] `URRobotInterface` implemented in `robot_interface.py` following `SimulatedRobotInterface` pattern
+- [ ] Self-threaded loop using `servoJ()` to send targets + `getActualQ()` to read positions
+- [ ] `send_target(joint_dict)` thread-safe write works correctly
+- [ ] `get_all_positions()` returns latest positions from robot
+- [ ] Connection loss triggers reconnection without crash
+- [ ] Game loop runs end-to-end with `URRobotInterface` against the simulator
+
+### Test Results
+
+_No tests run yet._
+
+---
+
 ## Additional Outstanding Test Items
 
 Add these after the original phase list so the testing plan matches the current codebase.

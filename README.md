@@ -18,7 +18,7 @@ A competitive game where two teams of six players each control a robotic arm thr
 
 Each dial is a brushless motor driven by a Field-Oriented Control (FOC) loop running at ~500–600 Hz on an ESP32 board. Two motors are paired per ESP32 board, for a total of **3 boards per team** (6 joints).
 
-The ESP32 controllers communicate over USB serial at 230400 baud. The host sends position targets and angle bounds at 50 Hz, and receives telemetry (angle, speed, torque, FOC rate) at 50 Hz. See [PROTOCOL.md](PROTOCOL.md) for the full communication protocol.
+The ESP32 controllers communicate over USB serial at 230400 baud. The host sends position targets and angle bounds at 50 Hz, and receives telemetry (angle, speed, torque, FOC rate) at 50 Hz. See [HAPTIC_PROTOCOL.md](HAPTIC_PROTOCOL.md) for the full communication protocol.
 
 ### Robotic Arm
 
@@ -46,7 +46,7 @@ Each team's robotic arm has 6 joints. The game controller host reads the haptic 
 
 ### Haptic Controllers (`HapticSystem`)
 
-See [PROTOCOL.md](PROTOCOL.md) for the ESP32 communication protocol. The `HapticSystem` auto-discovers controllers by USB VID/PID, manages reader/writer threads per board, and provides a motor-ID-based register interface.
+See [HAPTIC_PROTOCOL.md](HAPTIC_PROTOCOL.md) for the ESP32 communication protocol. The `HapticSystem` auto-discovers controllers by USB VID/PID, manages reader/writer threads per board, and provides a motor-ID-based register interface.
 
 ### Robot Arm (`RobotInterface`)
 
@@ -95,6 +95,11 @@ Still outstanding:
 
 ## Documentation
 
-- [PROTOCOL.md](PROTOCOL.md) — ESP32 haptic controller communication protocol
+- [GAME_MECHANICS.md](GAME_MECHANICS.md) — Game rules, team structure, scoring, and match flow
+- [HAPTIC_PROTOCOL.md](HAPTIC_PROTOCOL.md) — ESP32 haptic controller communication protocol
+- [NETWORK_PROTOCOL.md](NETWORK_PROTOCOL.md) — UDP game state broadcast protocol for display nodes
+- [LED_COLUMN.md](LED_COLUMN.md) — LED arena hardware documentation (wiring, addressing, RS485)
+- [LED_QUICKSTART.md](LED_QUICKSTART.md) — LED control system developer quickstart
+- [GAMEMASTER_UI_FEATURES.md](GAMEMASTER_UI_FEATURES.md) — UI feature checklist and implementation notes
 - [TESTING_PLAN.md](TESTING_PLAN.md) — Phased testing plan and test results log
-- [GAMEMASTER_UI_FEATURES.md](GAMEMASTER_UI_FEATURES.md) — UI feature checklist and current implementation notes
+- [DEPLOYMENT_PLAN.md](DEPLOYMENT_PLAN.md) — Production machine setup (Windows 11, Conda, dependencies)

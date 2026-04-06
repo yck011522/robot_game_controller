@@ -82,7 +82,7 @@ controller.set_strip_color(11, RED)
 controller.stop()
 ```
 
-### Option 2: Queue Animations (Recommended)
+### Queue Animations (Recommended)
 
 ```python
 from led_animation_controller import LEDAnimationController

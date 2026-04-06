@@ -27,7 +27,7 @@
 - Scoop balls from a shared pool using the scoop.
 - Coordinate movement between and angles for efficient scooping.
 
-### **Limitations & COnstrains**
+### **Limitations & Constraints**
 
 - Arm movement is collaborative-based.
 - Misalignment can cause balls to spill or miss the bucket.
@@ -71,7 +71,7 @@ There will be one to two types of balls in the pool. Each type has a different w
 
 Each team has two to three scoring buckets above the pool. Some buckets are positioned at easier-to-reach locations, while some of them are further away. Players must transport balls from the pool to their bucket using the robotic arm within a certain time duration (e.g. 2 to 3 mins).
 
-Each bucket is relatively shallow and cannot hold many balls, so when the easy buckets are full, the players must aim for the more difficult buckets. This
+Each bucket is relatively shallow and cannot hold many balls, so when the easy buckets are full, the players must aim for the more difficult buckets.
 
 Scoring is performed by measuring the weight of balls in each bucket, scores from all buckets are combined.
 
