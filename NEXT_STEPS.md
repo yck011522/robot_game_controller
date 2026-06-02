@@ -292,38 +292,77 @@ Once §2 is marked up, generate:
 ### Step 3 — Produce `docs/MIGRATION_PLAN.md`
 Phased plan from the current single-process threaded code to the target
 architecture. Each phase must be independently runnable and reviewable.
+
+**First milestone (from §2.K):** single team, keyboard input, robot
+moving in pybullet, Play-state only. Everything else stubbed/disabled
+via YAML. The phases below build up to and past that milestone.
+
 Suggested phases (to be refined):
 
 - **P0 — Repo reshape.** Move root `.md` files into `docs/`, archive
-  stale, create empty `src/{core,subsystems,apps}/` skeleton. No
-  behavior change.
-- **P1 — Introduce ZMQ bus alongside current code.** Add `core/bus.py`,
-  publish current GameSettings snapshot on a `state.full` topic, keep
-  everything else identical. UI still reads `GameSettings` directly. New
-  tool `tools/bus_tap.py` prints traffic.
-- **P2 — Split EventRecorder out as its own process.** Subscribe to
-  `state.full`. Per-game folder layout in place. `index.jsonl` written.
-  No process management yet.
-- **P3 — Split UDPBroadcaster out as its own process.** Becomes a pure
+  stale (including the `incoming_code/bullet_collision_keyboard_explorer.py`
+  exploration script and the old `src/test_*.py` scripts), create
+  `src/{core,subsystems,apps}/` skeleton. Drop `RENAME → max velocity /
+  acceleration` from `jogging_controller` per §2.B.12. No behavior change.
+- **P1 — Introduce ZMQ bus + YAML config skeleton.** Add `core/bus.py`,
+  publish a single `state.full` snapshot from the existing GameController
+  loop, keep everything else identical. Add `config/profiles/dev.yaml`
+  with an `active_teams: [a]` field even though only team A exists yet.
+  Tool `tools/bus_tap.py` prints traffic.
+- **P2 — First milestone: keyboard → sim robot → pygame dashboard,
+  single team, Play-state only.** Wire up:
+  - `apps/keyboard_haptic_sim/` — keyboard producer publishing
+    `telem.haptic.a` (replaces missing ESP32 boards).
+  - `subsystems/robot/SimRobotIO` — pybullet-backed; consumes
+    `cmd.robot.target.a`, publishes `telem.robot.actual.a`. URDF and
+    meshes lifted from `incoming_code/ur10e_robot/`.
+  - `subsystems/jogging/` — in-process inside GC for now, no collision
+    check yet.
+  - `apps/gamemaster_ui/` — minimal pygame window showing per-joint
+    dial vs actual (the visualizer from
+    `incoming_code/bullet_collision_keyboard_explorer.py`), game state,
+    and per-process Hz boxes.
+  - GameController locked to Play stage; state machine stubbed.
+  This is the smoke test the rest of the architecture hangs off of.
+- **P3 — Full game state machine.** Idle → Tutorial → Play → Conclusion
+  → reset, with the playback-animation Idle, "all scrolled / timeout"
+  Tutorial exit, and per-bucket score recap in Conclusion (§2.A).
+- **P4 — Split EventRecorder out as its own process.** Per-game folder
+  layout + `index.jsonl` (also records final scores per §2.E.34).
+- **P5 — Split DisplayBroadcaster out as its own process.** Pure
   SUB → UDP bridge. RPi protocol unchanged.
-- **P4 — Split LEDController out.** First slow subscriber. Validates
-  CONFLATE pattern.
-- **P5 — Introduce Launcher with profiles** (no respawn yet). YAML
-  profile selects which processes start. Real vs Sim impls picked by
-  profile.
-- **P6 — Split HapticIO out.** First two-way I/O subsystem on the bus.
-- **P7 — Split RobotIO out** using `incoming_code/rtde_core.py`. Real
-  UR10e becomes available; SimRobot stays for dev.
-- **P8 — Introduce CollisionWorker(s) and JoggingPlanner-as-process** (if
-  promoted). REQ → ROUTER/DEALER → REP wired up.
-- **P9 — Replace Tk gamemaster with pygame app.** Reads state from bus,
-  sends commands via REQ/REP.
-- **P10 — Add Supervisor heartbeats + respawn.** Per-process policies.
-- **P11 — Integrate external Vision/Audio PCs** into EventRecorder.
-- **P12 — Crash files + retry-aware collision-check client.**
+- **P6 — Split LightColumnController out.** First slow subscriber.
+  Validates CONFLATE pattern.
+- **P7 — Introduce Launcher with profiles** (no respawn yet). YAML
+  profile selects which processes start and which teams are active
+  (`team_a_only` / `team_b_only` / `both_teams`). Real vs Sim impls
+  picked by profile.
+- **P8 — Split HapticIO out.** First two-way I/O subsystem on the bus.
+  Keyboard producer from P2 stays as the Sim impl behind the same
+  interface (§2.B.16).
+- **P9 — Split RobotIO out** using `incoming_code/rtde_core.py`. Real
+  UR10e becomes available; SimRobotIO stays for dev.
+- **P10 — CollisionWorker pool (16) + JoggingPlanner-as-process per team.**
+  REQ → ROUTER/DEALER → REP wired up. Self-collision and world-collision
+  toggles in YAML (default on, §2.D.28).
+- **P11 — Add the remaining hardware subsystems**, in any order, each
+  with its own RS-485 USB adapter:
+  - `WeightSensorIO` (+ Sim + manual score adjust UI, §2.E.31/32).
+  - `ScoreboardBroadcaster`.
+  - `BucketController`.
+  - `ButtonController` (drives the physical stop button → soft stop
+    into Reset, §2.A.3).
+  - `SafetyBarrierController`.
+- **P12 — Two-team bring-up.** Enable `both_teams` profile. Verify each
+  per-team process pair starts and that shared/global processes serve
+  both. Skeleton tracking + prosody from external PCs land in
+  EventRecorder.
+- **P13 — Add Supervisor heartbeats + respawn.** Per-process policies.
+- **P14 — Crash files + retry-aware collision-check client.**
 
 Each phase ends with a working system. The user should be able to stop
-at any phase and still have a usable game.
+at any phase and still have a usable game (or, before P2, a usable
+keyboard-driven sim).
 
 ### Step 4 — Docs cleanup (parallel-able with later phases)
 Rewrite stale root `.md` to match the new architecture as part of P0/P1.
