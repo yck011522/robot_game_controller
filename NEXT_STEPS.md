@@ -24,86 +24,92 @@ When done, tell Copilot: *"NEXT_STEPS.md is ready, proceed."*
 ## 2. Feature inventory (mark up below)
 
 ### A. Game lifecycle & flow
-1. Five-stage state machine: Idle → Tutorial → GameOn → Conclusion → Reset — `KEEP/REMOVE/RENAME`
-2. Auto-cycle arcade mode (24/7 loop) — `KEEP/REMOVE/RENAME`
-3. Manual stage override from gamemaster UI — `KEEP/REMOVE/RENAME`
-4. Tutorial readiness threshold (min players engaged before advancing) — `KEEP/REMOVE/RENAME`
-5. Software emergency stop (supplements hardwired e-stop) — `KEEP/REMOVE/RENAME`
-6. Named profiles (Easy / Hard / Demo / Maintenance) — `KEEP/REMOVE/RENAME`
-7. Profile scheduling (rotate profiles automatically across games) — `KEEP/REMOVE/RENAME`
+1. Five-stage state machine: Idle → Tutorial → GameOn → Conclusion → Reset — `change to Idle (which the robot and the heptic knob will slowly playback an animation) -> triggered by user -> Tutorial (reset robot to initial position / heptic knob in operation, display showing instructions to play) -> triggerd by times up or all user scrolled to bottom. ->  Play state -> Conclusion (score count / reset robot to look at each weighing bucket / sum up score / reset robot to initial position) -> change back to idle mode`
+2. Auto-cycle arcade mode (24/7 loop) — `KEEP but the mode change is triggered by user action like i mentioned before`
+3. Manual stage override from gamemaster UI — `KEEP (likely by a few physical button read by rs485 io module, to stop game immediately and jump to reset)`
+4. Tutorial readiness threshold (min players engaged before advancing) — `KEEP but change behaviour to "wait till times up or untill all player scrolled to bottom"`
+5. Software emergency stop (supplements hardwired e-stop) — `KEEP`
+6. Named profiles (Easy / Hard / Demo / Maintenance) — `REMOVE`
+7. Profile scheduling (rotate profiles automatically across games) — `REMOVE`
 
 ### B. Player / control input (haptic)
-8. 6 haptic dials over USB serial, ESP32 + FOC motors — `KEEP/REMOVE/RENAME`
-9. Per-dial gear ratio (currently global → make per-joint?) — `KEEP/REMOVE/RENAME`
-10. Per-joint min/max angle bounds — `KEEP/REMOVE/RENAME`
-11. Rate limiter dial-side (`dial_max_velocity_dps`) — `KEEP/REMOVE/RENAME`
-12. Rate limiter robot-side (`robot_max_velocity_dps`) — `KEEP/REMOVE/RENAME`
-13. OOB kick (enable, amplitude, pulse interval) — `KEEP/REMOVE/RENAME`
-14. PD tracking force (`tracking_kp`, `tracking_kd`, `tracking_max_torque`) — `KEEP/REMOVE/RENAME`
-15. Hard-stop stiffness (`bounds_kp`) — `KEEP/REMOVE/RENAME`
-16. Simulated haptic mode (no hardware) — `KEEP/REMOVE/RENAME`
+8. 6 haptic dials over USB serial, ESP32 + FOC motors — `KEEP but 6 dials x 2 teams`
+9. Per-dial gear ratio (currently global → make per-joint?) — `KEEP move that to main system yaml config file`
+10. Per-joint min/max angle bounds — `KEEP`
+11. Rate limiter dial-side (`dial_max_velocity_dps`) — `REMOVE`
+12. Rate limiter robot-side (`robot_max_velocity_dps`) — `RENAME to max velocity and max acceleration that is present in the incoming code robot simulation`
+13. OOB kick (enable, amplitude, pulse interval) — `KEEP, move that to system config file, this is a config for the haptic feedback knob anyways and wont be changed often`
+14. PD tracking force (`tracking_kp`, `tracking_kd`, `tracking_max_torque`) — `KEEP, also move to system config`
+15. Hard-stop stiffness (`bounds_kp`) — `KEEP, move to system config`
+16. Simulated haptic mode (no hardware) — `REMOVE, user the keyboard input method similar to those in the incoming code keyboard navigator, this is used for testing the game (with other hardware) even without the haptic feedback hardware`
+
 
 ### C. Robot
-17. Simulated robot interface (existing) — `KEEP/REMOVE/RENAME`
-18. Real UR10e via RTDE (`incoming_code/rtde_core.py`) — `KEEP/REMOVE/RENAME`
-19. JoggingPlanner pipeline (unit → gearing → clamp → rate limit) — `KEEP/REMOVE/RENAME`
-20. Collision-aware motion planning (depends on D) — `KEEP/REMOVE/RENAME`
-21. Per-robot connection status in UI — `KEEP/REMOVE/RENAME`
-22. Latency dashboard (haptic input → robot motion) — `KEEP/REMOVE/RENAME`
-23. Two-team robots? (system map implied one UR10e; clarify) — `KEEP/REMOVE/RENAME`
+17. Simulated robot interface (existing) — `REMOVE, use the Pybullet simulator with UI that is in the incoming code.`
+18. Real UR10e via RTDE (`incoming_code/rtde_core.py`) — `KEEP, this will become two robots for the two teams `
+19. JoggingPlanner pipeline (unit → gearing → clamp → rate limit) — `KEEP`
+20. Collision-aware motion planning (depends on D) — `KEEP`
+21. Per-robot connection status in UI — `KEEP`
+22. Latency dashboard (haptic input → robot motion) — `KEEP, can probably split into a few steps for more details`
+23. Two-team robots? (system map implied one UR10e; clarify) — `yes, two robots, team A and team B. `
 
 ### D. Collision detection
-24. pybullet collision check on every planned trajectory — `KEEP/REMOVE/RENAME`
-25. Multiple collision workers with load-balancing + respawn — `KEEP/REMOVE/RENAME`
-26. Self-collision check — `KEEP/REMOVE/RENAME`
-27. World-collision check (table, bucket walls, other team's arm) — `KEEP/REMOVE/RENAME`
-28. Collision avoidance toggle in UI — `KEEP/REMOVE/RENAME`
+24. pybullet collision check on every planned trajectory — `KEEP`
+25. Multiple collision workers with load-balancing + respawn — `KEEP`
+26. Self-collision check — `KEEP`
+27. World-collision check (table, bucket walls, other team's arm) — `KEEP, but note that two teams will never touch each other, two teams also have the same robot cell. so the pybullet checker instances can be shared between two teams`
+28. Collision avoidance toggle in UI — `collision check (2 types) toggle in system config, should be on by default`
 
 ### E. Scoring / weight sensors
-29. 6 buckets on RS-485 load cells (IDs 11/12/13 + 21/22/23) — `KEEP/REMOVE/RENAME`
-30. Live per-team score from weights — `KEEP/REMOVE/RENAME`
-31. Simulated weight sensors — `KEEP/REMOVE/RENAME`
-32. Manual score adjustment (sensor fallback) — `KEEP/REMOVE/RENAME`
-33. High score display (current run) — `KEEP/REMOVE/RENAME`
-34. High score history (derived from `index.jsonl`, no separate DB) — `KEEP/REMOVE/RENAME`
+29. 6 buckets on RS-485 load cells (IDs 11/12/13 + 21/22/23) — `KEEP`
+30. Live per-team score from weights — `KEEP, these will be LED display panels , not the same as the led columns`
+31. Simulated weight sensors — `KEEP, as part of the new approach to simulate any missing hardware`
+32. Manual score adjustment (sensor fallback) — `KEEP, as part of the new approach to simulate any missing hardware`
+33. High score display (current run) — `REMOVE, simply show which team has higher score during end of game`
+34. High score history (derived from `index.jsonl`, no separate DB) — `use the main game record ledger to record this info for easy parsing`
 
 ### F. Visual output
-35. LED strips per joint — `KEEP/REMOVE/RENAME`
-36. LED column (separate device per `LED_COLUMN.md`) — `KEEP/REMOVE/RENAME`
-37. Animation library (existing classes) — `KEEP/REMOVE/RENAME`
-38. RPi display nodes over UDP broadcast (existing protocol unchanged) — `KEEP/REMOVE/RENAME`
-39. Pygame realtime dashboard on the gamemaster PC — `KEEP/REMOVE/RENAME`
+35. LED strips per joint — `REMOVE`
+36. LED column (separate device per `LED_COLUMN.md`) — `KEEP`
+37. Animation library (existing classes) — `KEEP`
+38. RPi display nodes over UDP broadcast (existing protocol unchanged) — `KEEP`
+39. Pygame realtime dashboard on the gamemaster PC — `KEEP`
 
 ### G. Single pygame app — gamemaster + dashboard
-40. Joint visualizer (dial / commanded / clamped / rate-limited / actual) — `KEEP/REMOVE/RENAME`
-41. Game state + countdown — `KEEP/REMOVE/RENAME`
-42. Frequency dashboard (game loop Hz, robot Hz, FOC Hz per motor, serial writer Hz) — `KEEP/REMOVE/RENAME`
-43. Per-board connection status (ESP32 / robot / weight sensors / LED) — `KEEP/REMOVE/RENAME`
-44. Live-editable parameters (force, gear, bounds, limits) — `KEEP/REMOVE/RENAME`
-45. Profile save / load — `KEEP/REMOVE/RENAME`
-46. Session log / analytics view (read from `index.jsonl`) — `KEEP/REMOVE/RENAME`
-47. Keyboard/mouse lockout in deployment mode (display only, no input) — `KEEP/REMOVE/RENAME`
+40. Joint target / current position visualizer (dial position / actual position / velocity as arrow) — `KEEP the version found in the incoming code keyboard explorer`
+41. Game state + countdown — `KEEP`
+42. Frequency dashboard (game loop Hz, robot Hz, FOC Hz per motor, serial writer Hz) — `KEEP, we need this per every thread or subprocesses that has their own internal timer`
+43. Per-board connection status (ESP32 / robot / weight sensors / LED) — `KEEP, make them tiny color boxes with names`
+44. Live-editable parameters (force, gear, bounds, limits) — `REMOVE, make them adjustable from yaml`
+45. Profile save / load — `REMOVE/
+46. Session log / analytics view (read from `index.jsonl`) — `REMOVE`
+47. Keyboard/mouse lockout in deployment mode (display only, no input) — `KEEP mouse and keyboard also in deploy. `
 
 ### H. External telemetry
-48. Vision PC → skeleton tracking (red + blue files) — `KEEP/REMOVE/RENAME`
-49. Audio PC → prosody (12 player files: red_1..6, blue_1..6) — `KEEP/REMOVE/RENAME`
+48. Vision PC with skeleton tracking (red + blue files) -> main computer — `KEEP`
+49. Audio PC with prosody (12 player files: red_1..6, blue_1..6)  -> main computer— `KEEP`
 
 ### I. Infrastructure
-50. Config file with named profiles (YAML) — `KEEP/REMOVE/RENAME`
-51. Single launcher / supervisor with heartbeat + respawn — `KEEP/REMOVE/RENAME`
-52. EventRecorder → per-game folders + `index.jsonl` — `KEEP/REMOVE/RENAME`
-53. Replay tool (`tools/replay.py`) — bus playback honoring timestamps — `KEEP/REMOVE/RENAME`
-54. Bus tap tool (`tools/bus_tap.py`) — live print of selected topics — `KEEP/REMOVE/RENAME`
-55. Per-process crash files (only on exceptions, not 24/7 logs) — `KEEP/REMOVE/RENAME`
-56. Hardware-absent dev mode (Real + Sim impl behind same interface, picked by profile) — `KEEP/REMOVE/RENAME`
-57. Integration test harness driving the bus — `KEEP/REMOVE/RENAME`
+50. Config file with named profiles (YAML) — `KEEP`
+51. Single launcher / supervisor with heartbeat + respawn — `KEEP`
+52. EventRecorder → per-game folders + `index.jsonl` — `KEEP`
+53. Replay tool (`tools/replay.py`) — bus playback honoring timestamps — `KEEP`
+54. Bus tap tool (`tools/bus_tap.py`) — live print of selected topics — `KEEP, make sure whatever UI we use will be fast enough for 50Hz data.`
+55. Per-process crash files (only on exceptions, not 24/7 logs) — `keep`
+56. Hardware-absent dev mode (Real + Sim impl behind same interface, picked by profile) — `KEEP`
+57. Integration test harness driving the bus — `KEEP`
 
 ### J. Things in current code to verify
-58. `src/enumerate_usb.py`, `src/port_registry.py` — keep as part of HapticIO? Or shared utility? — `KEEP/REMOVE/RENAME`
-59. `src/test_led_animation_rate.py`, `src/test_led_comm.py`, `src/test_probe_94.py` — promote to real pytest tests, demote to `tools/`, or delete? — `KEEP/REMOVE/RENAME`
-60. `incoming_code/bullet_collision_keyboard_explorer.py` — keep as a `tools/` exploration script after extracting the collision logic into CollisionWorker? — `KEEP/REMOVE/RENAME`
+58. `src/enumerate_usb.py`, `src/port_registry.py` — keep as part of HapticIO? Or shared utility? — `KEEP, not shared`
+59. `src/test_led_animation_rate.py`, `src/test_led_comm.py`, `src/test_probe_94.py` — promote to real pytest tests, demote to `tools/`, or delete? — `KEEP, move to archive`
+60. `incoming_code/bullet_collision_keyboard_explorer.py` — keep as a `tools/` exploration script after extracting the collision logic into CollisionWorker? — `REMOVE`
 
 ### K. Additions (user-added items)
+Migrate all components to support two teams (team A and B, each has player 1 to 6), each with 6 haptic input devices, 6 multipurpose displays (over 3 Rpis), 1 robot, 3 weighing bucket for scoring, 3 score display board on (on the buckets). Only the LED columns, physical buttons, and the safety barriers are global and not shared. these components can either be sprawning 2 instances of the same type (in 1 vs 2 team mode) or by designing them to have one instance to support both modes. Decision can be mixed and based on whichever has simplier and cleaner implementation
+
+First we will test with only in the game Play state, controlling the 1 robot with keyboard. In a single team mode. The choice of turning team A versus team B on or off is probably in yaml. Either one of the teams or both teams can be turned on or off for testing and debugging purposes. 
+
+We then test other sub systems, you can give me a testing plan for the remaining parts.
 
 <!-- Add new feature requests here -->
 

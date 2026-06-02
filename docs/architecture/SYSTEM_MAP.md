@@ -65,10 +65,10 @@ flowchart LR
     end
 
     %% hardware edges (not on the bus)
-    HAP <-->|USB serial| ESP[("ESP32 boards")]
-    ROB <-->|RTDE TCP|   UR[("UR10e")]
-    WS  -->|RS-485|      LC[("load cells")]
-    LED -->|serial|      STR[("LED strips")]
+    %% HAP <-->|USB serial| ESP[("ESP32 boards")]
+    %% ROB <-->|RTDE TCP|   UR[("UR10e")]
+    %% WS  -->|RS-485|      LC[("load cells")]
+    %% LED -->|serial|      STR[("LED strips")]
 
     %% bus edges
     HAP -- "telem.haptic" --> GC
@@ -122,15 +122,19 @@ flowchart LR
 
 | Process | Role | Target rate | Hardware-facing | Bus role |
 |---------|------|-------------|-----------------|----------|
-| `GameController` | State owner, game state machine, scoring | 100 Hz | none | PUB state, SUB cmds & telemetry |
-| `HapticIO` | ESP32 USB serial reader/writer | 50–200 Hz/board | 6× USB serial | PUB telemetry, SUB cmds |
-| `RobotIO` | UR10e RTDE bridge | 125–500 Hz | RTDE TCP | PUB actuals, SUB targets |
-| `JoggingPlanner` | Unit conv, gearing, clamp, rate-limit, collision check | 100 Hz | none | SUB targets, PUB planned, REQ collision |
+| `GameController` (GC) x1 | State owner, game state machine, scoring | 50 Hz | none | PUB state, SUB cmds & telemetry |
+| `HapticIO` x1 | ESP32 USB serial reader/writer (x12 USB devices) | 50–200 Hz/board | 12× USB serial | PUB telemetry, SUB cmds |
+| `RobotIO` (x1 or x2) | UR10e RTDE bridge (x2 robots) | 100 Hz | RTDE TCP over 2x ethernet | PUB actuals, SUB targets |
+| `JoggingPlanner` (x1 or x2)| Unit conv, gearing, clamp, rate-limit, collision check | Follow GameController 50Hz | none | SUB targets, PUB planned, REQ collision |
 | `CollisionWorker` (N≥1) | pybullet trajectory check | on demand | none | REP collision |
-| `WeightSensorIO` | RS-485 load cell reader | 10–50 Hz | RS-485 USB | PUB telemetry |
-| `LEDController` | LED strip / column driver | 30–60 Hz | serial / network | SUB state (CONFLATE) |
-| `UDPBroadcaster` | Bridges bus → UDP for RPi displays | 50 Hz | UDP out | SUB state |
-| `GamemasterUI` | Single pygame app: gamemaster controls + realtime dashboard | 30–60 Hz | keyboard/mouse | SUB state, REQ cmds |
+| `WeightSensorIO` x1 | RS-485 load cell reader (x 6 cells) | 40-50 Hz (as fast as 485 allows) | RS-485 over USB | PUB telemetry |
+| `LightColumnController` | LED strip / column driver | 40-50 Hz (as fast as 485 allows) | RS-485 over USB | SUB state (CONFLATE) |
+| `DisplayBroadcaster` | Bridges bus → UDP for RPi displays | ~50 Hz (driven by every state update) | UDP out over ethernet | SUB state |
+| `ScoreboardBroadcaster` | RS485 sender for LED Scoreboard displays | ~50 Hz (driven by every state update) | RS485 out over USB | SUB state |
+| `BucketController` | RS485 sender for 6x motorized bucket | on demand | RS485 out over USB | PUB + SUB state |
+| `ButtonController` | RS485 reader for play / stop / e-stop push buttons | 50 Hz | RS485 out over USB | PUB state |
+| `SafetyBarrierController` | RS485 reader for safety light barrier | 50 Hz | RS485 out over USB | PUB state |
+| `GamemasterUI` | Single pygame app: gamemaster controls + realtime dashboard | 40–50 Hz | keyboard/mouse | SUB state, REQ cmds |
 | `EventRecorder` | Per-game folder writer | n/a (event-driven) | filesystem, ZMQ TCP from external PCs | SUB all topics |
 | `Launcher / Supervisor` | Spawn, heartbeat, restart | 1 Hz | OS | SUB heartbeats |
 
@@ -145,12 +149,12 @@ Direction column reads "A → B" for one-way and "A ↔ B" for two-way.
 | 1 | HapticIO ↔ ESP32 | 2-way | 50–200 Hz | ~5 ms | not on bus | USB serial |
 | 2 | HapticIO → GC | 1-way | 50 Hz | < 5 ms | PUB/SUB | telemetry |
 | 3 | GC → HapticIO | 1-way | 50 Hz | < 10 ms | PUB/SUB + CONFLATE | force feedback, latest-wins |
-| 4 | RobotIO ↔ UR10e | 2-way | 125–500 Hz | hard-RT | not on bus | RTDE |
+| 4 | RobotIO ↔ UR10e | 2-way | 100 Hz | hard-RT | not on bus | RTDE |
 | 5 | GC ↔ RobotIO | 2-way | 100 Hz each | < 10 ms | PUB/SUB (both dirs) | targets out, actuals in |
 | 6 | GC ↔ JoggingPlanner | 2-way | 100 Hz | < 10 ms | PUB/SUB or in-process | see §6 |
 | 7 | JP ↔ CollisionWorker(s) | request/reply | 10–50 Hz | 5–50 ms | REQ → ROUTER/DEALER → REP | load-balanced fan-out, see §5 |
 | 8 | GC → LED | 1-way | 30–60 Hz | loose | PUB/SUB + CONFLATE | canonical slow-subscriber case |
-| 9 | WeightSensorIO → GC | 1-way | 10–50 Hz | loose | PUB/SUB | telemetry |
+| 9 | WeightSensorIO → GC | 1-way | 40–50 Hz | loose | PUB/SUB | telemetry |
 | 10 | GC → UDPBroadcaster → RPi | 1-way | 50 Hz | loose | PUB/SUB internally, UDP outward | RPi protocol unchanged |
 | 11 | UI ↔ GC | 2-way | state 50 Hz, cmds rare | < 50 ms | SUB state + REQ/REP cmds | acks for stage changes etc. |
 | 12 | All procs → EventRecorder | fan-in | all topics | offline | SUB-all | recorder is purely passive |
@@ -223,7 +227,7 @@ Two viable placements; either is compatible with this map:
 
 - **In-process inside GameController** — a normal Python module called
   from the 100 Hz loop. Zero IPC latency, deterministic ordering.
-  Recommended for now.
+  Recommended for now. (Current implementation choice)
 - **Its own process** — required if planning becomes slow (multi-step
   collision-aware planning) so the 100 Hz state tick is not stalled.
 
@@ -279,15 +283,15 @@ Respawn defaults (subject to change after smoke tests):
   - `log.<proc>` — reserved for future use (currently unused; see logging doc).
 
 Concrete port assignments to be fixed in `docs/architecture/BUS.md` once
-this map is approved.
+this map is approved. (This map is okay, please proceed)
 
 ---
 
 ## 9. Open items
 
-- Confirm collision worker count for the deployed machine (1 vs 2 vs 4).
+- Confirm collision worker count for the deployed machine (1 vs 2 vs 4) : Confirm to use 16 workers for both robots
 - Confirm whether `LEDController` is one process for all strips or one
-  per device (one process is simpler; per-device is more crash-isolated).
+  per device: Confirm to use one process.
 - Confirm whether the external Vision/Audio PCs use `PUSH` (fire and
   forget) or `PUB` (so the recorder can choose what to subscribe to).
 - Confirm whether the `JoggingPlanner` starts in-process inside GC or as
