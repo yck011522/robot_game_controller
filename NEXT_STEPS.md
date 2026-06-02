@@ -344,7 +344,20 @@ Suggested phases (to be refined):
   UR10e becomes available; SimRobotIO stays for dev.
 - **P10 — CollisionWorker pool (16) + JoggingPlanner-as-process per team.**
   REQ → ROUTER/DEALER → REP wired up. Self-collision and world-collision
-  toggles in YAML (default on, §2.D.28).
+  toggles in YAML (default on, §2.D.28). Request schema is a **bundle**
+  of independent joint configurations per BUS.md §8.
+  - **P10-bench — Throughput / latency benchmark (gate before P10 ships).**
+    Run a synthetic JP that issues `req.collision_check` bundles of
+    size N ∈ {1, 2, 4, 8, 16, 32, 64} against a pool of W ∈ {1, 4, 8, 16}
+    workers, with a realistic per-config pybullet cost. Record p50 / p95 /
+    p99 latency per bundle, total checks/sec, and worker CPU
+    utilization. Compare against the prior single-config measurements
+    that motivated bundling, so we can confirm whether the
+    ROUTER/DEALER pattern keeps the throughput win or whether we
+    should fall back to single-check requests with a deeper DEALER
+    buffer. Output goes in `docs/benchmarks/collision_router_dealer.md`
+    and the chosen default bundle size is recorded in CONFIG.md under
+    `tuning.collision.bundle_size`.
 - **P11 — Add the remaining hardware subsystems**, in any order, each
   with its own RS-485 USB adapter:
   - `WeightSensorIO` (+ Sim + manual score adjust UI, §2.E.31/32).

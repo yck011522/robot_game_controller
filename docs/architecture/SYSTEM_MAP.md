@@ -5,7 +5,7 @@ talks to whom, in which direction, at what rate, and over what transport**.
 Implementation details for each subsystem live in
 [`subsystems/`](subsystems/) (to be filled in subsequent passes).
 
-Status: **DRAFT — open for edits**. Last reviewed: 2026-06-02.
+Status: **Kind of CONFIRMED — still open for edits**. Last reviewed: 2026-06-02.
 
 ---
 
@@ -115,9 +115,11 @@ flowchart LR
     GC  -. all .-> REC
     UI  -. all .-> REC
 
-    %% external telemetry
-    VIS -- "ZMQ TCP: skeleton" --> REC
-    AUD -- "ZMQ TCP: prosody"  --> REC
+    %% external telemetry: post-game file pull + 1 Hz liveness heartbeat
+    REC -- "HTTP GET captures/<game_id>/" --> VIS
+    REC -- "HTTP GET captures/<game_id>/" --> AUD
+    VIS -. "heartbeat.vision_pc (1 Hz)" .-> REC
+    AUD -. "heartbeat.audio_pc  (1 Hz)" .-> REC
 
     %% supervisor heartbeats (to/from everyone in CTRL_PC)
     SUP -. heartbeat .-> GC
@@ -178,7 +180,7 @@ Topic suffix `.<team>` is emitted once per active team (`a` and/or `b`).
 | 14 | SafetyBarrierController → GC | 1-way | 50 Hz | < 20 ms | PUB/SUB | `telem.safety` (barrier broken → soft-stop) |
 | 15 | UI ↔ GC | 2-way | state 50 Hz, cmds rare | < 50 ms | SUB state + REQ/REP cmds | acks for stage changes etc. |
 | 16 | All procs → EventRecorder | fan-in | all topics | offline | SUB-all | recorder is purely passive |
-| 17 | Vision/Audio PC → EventRecorder | 1-way LAN | 30 Hz / continuous | offline | ZMQ TCP (PUSH/PULL or PUB/SUB) | same library across machines |
+| 17 | Vision/Audio PC → EventRecorder | 1-way LAN | post-game (file pull) | offline | HTTP GET + 1 Hz heartbeat on bus | see BUS.md §11 |
 | 18 | Supervisor ↔ all | heartbeat + spawn | 1 Hz | n/a | PUB heartbeat per proc; OS spawn | see §7 |
 
 ---
@@ -326,9 +328,11 @@ re-litigate them.
 - **CollisionWorker count:** 16 workers, shared across both teams.
 - **LightColumnController:** one process for all LED column devices, not
   one process per device.
-- **External Vision/Audio PCs:** open — `PUSH` (fire and forget) vs
-  `PUB` (recorder picks topics). To be decided when external PCs come
-  online.
+- **External Vision/Audio PCs:** skeleton and audio data are pulled by
+  the EventRecorder over HTTP from each external PC **after** the game
+  ends (Conclusion → Reset triggers a `POST /game_ended` from GC).
+  Only a 1 Hz `heartbeat.vision_pc` / `heartbeat.audio_pc` rides the
+  realtime bus for liveness. See BUS.md §11.
 - **JoggingPlanner placement:** starts in-process inside GameController
   (see §6). Promotion to its own process happens when planning latency
   forces it. The bus contract does not change.
