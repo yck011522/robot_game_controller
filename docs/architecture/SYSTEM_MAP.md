@@ -25,10 +25,12 @@ Status: **Kind of CONFIRMED — still open for edits**. Last reviewed: 2026-06-0
    simulated peer. No process requires hardware to start.
 6. **Every message is recorded.** The EventRecorder taps the bus and writes
    a per-game folder; bug repro and integration tests both replay these.
-7. **One RS-485 USB adapter per process.** Every RS-485 owning process
-   (WeightSensor, LightColumn, Scoreboard, Bucket, Button, SafetyBarrier)
-   has its own physical USB-to-RS485 adapter. No bus is shared between
-   processes.
+7. **No RS-485 port is shared between processes.** Each RS-485 owning
+   process (WeightSensor, LightColumnController 1-3 / 4-5 / 6-8,
+   Scoreboard, Bucket, Button, SafetyBarrier) owns one or more physical
+   USB-to-RS485 adapters exclusively. A single process may hold several
+   adapters (e.g. the LightColumn groups), but no adapter or port is
+   opened by more than one process at a time.
 
 ---
 
