@@ -3,9 +3,11 @@
 **Purpose:** Temporary working file to (1) capture feature inventory decisions and
 (2) hand off context to a future Copilot session if this conversation ends.
 
-**Status:** Awaiting user markup of the feature inventory in §2.
+**Status:** Step 1 done; three architecture docs (SYSTEM_MAP, BUS, CONFIG) confirmed.
+Resuming at Step 2 — remaining architecture docs, then Step 3 (MIGRATION_PLAN).
 
 **Created:** 2026-06-02
+**Last updated:** 2026-06-04
 
 ---
 
@@ -264,30 +266,28 @@ Order of reading for a fresh session:
 
 In order:
 
-### Step 1 — User finishes marking up §2
-The user edits this file in place. Copilot waits for the signal to read
-it back.
+### Step 1 — User finishes marking up §2 ✅ DONE (2026-06-02)
 
-### Step 2 — Produce architecture docs
-Once §2 is marked up, generate:
+### Step 2 — Produce architecture docs (in progress)
 
-- `docs/architecture/OVERVIEW.md` — narrative architecture overview
-  referencing `SYSTEM_MAP.md`. Audience: a new contributor.
-- `docs/architecture/BUS.md` — exact ZMQ endpoints, topic names, payload
-  schemas (JSON shapes per topic), conventions, port assignments.
-- `docs/architecture/LOGGING.md` — EventRecorder design, per-game folder
-  spec, `index.jsonl` schema, replay tool spec, no-video policy,
-  skeleton/audio file naming.
-- `docs/architecture/CONFIG.md` — profile YAML schema, how `Real` vs
-  `Sim` is selected, which processes a profile enables.
-- `docs/architecture/SUPERVISOR.md` — heartbeat protocol, respawn
-  policies per process, shutdown sequence.
-- `docs/architecture/subsystems/<name>.md` per kept subsystem (from §2):
-  responsibilities, public interface, bus topics in/out, internal threads,
-  Real vs Sim impl, testing notes. One file each for at least:
-  GameController, HapticIO, RobotIO, WeightSensorIO, LEDController,
-  JoggingPlanner, CollisionWorker, GamemasterUI, EventRecorder,
-  UDPBroadcaster, Launcher.
+Status per doc:
+
+- ✅ `docs/architecture/SYSTEM_MAP.md` — confirmed 2026-06-02.
+- ✅ `docs/architecture/BUS.md` — confirmed 2026-06-04.
+- ✅ `docs/architecture/CONFIG.md` — confirmed 2026-06-04.
+- ⏳ `docs/architecture/LOGGING.md` — **next up.** EventRecorder design,
+  per-game folder spec, `index.jsonl` schema, replay tool spec,
+  no-video policy, external-PC file-pull. Already referenced from
+  CONFIG.md `recorder.*` and BUS.md §11 — must land before P4.
+- ⏳ `docs/architecture/SUPERVISOR.md` — heartbeat protocol, respawn
+  policies per process, shutdown sequence. Already referenced from
+  CONFIG.md and SYSTEM_MAP.md §7 — must land before P7/P13.
+- ⏳ `docs/architecture/OVERVIEW.md` — narrative onboarding doc that
+  stitches SYSTEM_MAP + BUS + CONFIG + LOGGING + SUPERVISOR together.
+  Audience: a new contributor.
+- 🕓 `docs/architecture/subsystems/<name>.md` — **deferred.** Write one
+  per subsystem alongside its implementation phase (P2..P12), not
+  upfront. Writing them now would just go stale before P2 is built.
 
 ### Step 3 — Produce `docs/MIGRATION_PLAN.md`
 Phased plan from the current single-process threaded code to the target
@@ -299,11 +299,15 @@ via YAML. The phases below build up to and past that milestone.
 
 Suggested phases (to be refined):
 
-- **P0 — Repo reshape.** Move root `.md` files into `docs/`, archive
-  stale (including the `incoming_code/bullet_collision_keyboard_explorer.py`
-  exploration script and the old `src/test_*.py` scripts), create
-  `src/{core,subsystems,apps}/` skeleton. Drop `RENAME → max velocity /
-  acceleration` from `jogging_controller` per §2.B.12. No behavior change.
+- **P0 — Repo reshape.** Move root `.md` files into `docs/` (rewriting
+  the stale ones in the same pass), move/archive
+  `incoming_code/bullet_collision_keyboard_explorer.py` and the old
+  `tests/test_*.py` exploration scripts into `archive/`, create
+  `src/{core,subsystems,apps}/` skeleton. The old
+  `jogging_controller` velocity/acceleration knobs already live in
+  CONFIG.md as `tuning.robot.max_velocity_deg_s` /
+  `max_acceleration_deg_s2` — no extra renaming work, just delete the
+  stale fields in `src/`. No behavior change.
 - **P1 — Introduce ZMQ bus + YAML config skeleton.** Add `core/bus.py`,
   publish a single `state.full` snapshot from the existing GameController
   loop, keep everything else identical. Add `config/profiles/dev.yaml`
@@ -393,8 +397,10 @@ Rewrite stale root `.md` to match the new architecture as part of P0/P1.
   (respawn, replay, structured logs) should exist, but implementation
   can be deferred until smoke tests reveal real needs.
 - Type hints: no strict policy; clarity over rigor.
-- The `docs/` folder is currently empty (apart from
-  `docs/architecture/SYSTEM_MAP.md` that was just created).
+- The `docs/` folder currently contains only `docs/architecture/`
+  with `SYSTEM_MAP.md`, `BUS.md`, and `CONFIG.md`. Everything else
+  under `docs/` (overview, logging, supervisor, subsystems/, migration
+  plan, archived legacy `.md`) lands during Step 2 and P0.
 - Conversation thread that produced this file: planning conversation
   started 2026-06-01, system map written 2026-06-02. If resuming in a
   new session, the user does not need a recap — just read the files

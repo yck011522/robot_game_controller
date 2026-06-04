@@ -1,0 +1,436 @@
+# Migration Plan
+
+Phased path from the current single-process threaded codebase to the
+target multi-process architecture. Each phase ends with a working
+system the user can stop at and still demo or test.
+
+Status: **DRAFT.** Last reviewed: 2026-06-04.
+
+References:
+[OVERVIEW.md](architecture/OVERVIEW.md),
+[SYSTEM_MAP.md](architecture/SYSTEM_MAP.md),
+[BUS.md](architecture/BUS.md),
+[CONFIG.md](architecture/CONFIG.md),
+[SUPERVISOR.md](architecture/SUPERVISOR.md),
+[LOGGING.md](architecture/LOGGING.md) (DRAFT, deferred).
+
+---
+
+## 1. Cross-cutting decisions for this migration
+
+These apply to every phase below; they are not separate phases.
+
+- **Logging is explicitly deferred.** EventRecorder is a stub
+  (heartbeat-only) until after the demo milestone. Anywhere a phase
+  would otherwise wire the recorder, leave a `# TODO(logging)` slot
+  with the topic name and recording call commented out. Real
+  implementation lands as a single later phase once
+  [LOGGING.md](architecture/LOGGING.md) is reviewed and lifted out of
+  DRAFT.
+- **Crash files** are similarly deferred. `sys.excepthook` stays
+  default; tracebacks land on stderr, which the supervisor inherits.
+- **Game state machine is deferred too.** Until P7, GC is pinned to
+  the Play stage via `tuning.game.force_stage: play`. Idle / Tutorial
+  / Conclusion / Reset get fleshed out only after all the I/O
+  subsystems are wired up; the tutorial in particular needs design
+  work that should not block bring-up.
+- **Demo milestone** = end of P2: keyboard input → collision-checked
+  JoggingPlanner → pybullet viewer, single team, Play stage only. This
+  exercises the full new ZMQ architecture (broker, PUB/SUB,
+  ROUTER/DEALER, multi-process) end-to-end before any real hardware
+  is involved.
+- **Two separate UI processes.** The keyboard-input UI (P2) and the
+  pygame gamemaster dashboard (P4) are intentionally different
+  processes with different windows. The keyboard UI exists only so
+  developers can drive the system without dials; the dashboard is the
+  operator-facing surface that survives into production.
+- **Each phase must run end-to-end.** No phase ends with the system
+  in a broken intermediate state. If a phase is too big, split it
+  before merging.
+- **No behavior change in P0.** P0 is purely repo reshape and
+  archiving.
+
+---
+
+## 2. Phase list
+
+### P0 — Repo reshape (no behavior change)
+
+- Move stale root `.md` files into `docs/archive/` (keep current
+  behavior accurate; rewrites happen in later phases as the new code
+  lands).
+- Move `incoming_code/bullet_collision_keyboard_explorer.py` into
+  `archive/` (referenced for collision-worker extraction in P10, but
+  not on any runtime path).
+- Move `tests/test_led_animation_rate.py`, `tests/test_led_comm.py`,
+  `tests/test_probe_94.py` into `archive/` (per
+  [NEXT_STEPS §2.J](../NEXT_STEPS.md)).
+- Create empty skeleton: `src/core/`, `src/subsystems/`, `src/apps/`,
+  `config/profiles/`, `tools/` (already exists).
+- Add a top-level `archive/README.md` explaining the folder is
+  reference-only and not on any import path.
+- Add `docs/MIGRATION_PLAN.md` (this file) and ensure the architecture
+  docs link to it.
+- The existing `src/main.py` and the old gamemaster UI keep running
+  unchanged — anyone running the system today is unaffected.
+
+**Exit criterion:** repo tree matches the target layout; existing
+launch path still works.
+
+---
+
+### P1 — ZMQ bus + YAML profile skeleton
+
+- Add `src/core/bus.py` with `publish()` / `recv()` helpers and the
+  envelope conventions from [BUS.md §3](architecture/BUS.md#3-wire-format).
+- Add `src/apps/bus_broker/` — XSUB/XPUB proxy process. Endpoints
+  from [BUS.md §2](architecture/BUS.md#2-endpoint-table).
+- Add `src/core/config.py` — load + validate a profile per
+  [CONFIG.md §5](architecture/CONFIG.md#5-validation).
+- Add `config/profiles/bus_smoke.yaml` (already specified in
+  [CONFIG.md §4.1](architecture/CONFIG.md#41-bus_smokeyaml--first-0mq-backbone-test)).
+- Add `tools/bus_tap.py` — SUB-all subscriber that pretty-prints
+  topic + body. Must keep up with 50 Hz state.full.
+- Add `tools/bus_poke.py` — one-shot publisher: `python -m
+  tools.bus_poke <topic> '<json>'`.
+- Add a minimal launcher (`src/apps/launcher/`) that, for now, only
+  spawns the bus broker and watches its heartbeat. No respawn logic
+  yet.
+- Existing `src/main.py` is untouched; this phase runs **alongside**
+  the legacy code, not replacing it.
+
+**Exit criterion:** `python -m apps.launcher --profile bus_smoke` →
+broker is up, `tools/bus_tap.py` connects and prints traffic from
+`tools/bus_poke.py`.
+
+---
+
+### P2 — Demo milestone: keyboard → collision-checked planner → pybullet viewer
+
+The first full slice through the new ZMQ architecture. Exercises
+PUB/SUB, ROUTER/DEALER, and multi-process spawning end-to-end before
+any real hardware is involved. Single team (A), Play stage only, all
+sim.
+
+- `src/apps/keyboard_input_ui/` — **its own small window** (pygame or
+  similar), separate from the gamemaster dashboard that lands in P4.
+  Reads keys, publishes `telem.haptic.a` at 50 Hz. Mapping lifted
+  from `incoming_code/bullet_collision_keyboard_explorer.py`. The UI
+  shows the current key bindings and the per-joint dial position
+  it's publishing — nothing else. Closing this window does **not**
+  bring down the system.
+- `src/subsystems/jogging/in_process.py` — JoggingPlanner running
+  inside GC for now. **Collision check is on from day one** (per
+  [CONFIG.md `tuning.collision`](architecture/CONFIG.md#2-top-level-schema)):
+  the planner issues `req.collision_check` bundles to the worker
+  pool. Self-collision **and** world-collision both enabled.
+- `src/apps/collision_broker/` — ROUTER/DEALER proxy on `:5560`
+  / `:5561` per [BUS.md §8](architecture/BUS.md#8-collision-reqrep-router--dealer-at-55605561).
+- `src/subsystems/collision_worker/` — headless pybullet REP worker.
+  Logic extracted from `archive/bullet_collision_keyboard_explorer.py`.
+  Profile spawns `collision_workers.count: 4` so multi-worker fan-out
+  is exercised from the first run.
+- `src/subsystems/robot/sim_pybullet.py` — pybullet-backed RobotIO
+  with the **GUI viewer enabled** (`pybullet.connect(GUI)`). This is
+  the visualization surface for P2 — you watch the arm move in the
+  pybullet window. Subscribes `cmd.robot.target.a`, publishes
+  `telem.robot.actual.a` at 100 Hz. URDF and meshes copied from
+  `incoming_code/ur10e_robot/` into `src/subsystems/robot/assets/`.
+  The same URDF is loaded by the collision workers in headless mode
+  so the two pybullet worlds match exactly.
+- `src/apps/game_controller/` — minimal GC: 50 Hz loop, pinned to
+  Play stage by `tuning.game.force_stage: play`, publishes
+  `state.full` per [BUS.md §6.1](architecture/BUS.md#61-statefull).
+  No game logic beyond "forward the planned joint targets."
+- `config/profiles/dev_keyboard.yaml` — update to enable collision
+  workers (`{count: 4}`) and `check_self: true, check_world: true`,
+  overriding the placeholder in
+  [CONFIG.md §4.2](architecture/CONFIG.md#42-dev_keyboardyaml--p2-milestone)
+  which was written before P2 absorbed the collision pool.
+- **P2-bench** — throughput / latency benchmark for the collision
+  pool, executed before declaring P2 done. Sweep bundle size N ∈
+  {1, 2, 4, 8, 16, 32, 64} × worker count W ∈ {1, 4, 8, 16}. Record
+  p50/p95/p99 latency, checks/sec, worker CPU. Output:
+  `docs/benchmarks/collision_router_dealer.md`. The chosen
+  `tuning.collision.bundle_size` default goes into
+  [CONFIG.md](architecture/CONFIG.md).
+
+**Exit criterion:** `--profile dev_keyboard` brings up the broker,
+the collision broker, 4 collision workers, GC, sim robot (pybullet
+GUI), and the keyboard input window. Pressing keys jogs the arm in
+the pybullet window in real time; configurations that would collide
+are refused by the planner (arm visibly stops at the boundary).
+Benchmark numbers are recorded.
+
+This is the first visible demo. Everything after extends it.
+
+---
+
+### P3 — Real UR10e on team A (still keyboard-driven)
+
+Same system as P2, but with the actual robot in place of the sim.
+Keyboard UI and pybullet viewer both stay — the viewer now mirrors
+the real robot's actual joint angles so you can see the model match
+the hardware.
+
+- `src/subsystems/robot_io/real_rtde.py` built from
+  `incoming_code/rtde_core.py`. Consumes `cmd.robot.target.a`,
+  publishes `telem.robot.actual.a` at 100 Hz.
+- **Startup position sync (critical).** Before publishing any
+  `state.full` with a non-null `q_target`, GC must seed its internal
+  target from the robot's current `actual_q`. Sequence:
+  1. RobotIO connects to RTDE and waits for the first valid
+     `actual_q` sample.
+  2. RobotIO publishes one `telem.robot.actual.a` snapshot.
+  3. GC sees that snapshot, copies `q_actual` into its internal
+     target, and only then begins forwarding planner output.
+  4. The keyboard UI also reads back `telem.robot.actual.a` on
+     startup and zeroes its per-key deltas against that position.
+  Net effect: turning the system on does not snap the robot to
+  `[0,0,0,0,0,0]`. If RobotIO can't read `actual_q` within 5 s, it
+  exits non-zero (→ circuit breaker, see SUPERVISOR.md §6).
+- `sim_pybullet` impl from P2 stays as the dev-time alternative;
+  this phase only adds `real_rtde` and a new profile
+  `dev_one_robot.yaml` selecting `robot_io.a: real_rtde`. The
+  pybullet **viewer** keeps running on the same machine, but as a
+  passive subscriber to `telem.robot.actual.a` rather than an
+  authoritative robot — i.e. a third impl `viewer_only` is added
+  for `robot_io.a` or, simpler, the viewer is folded into a small
+  tool `tools/robot_viewer.py` that the launcher does not manage.
+  Pick whichever is shorter; both are reversible later.
+- RobotIO refuses to start (and exits) if
+  `safety.barrier.ok == false` in the latest `state.full`.
+
+**Exit criterion:** with the real UR10e powered and connected,
+`--profile dev_one_robot` brings everything up without any sudden
+robot motion at startup. Keyboard input then jogs the real arm;
+collision check still refuses bad configurations.
+
+---
+
+### P4 — Gamemaster dashboard (pygame, separate from keyboard UI)
+
+Separate process, separate window. Read-only consumer of `state.full`
+plus a small REQ/REP socket for operator commands. **Two-team layout
+from day one** so adding team B later (P8) is a config change only.
+
+- `src/apps/gamemaster_ui/` — pygame app:
+  - Stage indicator (even though only Play is wired up).
+  - Per-team score and bucket-weight panels (team B side shows “no
+    data” when `active_teams: [a]`).
+  - Per-process Hz boxes driven by `state.full.process_health`. Tiny
+    colored squares per [NEXT_STEPS §2.G.43](../NEXT_STEPS.md).
+  - Per-joint dial-position-vs-actual visualizer per team (lifted
+    from the keyboard explorer).
+  - Manual REQs: `set_stage`, `soft_estop`, `adjust_score`,
+    `ping` per [BUS.md §7](architecture/BUS.md#7-ui--gc-commands-reqrep-at-5570).
+  - **No editable tuning widgets.** All tuning lives in YAML
+    (CONFIG.md §2), reloadable via the `reload_config` REQ.
+- The keyboard input UI from P2 stays untouched and keeps running in
+  its own window alongside the dashboard.
+- Add profile `dev_dashboard.yaml` = `dev_one_robot` + dashboard
+  enabled. The dashboard is also addable to `dev_keyboard` (sim
+  robot) for off-hardware development.
+
+**Exit criterion:** dashboard window opens, shows live joint motion
+and process health for team A, accepts a `soft_estop` REQ. Kicking
+the dashboard window closed does not affect the rest of the system.
+
+---
+
+### P5 — HapticIO, real
+
+Real ESP32 haptic dials replace the keyboard producer on team A.
+
+- `src/subsystems/haptic_io/` with `real`, `sim_keyboard`,
+  `sim_replay` impls.
+- The keyboard input UI from P2 becomes the `sim_keyboard` impl
+  behind the same interface (it already publishes
+  `telem.haptic.a`; this phase just registers it in
+  `core/subsystem_registry.py` under that name).
+- Bring `src/haptic_serial.py`, `src/enumerate_usb.py`,
+  `src/port_registry.py` over as `real` impl internals.
+- First two-way I/O subsystem: consumes `cmd.haptic.<team>` and
+  produces `telem.haptic.<team>` with the bounds / tracking torque
+  payload from [BUS.md §6.3](architecture/BUS.md#63-cmdhapticteam).
+- Same startup-sync discipline as RobotIO: the dials read back the
+  robot's `actual_q` from the bus on startup and seed their
+  tracking target there, so the first command doesn't yank the
+  dials to zero.
+
+**Exit criterion:** running with `haptic_io.a: real` drives the real
+ESP32 dials against the real UR10e; switching to `sim_keyboard` is
+a one-line YAML change.
+
+---
+
+### P6 — Remaining hardware subsystems (team A)
+
+Each gets its own RS-485 USB adapter. Order is not load-bearing;
+do them as hardware becomes available.
+
+- `WeightSensorIO` (sim + real) and the manual `adjust_score`
+  fallback wired into the dashboard.
+- `ScoreboardBroadcaster` (RS-485 LED panels for per-team score).
+- `BucketController` (motorized buckets).
+- `ButtonController` — drives `telem.buttons`. Its `stop` press
+  triggers a soft e-stop in GC (per
+  [NEXT_STEPS §2.A.3](../NEXT_STEPS.md), still routes to `set_stage:
+  reset` even though Reset is stubbed until P7).
+- `SafetyBarrierController` — drives `telem.safety`. Any broken
+  channel halts robot motion immediately (RobotIO refuses commands
+  while `safety.barrier.ok == false`).
+
+**Exit criterion:** `show.yaml` profile (still single team) runs the
+full hardware stack on team A. Play stage works end-to-end with
+real weights scoring real points on the real scoreboard.
+
+---
+
+### P7 — Full game state machine
+
+Now that all I/O is real, flesh out the stages around Play. The
+tutorial in particular gets the design attention that was
+deliberately postponed.
+
+- Implement Idle → Tutorial → Play → Conclusion → Reset → Idle
+  inside GC.
+- Idle plays an animated trajectory on the robot and dials.
+- Tutorial exits on timeout or “all engaged players scrolled to
+  bottom” (per [NEXT_STEPS §2.A.4](../NEXT_STEPS.md)). This is where
+  the tutorial UX design work happens.
+- Conclusion has a scripted bucket-pointing trajectory and a score
+  recap on the dashboard.
+- Reset transitions back to Idle and triggers the post-game external
+  PC pull (used later by the recorder once P11 lands).
+- Drop the `tuning.game.force_stage: play` override from all
+  non-dev profiles.
+
+**Exit criterion:** a full game cycle runs end-to-end on `show` with
+team A, including the tutorial.
+
+---
+
+### P8 — Two-team bring-up
+
+- Enable `active_teams: [a, b]` in `show.yaml`.
+- Spawn a second `HapticIO`, `RobotIO`, `JoggingPlanner` for team B.
+- Verify the collision-worker pool serves both teams without
+  starvation (re-check P2-bench numbers under doubled load; rerun if
+  borderline).
+- Verify shared / global processes (`WeightSensorIO`,
+  `ScoreboardBroadcaster`, `BucketController`, `ButtonController`,
+  `SafetyBarrierController`) serve both teams.
+- Vision PC + Audio PC come online: heartbeats land on the bus (the
+  recorder pull mechanism is wired but no-ops until P11).
+
+**Exit criterion:** a full two-team game runs end-to-end on real
+hardware.
+
+---
+
+### P9 — DisplayBroadcaster
+
+- `src/subsystems/display_broadcaster/` — SUB `state.full`, repackage
+  for the existing UDP RPi protocol (unchanged from
+  [src/state_publisher.py](../src/state_publisher.py)).
+- Profile flag `display_broadcaster: real` enables it.
+
+**Exit criterion:** RPi displays running the existing firmware show
+live state for both teams.
+
+---
+
+### P10 — LightColumnController
+
+- `src/subsystems/light_column/` — RS-485 driver. Three impls
+  (`light_column_1_3`, `..._4_5`, `..._6_8`) each owning one COM
+  port. Sim impl writes nothing but emits a heartbeat.
+- Validates `ZMQ_CONFLATE=1` on a slow subscriber under live load.
+- Lift animation library from [src/led_animations.py](../src/led_animations.py)
+  into `src/subsystems/light_column/animations.py`.
+
+**Exit criterion:** swapping any group to `real` drives the matching
+hardware.
+
+---
+
+### P11 — EventRecorder, real (logging implementation)
+
+**Logging implementation lands here.** Prerequisite:
+[LOGGING.md](architecture/LOGGING.md) reviewed and promoted out of
+DRAFT.
+
+- `src/apps/event_recorder/` — SUB-all + per-game folder writer.
+- `recordings/index.jsonl` ledger.
+- External Vision / Audio file pull per
+  [BUS.md §11](architecture/BUS.md#11-external-pcs--visionaudio--out-of-band-file-transfer).
+- Replace every `# TODO(logging)` placeholder left by P2–P10.
+- `tools/replay.py` (basic version) replays `bus.jsonl` against a
+  fresh broker.
+
+**Exit criterion:** running a full game writes
+`recordings/games/<game_id>/{meta.json, bus.jsonl}` plus skeleton /
+audio pulls, and appends a line to `index.jsonl`.
+
+---
+
+### P12 — Supervisor heartbeats + respawn + circuit breaker
+
+- Turn on the respawn machinery from
+  [SUPERVISOR.md §5](architecture/SUPERVISOR.md#5-respawn-policy).
+- Fatal circuit breaker from
+  [SUPERVISOR.md §6](architecture/SUPERVISOR.md#6-restart-circuit-breaker).
+- Per-process policies match the table in §5.
+
+**Exit criterion:** killing a non-`never` process from another
+terminal causes the supervisor to bring it back within ~5 s. Killing
+GC tears the system down cleanly. Tripping the circuit breaker
+(force-crashing a process 5+ times in 60 s) shuts the whole system
+down non-zero.
+
+---
+
+### P13 — Crash files
+
+- `src/core/crashfile.py` — `sys.excepthook` writer per
+  [LOGGING.md §6](architecture/LOGGING.md#6-crash-files).
+- Address any open items collected during P2–P12 testing.
+
+**Exit criterion:** uncaught exceptions in any process produce a
+crash file. System runs unattended overnight without operator
+intervention.
+
+---
+
+## 3. Where each phase ends up runnable
+
+| Phase | Smallest demo |
+|-------|---------------|
+| P0 | Existing legacy launcher still runs. |
+| P1 | `bus_smoke` profile: tap + poke round-trip. |
+| P2 | `dev_keyboard`: keyboard window jogs sim arm in pybullet viewer, with collision check via worker pool. **Demo milestone.** |
+| P3 | `dev_one_robot`: real UR10e tracks keyboard input, no startup snap. |
+| P4 | Pygame dashboard window alongside the keyboard UI, showing live two-team layout. |
+| P5 | Real haptic dials replace the keyboard producer. |
+| P6 | `show` on team A: weights, scoreboard, buckets, buttons, safety barrier all live. |
+| P7 | Full game cycle on `show` (team A), including tutorial. |
+| P8 | Both teams playing simultaneously. |
+| P9 | RPi displays show live state. |
+| P10 | LED columns animate to game state. |
+| P11 | Replay a recorded game on a fresh broker. |
+| P12 | Self-healing under per-process kills; fatal circuit breaker. |
+| P13 | Unattended overnight run. |
+
+---
+
+## 4. Out of scope for this plan
+
+Things that stay deferred or untouched:
+
+- High-score history UI beyond what `index.jsonl` already supports.
+- `tools/recordings_gc.py` archive helper.
+- Migration of body encoding to msgpack/orjson.
+- Per-machine config overrides (CONFIG.md §7 open item).
+- Any UI polish beyond what each phase needs to demonstrate that
+  phase. Visual design happens after P14.
