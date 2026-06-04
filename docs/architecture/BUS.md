@@ -2,7 +2,7 @@
 
 Concrete ZMQ wire-level spec for the Game Controller PC.
 
-Status: **DRAFT — subject to revision after first integration tests.**
+Status: **CONFIRMED — subject to revision after first integration tests.**
 Last reviewed: 2026-06-02.
 
 See [SYSTEM_MAP.md](SYSTEM_MAP.md) for the process catalog and edge
