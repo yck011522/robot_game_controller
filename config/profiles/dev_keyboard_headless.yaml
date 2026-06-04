@@ -1,0 +1,53 @@
+# Headless variant of dev_keyboard for automated tests.
+# - haptic_io.a: sim_scripted (no pygame window required)
+# - robot_io.a: sim_pybullet with tuning.robot.headless=true (DIRECT mode)
+
+profile_name: dev_keyboard_headless
+description: "P2 automated test: scripted haptic → headless sim robot, team A"
+
+active_teams: [a]
+
+subsystems:
+  haptic_io:
+    a: sim_scripted
+    b: null
+  robot_io:
+    a: sim_pybullet
+    b: null
+  jogging_planner:
+    a: in_process
+    b: null
+
+  weight_sensor_io: null
+  light_column_1_3: null
+  light_column_4_5: null
+  light_column_6_8: null
+  display_broadcaster: null
+  scoreboard_broadcaster: null
+  bucket_controller: null
+  button_controller: null
+  safety_barrier_controller: null
+
+  collision_workers:
+    count: 2
+
+  event_recorder: null
+  gamemaster_ui: null
+  bus_broker: real
+
+tuning:
+  haptic:
+    gear_ratio: [10.0, 10.0, 10.0, 5.0, 5.0, 5.0]
+  robot:
+    initial_pose_deg: [0.0, -90.0, 90.0, 0.0, 0.0, 0.0]
+    headless: true
+  collision:
+    check_self:  true
+    check_world: true
+    timeout_ms:  150
+    retries:     2
+    bundle_size: 1
+  game:
+    force_stage: play
+
+hardware: {}

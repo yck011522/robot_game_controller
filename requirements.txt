@@ -1,3 +1,7 @@
 pyserial>=3.5
 pyzmq>=26
 PyYAML>=6
+pybullet>=3.2
+pygame>=2.5
+compas>=2.0
+compas_fab>=1.0

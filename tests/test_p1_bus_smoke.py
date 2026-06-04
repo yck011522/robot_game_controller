@@ -1,11 +1,11 @@
-"""P1 smoke test.
+﻿"""P1 smoke test.
 
-End-to-end acceptance for [docs/MIGRATION_PLAN.md §P1](../docs/MIGRATION_PLAN.md):
+End-to-end acceptance for [docs/MIGRATION_PLAN.md 禮P1](../docs/MIGRATION_PLAN.md):
 
 1. Validates that `config/profiles/bus_smoke.yaml` parses.
 2. Spawns the launcher (which spawns the bus broker).
 3. Subscribes to the bus directly and verifies that:
-   - `heartbeat.bus_broker` arrives at ~1 Hz with the BUS.md §6.9 fields.
+   - `heartbeat.bus_broker` arrives at ~1 Hz with the BUS.md 禮6.9 fields.
    - A `tools/bus_poke.py`-style message round-trips through the broker
      to a SUB-all consumer (the path `tools/bus_tap.py` exercises).
 4. Sends SIGTERM/SIGBREAK to the launcher and verifies clean shutdown.
@@ -135,31 +135,41 @@ def test_launcher_smoke() -> None:
 
     try:
         # ---- 1. Wait for first heartbeat.bus_broker ---------------------
+        # We need at least 4 heartbeats AND at least ~3 s of wall time
+        # to compute a stable rate. The very first heartbeat after a
+        # PUB/SUB session establishes can be delivered together with
+        # subscription handshake traffic; we discard it and measure from
+        # the second onwards. `perf_counter_ns()` is used because on
+        # Windows `monotonic_ns()` has ~15 ms resolution which collapses
+        # closely-spaced samples to identical timestamps.
         heartbeats: list[tuple[int, dict]] = []
-        deadline = time.monotonic() + 15.0
-        while time.monotonic() < deadline:
+        deadline = time.perf_counter() + 15.0
+        collect_until = time.perf_counter() + 3.5
+        while time.perf_counter() < deadline:
             events = dict(poller.poll(200))
             if sub_hb in events:
                 topic, body = bus.recv(sub_hb, flags=zmq.NOBLOCK)
                 if topic == "heartbeat.bus_broker":
-                    heartbeats.append((time.monotonic_ns(), body))
-                    if len(heartbeats) >= 3:
+                    heartbeats.append((time.perf_counter_ns(), body))
+                    if len(heartbeats) >= 4 and time.perf_counter() >= collect_until:
                         break
             if launcher.poll() is not None:
                 raise AssertionError(
                     f"launcher exited (code {launcher.returncode}) before heartbeats arrived\n"
                     f"---launcher output---\n{launcher_out.text()}")
-        assert len(heartbeats) >= 3, f"only got {len(heartbeats)} heartbeats in 15 s"
+        assert len(heartbeats) >= 4, f"only got {len(heartbeats)} heartbeats in 15 s"
 
-        # ---- 2. Validate heartbeat schema (BUS.md §6.9) -----------------
+        # ---- 2. Validate heartbeat schema (BUS.md 禮6.9) -----------------
         for _, body in heartbeats:
             for field in ("ts_mono_ns", "ts_wall_ns", "producer", "pid",
                           "loop_hz", "loop_jitter_ms_p95", "queue_depth"):
                 assert field in body, f"missing {field!r} in heartbeat: {body}"
             assert body["producer"] == "bus_broker"
-        span_s = (heartbeats[-1][0] - heartbeats[0][0]) / 1e9
-        observed_hz = (len(heartbeats) - 1) / span_s if span_s > 0 else 0.0
-        assert 0.5 <= observed_hz <= 2.0, f"heartbeat rate {observed_hz:.2f} Hz out of spec"
+        # Skip the first sample ??it may have been buffered during the
+        # SUB subscription handshake.
+        span_s = (heartbeats[-1][0] - heartbeats[1][0]) / 1e9
+        observed_hz = (len(heartbeats) - 2) / span_s if span_s > 0 else 0.0
+        assert 0.5 <= observed_hz <= 1.8, f"heartbeat rate {observed_hz:.2f} Hz out of spec"
         print(f"[test] heartbeat: schema OK, observed {observed_hz:.2f} Hz from "
               f"{len(heartbeats)} samples")
 
@@ -178,8 +188,8 @@ def test_launcher_smoke() -> None:
         assert rc == 0, f"bus_poke.py exited {rc}"
 
         saw = False
-        deadline = time.monotonic() + 3.0
-        while time.monotonic() < deadline:
+        deadline = time.perf_counter() + 3.0
+        while time.perf_counter() < deadline:
             events = dict(poller.poll(200))
             if sub_all in events:
                 topic, body = bus.recv(sub_all, flags=zmq.NOBLOCK)

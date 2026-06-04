@@ -1,4 +1,4 @@
-"""One-shot bus publisher.
+﻿"""One-shot bus publisher.
 
 Usage:  python tools/bus_poke.py <topic> '<json-body>'
 
@@ -45,10 +45,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[bus_poke] body is not valid JSON: {e}", file=sys.stderr)
         return 2
     if not isinstance(body, dict):
-        print("[bus_poke] body must be a JSON object (BUS.md §3)", file=sys.stderr)
+        print("[bus_poke] body must be a JSON object (BUS.md 禮3)", file=sys.stderr)
         return 2
     body.setdefault("producer", args.producer)
-    body.setdefault("ts_mono_ns", time.monotonic_ns())
+    body.setdefault("ts_mono_ns", time.perf_counter_ns())
 
     ctx = zmq.Context.instance()
     pub = bus.make_pub(ctx, endpoint=args.endpoint)

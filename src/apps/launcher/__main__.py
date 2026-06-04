@@ -1,4 +1,34 @@
-"""Launcher entry point. `python -m apps.launcher --profile <path>`."""
+﻿"""Launcher / supervisor.
+
+Spawns every enabled subsystem of a profile, waits for each tier's
+heartbeat, then runs a watchdog loop until shutdown (Ctrl-C, SIGTERM,
+or any child crash).
+
+Mechanism (6 steps)
+-------------------
+1. Resolve the profile path (CLI `--profile`, falling back to
+   `config/launcher.yaml:default_profile`).
+2. Load + validate the profile.
+3. Open a SUB on `heartbeat.*` so we can both wait for startup and
+   monitor health.
+4. Spawn the enabled processes in **tiers** (bus broker first, then
+   collision broker + workers, then game_controller, then
+   robot_io / haptic_io / UI). Each tier must produce its first
+   heartbeat before the next tier starts ??that ordering comes from
+   SUPERVISOR.md 禮2.
+5. Run the main loop at 5 Hz: print a status table every 5 s,
+   detect any child exit, propagate the shutdown signal.
+6. On shutdown, send `CTRL_BREAK_EVENT` (Windows) / `SIGTERM`
+   (POSIX) to every child in reverse startup order, wait for them,
+   then `ctx.destroy(linger=0)`.
+
+Not in this slice yet (lands later)
+-----------------------------------
+- Crash ??respawn with backoff (P12).
+- Circuit breaker that demotes the profile to a degraded variant
+  after N restarts (P12).
+- Hot-reload via REQ/REP (P4+).
+"""
 
 from __future__ import annotations
 
@@ -23,42 +53,82 @@ from core.config import Profile, load as load_profile  # noqa: E402
 
 REPO_ROOT = _SRC.parent
 
-# Per-process startup timeout for "first heartbeat seen" (SUPERVISOR.md §2).
-STARTUP_HEARTBEAT_TIMEOUT_S = 10.0
+# How long we'll wait for any one process's first heartbeat before
+# giving up and shutting the whole thing down. Pybullet startup can be
+# slow on first run (loading meshes), hence the generous cap.
+STARTUP_HEARTBEAT_TIMEOUT_S = 20.0
 
 
-def _module_for(proc: str) -> str:
-    """Map canonical process name → Python module path. Per-team and pooled
-    processes still resolve to a single module here (their parameters are
-    passed via --proc / --instance).
+# ---------------------------------------------------------------- helpers
+
+
+def _module_for(proc: str, registry: dict[str, str]) -> str:
+    """Map a canonical process name to its Python module.
+
+    Per-team processes look like `haptic_io.a`; the `.a` part is just
+    a label that becomes the `--proc` arg -- the module is still
+    `apps.haptic_io`. Pooled workers are spawned as `collision_worker`
+    (no team suffix) and disambiguated via `--instance`.
+
+    `registry` comes from `config/launcher.yaml:process_modules` and
+    overrides the default `apps.<base>` mapping. This lets a process
+    whose implementation lives under `subsystems/` (e.g. a pooled
+    worker) be spawned directly via `python -m subsystems.<name>`
+    instead of needing an empty `apps/<name>/__main__.py` wrapper.
     """
-    # bus_broker -> apps.bus_broker
     base = proc.split(".")[0]
+    if base in registry:
+        return registry[base]
     return f"apps.{base}"
 
 
-def _default_profile_from_launcher_yaml() -> Path | None:
-    """Read config/launcher.yaml's default_profile if it exists."""
+def _load_launcher_yaml() -> dict:
     yml = REPO_ROOT / "config" / "launcher.yaml"
     if not yml.exists():
-        return None
+        return {}
     import yaml as _yaml
-    data = _yaml.safe_load(yml.read_text(encoding="utf-8")) or {}
+    return _yaml.safe_load(yml.read_text(encoding="utf-8")) or {}
+
+
+def _default_profile_from_launcher_yaml() -> Path | None:
+    data = _load_launcher_yaml()
     default = data.get("default_profile")
     if not default:
         return None
     return REPO_ROOT / "config" / "profiles" / f"{default}.yaml"
 
 
-def _spawn(proc_name: str, profile_path: Path, instance: int | None = None) -> subprocess.Popen:
-    argv = [sys.executable, "-m", _module_for(proc_name),
+def _process_modules_from_launcher_yaml() -> dict[str, str]:
+    data = _load_launcher_yaml()
+    raw = data.get("process_modules") or {}
+    return {str(k): str(v) for k, v in raw.items()}
+
+
+def _spawn(proc_name: str, profile_path: Path, *,
+           module_registry: dict[str, str],
+           instance: int | None = None,
+           ) -> subprocess.Popen:
+    """Spawn a child python process per SUPERVISOR.md §3.
+
+    Two Windows-specific things matter:
+
+    - `PYTHONPATH=src` so the child can `import core`, `import apps`,
+      etc. without us repacking the source as a wheel. We *prepend*
+      so a developer's existing PYTHONPATH still takes precedence for
+      shadowed packages.
+    - `CREATE_NEW_PROCESS_GROUP` lets us later send the child a
+      `CTRL_BREAK_EVENT` without also breaking ourselves. The default
+      process group on Windows would treat Ctrl-Break as a
+      console-wide signal.
+    """
+    module = _module_for(proc_name, module_registry)
+    argv = [sys.executable, "-m", module,
             "--profile", str(profile_path),
             "--proc", proc_name]
     if instance is not None:
         argv += ["--instance", str(instance)]
 
     env = os.environ.copy()
-    # Children import `core`, `apps`, etc. as top-level packages.
     existing = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = str(_SRC) + (os.pathsep + existing if existing else "")
 
@@ -70,7 +140,14 @@ def _spawn(proc_name: str, profile_path: Path, instance: int | None = None) -> s
     return subprocess.Popen(argv, **popen_kwargs)  # type: ignore[arg-type]
 
 
-def _terminate(child: subprocess.Popen, name: str, grace_s: float = 2.0) -> None:
+def _terminate(child: subprocess.Popen, name: str, grace_s: float = 3.0) -> None:
+    """Ask a child to stop, then kill if it doesn't.
+
+    On Windows we send `CTRL_BREAK_EVENT` ??the only Python-installable
+    signal a child created with `CREATE_NEW_PROCESS_GROUP` will see as
+    a graceful-shutdown request (it arrives as SIGBREAK). On POSIX we
+    SIGTERM. After the grace period we SIGKILL either way.
+    """
     if child.poll() is not None:
         return
     try:
@@ -87,8 +164,11 @@ def _terminate(child: subprocess.Popen, name: str, grace_s: float = 2.0) -> None
         child.kill()
 
 
+# ------------------------------------------------------------------- main
+
+
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="Game-controller launcher / supervisor (P1 slice)")
+    ap = argparse.ArgumentParser(description="Game-controller launcher / supervisor")
     ap.add_argument("--profile", default=None,
                     help="path to profile YAML, or its bare name under config/profiles/. "
                          "Defaults to config/launcher.yaml:default_profile.")
@@ -101,8 +181,11 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     profile: Profile = load_profile(profile_path)
+    module_registry = _process_modules_from_launcher_yaml()
     print(f"[launcher] profile: {profile.name}  ({profile_path})", flush=True)
     print(f"[launcher]   active_teams: {list(profile.active_teams)}", flush=True)
+    if module_registry:
+        print(f"[launcher]   process_modules overrides: {module_registry}", flush=True)
 
     children: dict[str, subprocess.Popen] = {}
     stop = {"flag": False}
@@ -111,16 +194,14 @@ def main(argv: list[str] | None = None) -> int:
         stop["flag"] = True
     signal.signal(signal.SIGINT, _on_signal)
     signal.signal(signal.SIGTERM, _on_signal)
+    if hasattr(signal, "SIGBREAK"):
+        signal.signal(signal.SIGBREAK, _on_signal)  # type: ignore[attr-defined]
 
     ctx = zmq.Context.instance()
     sub = bus.make_sub(ctx, topics=["heartbeat."])
     poller = zmq.Poller()
     poller.register(sub, zmq.POLLIN)
 
-    # Per-child bookkeeping. Track the most recent heartbeat ts_mono_ns
-    # *on the launcher's monotonic clock* (i.e. time we received it), plus
-    # the producer-reported loop_hz, plus a tiny rolling window for an
-    # observed-from-the-bus heartbeat rate.
     seen_first: dict[str, bool] = {}
     last_recv_mono_ns: dict[str, int] = {}
     last_loop_hz: dict[str, float] = {}
@@ -128,23 +209,85 @@ def main(argv: list[str] | None = None) -> int:
 
     exit_code = 0
     try:
-        # ---- startup: spawn enabled processes ---------------------------
-        # P1: only bus_broker. Future phases add more here following
-        # SUPERVISOR.md §2 startup order.
+        # ---- tier 1: bus broker ----------------------------------------
         if profile.is_enabled("bus_broker"):
-            children["bus_broker"] = _spawn("bus_broker", profile_path)
+            children["bus_broker"] = _spawn("bus_broker", profile_path,
+                                             module_registry=module_registry)
             if not _wait_for_first_heartbeat(sub, poller, "bus_broker",
                                               STARTUP_HEARTBEAT_TIMEOUT_S,
                                               children, seen_first,
                                               last_recv_mono_ns, last_loop_hz, recv_window):
-                print("[launcher] bus_broker failed to produce a heartbeat; aborting",
-                      file=sys.stderr, flush=True)
                 exit_code = 1
                 return exit_code
 
-        print(f"[launcher] all P1 children up. heartbeats:", flush=True)
-        # ---- main loop: print heartbeats, watch for death ---------------
-        next_status = time.monotonic() + 5.0
+        # ---- tier 2: collision broker + pool ---------------------------
+        cw_count = 0
+        cw_node = profile.subsystems.get("collision_workers")
+        if isinstance(cw_node, dict):
+            cw_count = int(cw_node.get("count", 0))
+
+        if cw_count > 0:
+            children["collision_broker"] = _spawn("collision_broker", profile_path,
+                                                   module_registry=module_registry)
+            if not _wait_for_first_heartbeat(sub, poller, "collision_broker",
+                                              STARTUP_HEARTBEAT_TIMEOUT_S,
+                                              children, seen_first,
+                                              last_recv_mono_ns, last_loop_hz, recv_window):
+                exit_code = 1
+                return exit_code
+            # Pool ??spawn each worker with --instance N. Wait for the
+            # *last* one's heartbeat; ZMQ DEALER buffers requests behind
+            # any worker still booting up.
+            for i in range(cw_count):
+                pname = f"collision_worker_{i:02d}"
+                children[pname] = _spawn("collision_worker", profile_path,
+                                          module_registry=module_registry,
+                                          instance=i)
+            last_pname = f"collision_worker_{cw_count - 1:02d}"
+            if not _wait_for_first_heartbeat(sub, poller, last_pname,
+                                              STARTUP_HEARTBEAT_TIMEOUT_S,
+                                              children, seen_first,
+                                              last_recv_mono_ns, last_loop_hz, recv_window):
+                exit_code = 1
+                return exit_code
+
+        # ---- tier 3: game controller (only if any team is active) ------
+        if profile.active_teams:
+            children["game_controller"] = _spawn("game_controller", profile_path,
+                                                  module_registry=module_registry)
+            if not _wait_for_first_heartbeat(sub, poller, "game_controller",
+                                              STARTUP_HEARTBEAT_TIMEOUT_S,
+                                              children, seen_first,
+                                              last_recv_mono_ns, last_loop_hz, recv_window):
+                exit_code = 1
+                return exit_code
+
+        # ---- tier 4: per-team IO ---------------------------------------
+        for team in profile.active_teams:
+            if profile.is_enabled("robot_io", team=team):
+                pname = f"robot_io.{team}"
+                children[pname] = _spawn(pname, profile_path,
+                                          module_registry=module_registry)
+            if profile.is_enabled("haptic_io", team=team):
+                pname = f"haptic_io.{team}"
+                children[pname] = _spawn(pname, profile_path,
+                                          module_registry=module_registry)
+
+        for team in profile.active_teams:
+            for sub_name in ("robot_io", "haptic_io"):
+                if profile.is_enabled(sub_name, team=team):
+                    pname = f"{sub_name}.{team}"
+                    if not _wait_for_first_heartbeat(sub, poller, pname,
+                                                      STARTUP_HEARTBEAT_TIMEOUT_S,
+                                                      children, seen_first,
+                                                      last_recv_mono_ns, last_loop_hz, recv_window):
+                        exit_code = 1
+                        return exit_code
+
+        print(f"[launcher] all children up: {list(children.keys())}", flush=True)
+
+        # ---- main watchdog loop ----------------------------------------
+        next_status = time.perf_counter() + 5.0
         while not stop["flag"]:
             events = dict(poller.poll(timeout=200))
             if sub in events:
@@ -156,7 +299,6 @@ def main(argv: list[str] | None = None) -> int:
                     _record_heartbeat(topic, body, last_recv_mono_ns, last_loop_hz,
                                        recv_window, seen_first)
 
-            # Detect crashed children.
             for name, child in list(children.items()):
                 rc = child.poll()
                 if rc is not None:
@@ -166,18 +308,15 @@ def main(argv: list[str] | None = None) -> int:
                     stop["flag"] = True
                     break
 
-            if time.monotonic() >= next_status:
+            if time.perf_counter() >= next_status:
                 _print_status(children, last_recv_mono_ns, last_loop_hz, recv_window)
-                next_status = time.monotonic() + 5.0
+                next_status = time.perf_counter() + 5.0
 
     finally:
         print("[launcher] shutting down children...", flush=True)
-        # Reverse startup order; for P1 there's only one.
         for name, child in reversed(list(children.items())):
             _terminate(child, name)
         sub.close(0)
-        # destroy() also covers the case where a poller registration kept
-        # a socket alive past the explicit close above.
         ctx.destroy(linger=0)
 
     return exit_code
@@ -189,11 +328,10 @@ def _resolve_profile_path(arg: str | None) -> Path | None:
     p = Path(arg)
     if p.exists():
         return p.resolve()
-    # bare name → config/profiles/<name>.yaml
     candidate = REPO_ROOT / "config" / "profiles" / f"{arg}.yaml"
     if candidate.exists():
         return candidate.resolve()
-    return p.resolve()  # let load() raise a clear error
+    return p.resolve()
 
 
 def _record_heartbeat(topic: str, body: dict, last_recv_mono_ns: dict,
@@ -201,7 +339,7 @@ def _record_heartbeat(topic: str, body: dict, last_recv_mono_ns: dict,
     if not topic.startswith("heartbeat."):
         return
     proc = topic[len("heartbeat."):]
-    now_ns = time.monotonic_ns()
+    now_ns = time.perf_counter_ns()
     last_recv_mono_ns[proc] = now_ns
     last_loop_hz[proc] = float(body.get("loop_hz", 0.0))
     seen_first[proc] = True
@@ -211,17 +349,17 @@ def _record_heartbeat(topic: str, body: dict, last_recv_mono_ns: dict,
 
 def _print_status(children: dict, last_recv_mono_ns: dict,
                   last_loop_hz: dict, recv_window: dict) -> None:
-    now_ns = time.monotonic_ns()
+    now_ns = time.perf_counter_ns()
     print("[launcher] --- status ---", flush=True)
     for name in children:
         last = last_recv_mono_ns.get(name)
         if last is None:
-            print(f"  {name:24s}  no heartbeat", flush=True)
+            print(f"  {name:28s}  no heartbeat", flush=True)
             continue
         age_ms = (now_ns - last) / 1e6
         observed_hz = _observed_hz(recv_window.get(name))
-        print(f"  {name:24s}  age {age_ms:6.1f} ms  "
-              f"reported_loop_hz {last_loop_hz.get(name, 0.0):6.2f}  "
+        print(f"  {name:28s}  age {age_ms:6.1f} ms  "
+              f"reported_loop_hz {last_loop_hz.get(name, 0.0):7.2f}  "
               f"observed_hb_hz {observed_hz:5.2f}", flush=True)
 
 
@@ -238,8 +376,15 @@ def _wait_for_first_heartbeat(sub, poller, name: str, timeout_s: float,
                               children: dict, seen_first: dict,
                               last_recv_mono_ns: dict, last_loop_hz: dict,
                               recv_window: dict) -> bool:
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
+    """Block (with 200 ms slices) until `heartbeat.<name>` arrives or we time out.
+
+    While we wait we also drain *other* heartbeats so the status table
+    is correct as soon as the loop starts, and we detect any sibling
+    child that crashes during startup (cascading failure).
+    """
+    deadline = time.perf_counter() + timeout_s
+    print(f"[launcher] waiting for {name} first heartbeat...", flush=True)
+    while time.perf_counter() < deadline:
         events = dict(poller.poll(timeout=200))
         if sub in events:
             while True:
@@ -248,15 +393,16 @@ def _wait_for_first_heartbeat(sub, poller, name: str, timeout_s: float,
                 except zmq.Again:
                     break
                 _record_heartbeat(topic, body, last_recv_mono_ns, last_loop_hz,
-                                   recv_window, seen_first)
+                                  recv_window, seen_first)
         if seen_first.get(name):
             print(f"[launcher] {name} heartbeat received", flush=True)
             return True
-        child = children.get(name)
-        if child is not None and child.poll() is not None:
-            print(f"[launcher] {name} exited (code {child.returncode}) before first heartbeat",
-                  file=sys.stderr, flush=True)
-            return False
+        for cn, child in children.items():
+            if child.poll() is not None:
+                print(f"[launcher] {cn} died (rc={child.returncode}) while waiting for {name}",
+                      file=sys.stderr, flush=True)
+                return False
+    print(f"[launcher] timeout waiting for {name} heartbeat", file=sys.stderr, flush=True)
     return False
 
 

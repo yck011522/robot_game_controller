@@ -1,0 +1,66 @@
+# P2 milestone profile — keyboard → sim robot → pygame dashboard.
+# Single team (A), Play stage pinned. Pybullet GUI + pygame keyboard window.
+# See docs/architecture/CONFIG.md §4.2 for the full schema.
+
+profile_name: dev_keyboard
+description: "P2 milestone: keyboard → sim robot, single team A"
+
+active_teams: [a]
+
+subsystems:
+  haptic_io:
+    a: sim_keyboard
+    b: null
+
+  robot_io:
+    a: sim_pybullet
+    b: null
+
+  jogging_planner:
+    a: in_process
+    b: null
+
+  weight_sensor_io: null
+  light_column_1_3: null
+  light_column_4_5: null
+  light_column_6_8: null
+  display_broadcaster: null
+  scoreboard_broadcaster: null
+  bucket_controller: null
+  button_controller: null
+  safety_barrier_controller: null
+
+  collision_workers:
+    count: 4
+
+  event_recorder: null
+  gamemaster_ui: null
+  bus_broker: real
+
+tuning:
+  haptic:
+    gear_ratio: [10.0, 10.0, 10.0, 5.0, 5.0, 5.0]
+    bounds_deg_min: [-180, -180, -180, -180, -180, -180]
+    bounds_deg_max: [ 180,  180,  180,  180,  180,  180]
+  robot:
+    max_velocity_deg_s:      [180, 180, 180, 180, 180, 180]
+    max_acceleration_deg_s2: [690, 690, 690, 690, 690, 690]
+    headless: false
+    # Home / sim-start pose. The curated scene's `robot_configuration`
+    # is zero on every joint, which sits inside the pedestal -> the
+    # planner would report an in-collision state from frame 0. The
+    # explorer's INITIAL_POS_DEG = [0, -90, 90, 0, 0, 0] is the
+    # collision-free "ready" pose we start from instead. With
+    # dial=0 the jogging planner outputs exactly this pose; holding a
+    # key offsets from here via the gear ratio.
+    initial_pose_deg: [0.0, -90.0, 90.0, 0.0, 0.0, 0.0]
+  collision:
+    check_self:  true
+    check_world: true
+    timeout_ms:  80
+    retries:     2
+    bundle_size: 1
+  game:
+    force_stage: play
+
+hardware: {}

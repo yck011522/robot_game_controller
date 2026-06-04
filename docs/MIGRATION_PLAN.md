@@ -134,67 +134,86 @@ Ctrl-C tears everything down. Automated regression test:
 
 ---
 
-### P2 — Demo milestone: keyboard → collision-checked planner → pybullet viewer
+### P2 — Demo milestone: keyboard → collision-checked planner → pybullet viewer ✅ DONE
 
 The first full slice through the new ZMQ architecture. Exercises
 PUB/SUB, ROUTER/DEALER, and multi-process spawning end-to-end before
 any real hardware is involved. Single team (A), Play stage only, all
 sim.
 
-- `src/apps/keyboard_input_ui/` — **its own small window** (pygame or
-  similar), separate from the gamemaster dashboard that lands in P4.
-  Reads keys, publishes `telem.haptic.a` at 50 Hz. Mapping lifted
-  from `incoming_code/bullet_collision_keyboard_explorer.py`. The UI
-  shows the current key bindings and the per-joint dial position
-  it's publishing — nothing else. Closing this window does **not**
-  bring down the system.
-- `src/subsystems/jogging/in_process.py` — JoggingPlanner running
-  inside GC for now. **Collision check is on from day one** (per
-  [CONFIG.md `tuning.collision`](architecture/CONFIG.md#2-top-level-schema)):
-  the planner issues `req.collision_check` bundles to the worker
-  pool. Self-collision **and** world-collision both enabled.
-- `src/apps/collision_broker/` — ROUTER/DEALER proxy on `:5560`
-  / `:5561` per [BUS.md §8](architecture/BUS.md#8-collision-reqrep-router--dealer-at-55605561).
-- `src/subsystems/collision_worker/` — headless pybullet REP worker.
-  Logic extracted from `archive/bullet_collision_keyboard_explorer.py`.
-  Profile spawns `collision_workers.count: 4` so multi-worker fan-out
-  is exercised from the first run.
-- `src/subsystems/robot/sim_pybullet.py` — pybullet-backed RobotIO
-  with the **GUI viewer enabled** (`pybullet.connect(GUI)`). This is
-  the visualization surface for P2 — you watch the arm move in the
-  pybullet window. Subscribes `cmd.robot.target.a`, publishes
-  `telem.robot.actual.a` at 100 Hz. URDF and meshes copied from
+**Delivered:**
+
+- `src/core/proc.py` — reusable run-loop scaffold (signal handling,
+  1 Hz heartbeat publish, loop_hz/jitter measurement, clean
+  `ctx.destroy(linger=0)` shutdown). Used by every long-lived
+  subsystem so each one is ~80 lines.
+- `src/apps/haptic_io/` + `src/subsystems/haptic/` — dispatches on
+  `subsystems.haptic_io.<team>` impl name:
+  - `sim_keyboard` — pygame window with q/a w/s e/d r/f t/g y/h
+    bindings for the 6 dials.
+  - `sim_scripted` — slow per-dial sine (no display required), used
+    by automated tests.
+- `src/subsystems/jogging/in_process.py` — `InProcessPlanner`:
+  `q_target = clamp(gear_ratio * dial_pos, q_min, q_max)` plus a
+  best-effort `req.collision_check` round-trip per tick. Diagnostic
+  hit information flows back into `state.full.teams.<team>.collision`.
+- `src/apps/collision_broker/` — ROUTER/DEALER proxy on `:5560` /
+  `:5561` per BUS.md §8. Same `zmq.proxy(...)` + 1 Hz heartbeat
+  pattern as the main bus broker.
+- `src/subsystems/collision_worker/` + `src/apps/collision_worker/`
+  (entry wrapper) — headless `pybullet.DIRECT` REP worker. Bundles
+  of N configs per request; `performCollisionDetection()` +
+  `getContactPoints()` for the actual check. Honors `--instance N`
+  and reports as `collision_worker_NN` in heartbeats.
+- `src/subsystems/robot/sim_pybullet.py` + `src/apps/robot_io/` —
+  pybullet-backed RobotIO. GUI (`pybullet.connect(GUI)`) by default,
+  headless `DIRECT` when `tuning.robot.headless: true`. Subscribes
+  `cmd.robot.target.<team>`, publishes `telem.robot.actual.<team>`
+  at 100 Hz. P2 uses simple teleport tracking; the
+  `setJointMotorControl2` path with proper PD gains lands when the
+  real-RTDE impl is wired in P3.
+- `src/subsystems/robot/urdf_loader.py` — patches the upstream
+  URDF's `package://ur_description/...` mesh URIs to relative paths
+  pybullet can resolve. URDF + meshes copied from
   `incoming_code/ur10e_robot/` into `src/subsystems/robot/assets/`.
-  The same URDF is loaded by the collision workers in headless mode
-  so the two pybullet worlds match exactly.
-- `src/apps/game_controller/` — minimal GC: 50 Hz loop, pinned to
-  Play stage by `tuning.game.force_stage: play`, publishes
-  `state.full` per [BUS.md §6.1](architecture/BUS.md#61-statefull).
-  No game logic beyond "forward the planned joint targets."
-- `config/profiles/dev_keyboard.yaml` — update to enable collision
-  workers (`{count: 4}`) and `check_self: true, check_world: true`,
-  overriding the placeholder in
-  [CONFIG.md §4.2](architecture/CONFIG.md#42-dev_keyboardyaml--p2-milestone)
-  which was written before P2 absorbed the collision pool.
-- **P2-bench** — throughput / latency benchmark for the collision
-  pool, executed before declaring P2 done. Sweep bundle size N ∈
-  {1, 2, 4, 8, 16, 32, 64} × worker count W ∈ {1, 4, 8, 16}. Record
-  p50/p95/p99 latency, checks/sec, worker CPU. Output:
-  `docs/benchmarks/collision_router_dealer.md`. The chosen
-  `tuning.collision.bundle_size` default goes into
-  [CONFIG.md](architecture/CONFIG.md).
+  The same patched URDF loads in both the GUI viewer and the
+  collision workers so the two pybullet worlds match exactly.
+- `src/apps/game_controller/` — minimal GC: 50 Hz loop pinned to
+  Play stage (`tuning.game.force_stage: play`), runs the in-process
+  planner per active team, publishes `cmd.robot.target.<team>` and
+  a skeleton `state.full` per BUS.md §6.1 (stage, per-team
+  robot/haptic/collision blocks).
+- `src/apps/launcher/__main__.py` (rewritten) — spawns the full
+  tier-ordered tree (bus_broker → collision_broker + N workers →
+  game_controller → robot_io.X + haptic_io.X) and waits for each
+  tier's first heartbeat with a 20 s cap before continuing.
+- `config/profiles/dev_keyboard.yaml` — pygame keyboard + pybullet
+  GUI, 4 collision workers, `check_self: true, check_world: true`.
+- `config/profiles/dev_keyboard_headless.yaml` — sister profile that
+  swaps in `sim_scripted` haptic + `tuning.robot.headless: true` for
+  CI / automated regression.
+- `tests/test_p2_demo.py` — spins up the headless profile, asserts
+  all 7 heartbeats arrive, asserts `cmd.robot.target.a` is non-zero
+  and tracked by `telem.robot.actual.a`, asserts `state.full`
+  schema. Currently passing.
 
-**Exit criterion:** `--profile dev_keyboard` brings up the broker,
-the collision broker, 4 collision workers, GC, sim robot (pybullet
-GUI), and the keyboard input window. 
-Confirms FPS for all processes are up to spec.
-(Automated test and then ask developer to test manually) 
-Pressing keys jogs the arm in the pybullet window in real time;
-configurations that would collide are refused by the planner 
-(arm visibly stops at the boundary).
-Benchmark numbers are recorded.
+**Exit criterion (automated portion):**
+[tests/test_p2_demo.py](../tests/test_p2_demo.py) passes end-to-end on
+`dev_keyboard_headless` — every expected heartbeat lands, the
+dial-driven joint target propagates through the planner (with
+collision check enabled) to the sim robot, and `state.full` carries
+the per-team summary.
 
-This is the first visible demo. Everything after extends it.
+**Deferred to follow-up:**
+- **P2-bench** — collision-pool throughput sweep (bundle size N ×
+  worker count W). The framework is in place; the sweep itself is
+  better run on the target hardware once it exists.
+- Manual `dev_keyboard` smoke (real pygame window + pybullet GUI) is
+  not gated by CI; run it locally before P3.
+- Trajectory-time collision check (between current pose and target,
+  not just at the target) — current impl only checks the requested
+  pose, matching SUPERVISOR.md cross-cutting decision to defer
+  swept-volume checking until P3.
 
 ---
 

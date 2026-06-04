@@ -1,0 +1,633 @@
+{
+  "meta": {
+    "base_seed": 12346,
+    "duration_per_worker_s": 600.0,
+    "generated": "2026-05-29T16:23:19",
+    "totals": {
+      "distinct_pairs": 58,
+      "n_checks": 1336505,
+      "n_collisions": 830961,
+      "n_pairs_total": 3305853
+    },
+    "wall_s": 608.5709674000027,
+    "workers": 12
+  },
+  "observed_pairs": [
+    "body:bucket_ground <-> tool:Bucket",
+    "body:buckets <-> link:forearm_link",
+    "body:buckets <-> link:wrist_1_link",
+    "body:buckets <-> link:wrist_2_link",
+    "body:buckets <-> link:wrist_3_link",
+    "body:buckets <-> tool:Bucket",
+    "body:front_wall <-> tool:Bucket",
+    "body:ground <-> link:forearm_link",
+    "body:ground <-> link:wrist_1_link",
+    "body:ground <-> link:wrist_2_link",
+    "body:ground <-> link:wrist_3_link",
+    "body:ground <-> tool:Bucket",
+    "body:left_player <-> link:forearm_link",
+    "body:left_player <-> link:wrist_1_link",
+    "body:left_player <-> link:wrist_2_link",
+    "body:left_player <-> link:wrist_3_link",
+    "body:left_player <-> tool:Bucket",
+    "body:left_wall <-> link:wrist_2_link",
+    "body:left_wall <-> link:wrist_3_link",
+    "body:left_wall <-> tool:Bucket",
+    "body:mid_player <-> link:forearm_link",
+    "body:mid_player <-> link:wrist_1_link",
+    "body:mid_player <-> link:wrist_2_link",
+    "body:mid_player <-> link:wrist_3_link",
+    "body:mid_player <-> tool:Bucket",
+    "body:pedestal <-> link:forearm_link",
+    "body:pedestal <-> link:upper_arm_link",
+    "body:pedestal <-> link:wrist_2_link",
+    "body:pedestal <-> link:wrist_3_link",
+    "body:pedestal <-> tool:Bucket",
+    "body:pyramid_ground <-> link:forearm_link",
+    "body:pyramid_ground <-> link:upper_arm_link",
+    "body:pyramid_ground <-> link:wrist_1_link",
+    "body:pyramid_ground <-> link:wrist_2_link",
+    "body:pyramid_ground <-> link:wrist_3_link",
+    "body:pyramid_ground <-> tool:Bucket",
+    "body:right_player <-> link:forearm_link",
+    "body:right_player <-> link:wrist_1_link",
+    "body:right_player <-> link:wrist_2_link",
+    "body:right_player <-> link:wrist_3_link",
+    "body:right_player <-> tool:Bucket",
+    "body:right_wall <-> link:wrist_2_link",
+    "body:right_wall <-> link:wrist_3_link",
+    "body:right_wall <-> tool:Bucket",
+    "link:base_link_inertia <-> link:forearm_link",
+    "link:base_link_inertia <-> link:wrist_2_link",
+    "link:base_link_inertia <-> link:wrist_3_link",
+    "link:base_link_inertia <-> tool:Bucket",
+    "link:forearm_link <-> link:shoulder_link",
+    "link:forearm_link <-> link:wrist_2_link",
+    "link:forearm_link <-> link:wrist_3_link",
+    "link:forearm_link <-> tool:Bucket",
+    "link:shoulder_link <-> link:wrist_3_link",
+    "link:shoulder_link <-> tool:Bucket",
+    "link:upper_arm_link <-> link:wrist_1_link",
+    "link:upper_arm_link <-> link:wrist_2_link",
+    "link:upper_arm_link <-> link:wrist_3_link",
+    "link:upper_arm_link <-> tool:Bucket"
+  ],
+  "per_link": {
+    "base": {
+      "collided_with_bodies": [],
+      "collided_with_links": [],
+      "collided_with_tools": []
+    },
+    "base_link": {
+      "collided_with_bodies": [],
+      "collided_with_links": [],
+      "collided_with_tools": []
+    },
+    "base_link_inertia": {
+      "collided_with_bodies": [],
+      "collided_with_links": [
+        "forearm_link",
+        "wrist_2_link",
+        "wrist_3_link"
+      ],
+      "collided_with_tools": [
+        "Bucket"
+      ]
+    },
+    "flange": {
+      "collided_with_bodies": [],
+      "collided_with_links": [],
+      "collided_with_tools": []
+    },
+    "forearm_link": {
+      "collided_with_bodies": [
+        "buckets",
+        "ground",
+        "left_player",
+        "mid_player",
+        "pedestal",
+        "pyramid_ground",
+        "right_player"
+      ],
+      "collided_with_links": [
+        "base_link_inertia",
+        "shoulder_link",
+        "wrist_2_link",
+        "wrist_3_link"
+      ],
+      "collided_with_tools": [
+        "Bucket"
+      ]
+    },
+    "shoulder_link": {
+      "collided_with_bodies": [],
+      "collided_with_links": [
+        "forearm_link",
+        "wrist_3_link"
+      ],
+      "collided_with_tools": [
+        "Bucket"
+      ]
+    },
+    "tool0": {
+      "collided_with_bodies": [],
+      "collided_with_links": [],
+      "collided_with_tools": []
+    },
+    "upper_arm_link": {
+      "collided_with_bodies": [
+        "pedestal",
+        "pyramid_ground"
+      ],
+      "collided_with_links": [
+        "wrist_1_link",
+        "wrist_2_link",
+        "wrist_3_link"
+      ],
+      "collided_with_tools": [
+        "Bucket"
+      ]
+    },
+    "wrist_1_link": {
+      "collided_with_bodies": [
+        "buckets",
+        "ground",
+        "left_player",
+        "mid_player",
+        "pyramid_ground",
+        "right_player"
+      ],
+      "collided_with_links": [
+        "upper_arm_link"
+      ],
+      "collided_with_tools": []
+    },
+    "wrist_2_link": {
+      "collided_with_bodies": [
+        "buckets",
+        "ground",
+        "left_player",
+        "left_wall",
+        "mid_player",
+        "pedestal",
+        "pyramid_ground",
+        "right_player",
+        "right_wall"
+      ],
+      "collided_with_links": [
+        "base_link_inertia",
+        "forearm_link",
+        "upper_arm_link"
+      ],
+      "collided_with_tools": []
+    },
+    "wrist_3_link": {
+      "collided_with_bodies": [
+        "buckets",
+        "ground",
+        "left_player",
+        "left_wall",
+        "mid_player",
+        "pedestal",
+        "pyramid_ground",
+        "right_player",
+        "right_wall"
+      ],
+      "collided_with_links": [
+        "base_link_inertia",
+        "forearm_link",
+        "shoulder_link",
+        "upper_arm_link"
+      ],
+      "collided_with_tools": []
+    }
+  },
+  "per_rigid_body": {
+    "bucket_ground": {
+      "collided_with_bodies": [],
+      "collided_with_links": [],
+      "collided_with_tools": [
+        "Bucket"
+      ],
+      "touch_bodies_candidates": [
+        "buckets",
+        "front_wall",
+        "ground",
+        "left_player",
+        "left_wall",
+        "mid_player",
+        "pedestal",
+        "pyramid_ground",
+        "right_player",
+        "right_wall"
+      ],
+      "touch_links_candidates": [
+        "base",
+        "base_link",
+        "base_link_inertia",
+        "flange",
+        "forearm_link",
+        "shoulder_link",
+        "tool0",
+        "upper_arm_link",
+        "wrist_1_link",
+        "wrist_2_link",
+        "wrist_3_link"
+      ]
+    },
+    "buckets": {
+      "collided_with_bodies": [],
+      "collided_with_links": [
+        "forearm_link",
+        "wrist_1_link",
+        "wrist_2_link",
+        "wrist_3_link"
+      ],
+      "collided_with_tools": [
+        "Bucket"
+      ],
+      "touch_bodies_candidates": [
+        "bucket_ground",
+        "front_wall",
+        "ground",
+        "left_player",
+        "left_wall",
+        "mid_player",
+        "pedestal",
+        "pyramid_ground",
+        "right_player",
+        "right_wall"
+      ],
+      "touch_links_candidates": [
+        "base",
+        "base_link",
+        "base_link_inertia",
+        "flange",
+        "shoulder_link",
+        "tool0",
+        "upper_arm_link"
+      ]
+    },
+    "front_wall": {
+      "collided_with_bodies": [],
+      "collided_with_links": [],
+      "collided_with_tools": [
+        "Bucket"
+      ],
+      "touch_bodies_candidates": [
+        "bucket_ground",
+        "buckets",
+        "ground",
+        "left_player",
+        "left_wall",
+        "mid_player",
+        "pedestal",
+        "pyramid_ground",
+        "right_player",
+        "right_wall"
+      ],
+      "touch_links_candidates": [
+        "base",
+        "base_link",
+        "base_link_inertia",
+        "flange",
+        "forearm_link",
+        "shoulder_link",
+        "tool0",
+        "upper_arm_link",
+        "wrist_1_link",
+        "wrist_2_link",
+        "wrist_3_link"
+      ]
+    },
+    "ground": {
+      "collided_with_bodies": [],
+      "collided_with_links": [
+        "forearm_link",
+        "wrist_1_link",
+        "wrist_2_link",
+        "wrist_3_link"
+      ],
+      "collided_with_tools": [
+        "Bucket"
+      ],
+      "touch_bodies_candidates": [
+        "bucket_ground",
+        "buckets",
+        "front_wall",
+        "left_player",
+        "left_wall",
+        "mid_player",
+        "pedestal",
+        "pyramid_ground",
+        "right_player",
+        "right_wall"
+      ],
+      "touch_links_candidates": [
+        "base",
+        "base_link",
+        "base_link_inertia",
+        "flange",
+        "shoulder_link",
+        "tool0",
+        "upper_arm_link"
+      ]
+    },
+    "left_player": {
+      "collided_with_bodies": [],
+      "collided_with_links": [
+        "forearm_link",
+        "wrist_1_link",
+        "wrist_2_link",
+        "wrist_3_link"
+      ],
+      "collided_with_tools": [
+        "Bucket"
+      ],
+      "touch_bodies_candidates": [
+        "bucket_ground",
+        "buckets",
+        "front_wall",
+        "ground",
+        "left_wall",
+        "mid_player",
+        "pedestal",
+        "pyramid_ground",
+        "right_player",
+        "right_wall"
+      ],
+      "touch_links_candidates": [
+        "base",
+        "base_link",
+        "base_link_inertia",
+        "flange",
+        "shoulder_link",
+        "tool0",
+        "upper_arm_link"
+      ]
+    },
+    "left_wall": {
+      "collided_with_bodies": [],
+      "collided_with_links": [
+        "wrist_2_link",
+        "wrist_3_link"
+      ],
+      "collided_with_tools": [
+        "Bucket"
+      ],
+      "touch_bodies_candidates": [
+        "bucket_ground",
+        "buckets",
+        "front_wall",
+        "ground",
+        "left_player",
+        "mid_player",
+        "pedestal",
+        "pyramid_ground",
+        "right_player",
+        "right_wall"
+      ],
+      "touch_links_candidates": [
+        "base",
+        "base_link",
+        "base_link_inertia",
+        "flange",
+        "forearm_link",
+        "shoulder_link",
+        "tool0",
+        "upper_arm_link",
+        "wrist_1_link"
+      ]
+    },
+    "mid_player": {
+      "collided_with_bodies": [],
+      "collided_with_links": [
+        "forearm_link",
+        "wrist_1_link",
+        "wrist_2_link",
+        "wrist_3_link"
+      ],
+      "collided_with_tools": [
+        "Bucket"
+      ],
+      "touch_bodies_candidates": [
+        "bucket_ground",
+        "buckets",
+        "front_wall",
+        "ground",
+        "left_player",
+        "left_wall",
+        "pedestal",
+        "pyramid_ground",
+        "right_player",
+        "right_wall"
+      ],
+      "touch_links_candidates": [
+        "base",
+        "base_link",
+        "base_link_inertia",
+        "flange",
+        "shoulder_link",
+        "tool0",
+        "upper_arm_link"
+      ]
+    },
+    "pedestal": {
+      "collided_with_bodies": [],
+      "collided_with_links": [
+        "forearm_link",
+        "upper_arm_link",
+        "wrist_2_link",
+        "wrist_3_link"
+      ],
+      "collided_with_tools": [
+        "Bucket"
+      ],
+      "touch_bodies_candidates": [
+        "bucket_ground",
+        "buckets",
+        "front_wall",
+        "ground",
+        "left_player",
+        "left_wall",
+        "mid_player",
+        "pyramid_ground",
+        "right_player",
+        "right_wall"
+      ],
+      "touch_links_candidates": [
+        "base",
+        "base_link",
+        "base_link_inertia",
+        "flange",
+        "shoulder_link",
+        "tool0",
+        "wrist_1_link"
+      ]
+    },
+    "pyramid_ground": {
+      "collided_with_bodies": [],
+      "collided_with_links": [
+        "forearm_link",
+        "upper_arm_link",
+        "wrist_1_link",
+        "wrist_2_link",
+        "wrist_3_link"
+      ],
+      "collided_with_tools": [
+        "Bucket"
+      ],
+      "touch_bodies_candidates": [
+        "bucket_ground",
+        "buckets",
+        "front_wall",
+        "ground",
+        "left_player",
+        "left_wall",
+        "mid_player",
+        "pedestal",
+        "right_player",
+        "right_wall"
+      ],
+      "touch_links_candidates": [
+        "base",
+        "base_link",
+        "base_link_inertia",
+        "flange",
+        "shoulder_link",
+        "tool0"
+      ]
+    },
+    "right_player": {
+      "collided_with_bodies": [],
+      "collided_with_links": [
+        "forearm_link",
+        "wrist_1_link",
+        "wrist_2_link",
+        "wrist_3_link"
+      ],
+      "collided_with_tools": [
+        "Bucket"
+      ],
+      "touch_bodies_candidates": [
+        "bucket_ground",
+        "buckets",
+        "front_wall",
+        "ground",
+        "left_player",
+        "left_wall",
+        "mid_player",
+        "pedestal",
+        "pyramid_ground",
+        "right_wall"
+      ],
+      "touch_links_candidates": [
+        "base",
+        "base_link",
+        "base_link_inertia",
+        "flange",
+        "shoulder_link",
+        "tool0",
+        "upper_arm_link"
+      ]
+    },
+    "right_wall": {
+      "collided_with_bodies": [],
+      "collided_with_links": [
+        "wrist_2_link",
+        "wrist_3_link"
+      ],
+      "collided_with_tools": [
+        "Bucket"
+      ],
+      "touch_bodies_candidates": [
+        "bucket_ground",
+        "buckets",
+        "front_wall",
+        "ground",
+        "left_player",
+        "left_wall",
+        "mid_player",
+        "pedestal",
+        "pyramid_ground",
+        "right_player"
+      ],
+      "touch_links_candidates": [
+        "base",
+        "base_link",
+        "base_link_inertia",
+        "flange",
+        "forearm_link",
+        "shoulder_link",
+        "tool0",
+        "upper_arm_link",
+        "wrist_1_link"
+      ]
+    }
+  },
+  "per_tool": {
+    "Bucket": {
+      "collided_with_bodies": [
+        "bucket_ground",
+        "buckets",
+        "front_wall",
+        "ground",
+        "left_player",
+        "left_wall",
+        "mid_player",
+        "pedestal",
+        "pyramid_ground",
+        "right_player",
+        "right_wall"
+      ],
+      "collided_with_links": [
+        "base_link_inertia",
+        "forearm_link",
+        "shoulder_link",
+        "upper_arm_link"
+      ],
+      "collided_with_tools": [],
+      "touch_bodies_candidates": [],
+      "touch_links_candidates": [
+        "base",
+        "base_link",
+        "flange",
+        "tool0",
+        "wrist_1_link",
+        "wrist_2_link",
+        "wrist_3_link"
+      ]
+    }
+  },
+  "scene": {
+    "body_names": [
+      "front_wall",
+      "ground",
+      "buckets",
+      "bucket_ground",
+      "left_wall",
+      "right_wall",
+      "pedestal",
+      "pyramid_ground",
+      "right_player",
+      "mid_player",
+      "left_player"
+    ],
+    "link_names": [
+      "base_link",
+      "base_link_inertia",
+      "shoulder_link",
+      "upper_arm_link",
+      "forearm_link",
+      "wrist_1_link",
+      "wrist_2_link",
+      "wrist_3_link",
+      "base",
+      "flange",
+      "tool0"
+    ],
+    "tool_names": [
+      "Bucket"
+    ]
+  }
+}

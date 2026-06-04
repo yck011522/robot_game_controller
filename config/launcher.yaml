@@ -2,4 +2,18 @@
 # omitted. The value is a bare name under config/profiles/ (no .yaml suffix).
 # See docs/architecture/CONFIG.md §1.
 
-default_profile: bus_smoke
+default_profile: dev_keyboard
+
+# Maps a logical process name to the python module the launcher spawns
+# for it. Default for anything not listed here is `apps.<name>`, which
+# covers the typical case of a process that owns bus topics and lives
+# under `apps/`. Add an entry here when the implementation lives
+# elsewhere (e.g. a pooled worker under `subsystems/`) so we don't have
+# to keep an empty `apps/<name>/__main__.py` wrapper just to satisfy
+# the spawn contract.
+#
+# For per-team processes (haptic_io.a, robot_io.b, ...) use the base
+# name (haptic_io, robot_io) -- the team suffix is stripped before the
+# lookup.
+process_modules:
+  collision_worker: subsystems.collision_worker

@@ -324,20 +324,28 @@ Suggested phases (to be refined):
   Publishing a `state.full` snapshot from the existing GameController
   is deferred to P2 (where GC, the sim robot, and the keyboard UI all
   come up together as the first end-to-end slice).
-- **P2 — First milestone: keyboard → sim robot → pygame dashboard,
-  single team, Play-state only.** Wire up:
-  - `apps/keyboard_haptic_sim/` — keyboard producer publishing
-    `telem.haptic.a` (replaces missing ESP32 boards).
-  - `subsystems/robot/SimRobotIO` — pybullet-backed; consumes
-    `cmd.robot.target.a`, publishes `telem.robot.actual.a`. URDF and
-    meshes lifted from `incoming_code/ur10e_robot/`.
-  - `subsystems/jogging/` — in-process inside GC for now, no collision
-    check yet.
-  - `apps/gamemaster_ui/` — minimal pygame window showing per-joint
-    dial vs actual (the visualizer from
-    `incoming_code/bullet_collision_keyboard_explorer.py`), game state,
-    and per-process Hz boxes.
-  - GameController locked to Play stage; state machine stubbed.
+- **P2 — First milestone: keyboard → sim robot → state.full, single team A.** ✅ Done.
+  - `apps/haptic_io/` (impl=`sim_keyboard` for the demo,
+    `sim_scripted` for tests) publishes `telem.haptic.a`.
+  - `subsystems/robot/sim_pybullet.py` + `apps/robot_io/` —
+    pybullet-backed (GUI by default, headless when
+    `tuning.robot.headless: true`); consumes
+    `cmd.robot.target.a`, publishes `telem.robot.actual.a` at 100 Hz.
+    URDF + meshes copied from `incoming_code/ur10e_robot/` into
+    `src/subsystems/robot/assets/` with `package://` URIs patched
+    relative.
+  - `subsystems/jogging/in_process.py` — in-process inside GC,
+    `req.collision_check` round-trip per tick.
+  - `apps/collision_broker/` (ROUTER/DEALER 5560/5561) +
+    `subsystems/collision_worker/` (headless pybullet REP, N
+    instances via `collision_workers.count`).
+  - `apps/game_controller/` — 50 Hz, pinned to Play stage, publishes
+    `cmd.robot.target.<team>` and a skeleton `state.full`.
+  - Launcher rewritten to spawn tier-ordered (bus → collision pool →
+    GC → per-team IO).
+  - Regression test: [tests/test_p2_demo.py](tests/test_p2_demo.py).
+  Manual `dev_keyboard` smoke (pygame window + pybullet GUI) is not
+  in CI — run it locally before starting P3.
   This is the smoke test the rest of the architecture hangs off of.
 - **P3 — Full game state machine.** Idle → Tutorial → Play → Conclusion
   → reset, with the playback-animation Idle, "all scrolled / timeout"
