@@ -1,0 +1,36 @@
+# Bus-smoke profile — only the XSUB/XPUB broker.
+# See docs/architecture/CONFIG.md §4.1.
+
+profile_name: bus_smoke
+description: "Bus broker only. First-light test for the 0MQ backbone."
+
+active_teams: []
+
+subsystems:
+  haptic_io:       {a: null, b: null}
+  robot_io:        {a: null, b: null}
+  jogging_planner: {a: null, b: null}
+
+  weight_sensor_io:          null
+  light_column_1_3:          null
+  light_column_4_5:          null
+  light_column_6_8:          null
+  display_broadcaster:       null
+  scoreboard_broadcaster:    null
+  bucket_controller:         null
+  button_controller:         null
+  safety_barrier_controller: null
+
+  collision_workers: {count: 0}
+  event_recorder:    null
+  gamemaster_ui:     null
+
+  bus_broker:        real
+
+tuning: {}
+hardware: {}
+recorder:
+  root: "./recordings"
+  enabled: false
+  keep_raw_audio: false
+  keep_raw_video: false

@@ -1,0 +1,5 @@
+# Launcher default. Selects which profile to load when `--profile` is
+# omitted. The value is a bare name under config/profiles/ (no .yaml suffix).
+# See docs/architecture/CONFIG.md §1.
+
+default_profile: bus_smoke

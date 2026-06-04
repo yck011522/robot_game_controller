@@ -314,11 +314,16 @@ Suggested phases (to be refined):
   CONFIG.md as `tuning.robot.max_velocity_deg_s` /
   `max_acceleration_deg_s2` — the stale fields in `src/` get deleted
   in the phase that replaces `jogging_controller`. No behavior change.
-- **P1 — Introduce ZMQ bus + YAML config skeleton.** Add `core/bus.py`,
-  publish a single `state.full` snapshot from the existing GameController
-  loop, keep everything else identical. Add `config/profiles/dev.yaml`
-  with an `active_teams: [a]` field even though only team A exists yet.
-  Tool `tools/bus_tap.py` prints traffic.
+- **P1 — ZMQ bus + YAML profile skeleton.** ✅ Done. `core/bus.py`,
+  `core/config.py`, the `bus_broker` and `launcher` apps, and
+  `tools/bus_tap.py` + `tools/bus_poke.py` all up.
+  `config/profiles/bus_smoke.yaml` (broker-only) confirms the 0MQ
+  backbone; broker emits 1 Hz heartbeats with the full
+  [BUS.md §6.9](docs/architecture/BUS.md#69-heartbeatproc) schema.
+  Automated regression: [tests/test_p1_bus_smoke.py](tests/test_p1_bus_smoke.py).
+  Publishing a `state.full` snapshot from the existing GameController
+  is deferred to P2 (where GC, the sim robot, and the keyboard UI all
+  come up together as the first end-to-end slice).
 - **P2 — First milestone: keyboard → sim robot → pygame dashboard,
   single team, Play-state only.** Wire up:
   - `apps/keyboard_haptic_sim/` — keyboard producer publishing

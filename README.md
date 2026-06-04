@@ -63,20 +63,34 @@ Python 3.12 via Miniforge, conda env named `game`, then
 
 ## Running
 
-The new launcher is not wired up yet; that lands in P1 of
-[docs/MIGRATION_PLAN.md](docs/MIGRATION_PLAN.md). Until then, the
-legacy single-process app still works:
+The new multi-process launcher is up as of
+[docs/MIGRATION_PLAN.md §P1](docs/MIGRATION_PLAN.md). The current
+slice spawns only the ZMQ bus broker; later phases hang the rest of
+the system off the same entry point.
+
+```powershell
+conda activate game
+# `apps.launcher` is at src/apps/launcher; set PYTHONPATH=src so -m can find it.
+$env:PYTHONPATH = "src"
+python -m apps.launcher --profile bus_smoke
+```
+
+In another terminal, tap the bus and poke a message at it:
+
+```powershell
+conda activate game
+$env:PYTHONPATH = "src"
+python tools/bus_tap.py                          # subscribes to everything
+python tools/bus_poke.py test.ping '{"hello":1}' # one-shot publish
+```
+
+Individual child processes are launchable by hand using the same
+CLI the launcher uses internally
+(see [docs/architecture/SUPERVISOR.md §3.1](docs/architecture/SUPERVISOR.md#31-launching-a-single-process-for-development)).
+
+The legacy single-process app still works too:
 
 ```powershell
 conda activate game
 python src/main.py
 ```
-
-Once P1 ships, the entry point becomes:
-
-```powershell
-python -m apps.launcher --profile config/profiles/<name>.yaml
-```
-
-with individual processes also launchable by hand per
-[docs/architecture/SUPERVISOR.md §3.1](docs/architecture/SUPERVISOR.md#31-launching-a-single-process-for-development).

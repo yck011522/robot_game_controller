@@ -98,29 +98,39 @@ launch path still works.
 
 ---
 
-### P1 — ZMQ bus + YAML profile skeleton
+### P1 — ZMQ bus + YAML profile skeleton ✅ DONE
 
-- Add `src/core/bus.py` with `publish()` / `recv()` helpers and the
-  envelope conventions from [BUS.md §3](architecture/BUS.md#3-wire-format).
-- Add `src/apps/bus_broker/` — XSUB/XPUB proxy process. Endpoints
-  from [BUS.md §2](architecture/BUS.md#2-endpoint-table).
-- Add `src/core/config.py` — load + validate a profile per
-  [CONFIG.md §5](architecture/CONFIG.md#5-validation).
-- Add `config/profiles/bus_smoke.yaml` (already specified in
-  [CONFIG.md §4.1](architecture/CONFIG.md#41-bus_smokeyaml--first-0mq-backbone-test)).
-- Add `tools/bus_tap.py` — SUB-all subscriber that pretty-prints
-  topic + body. Must keep up with 50 Hz state.full.
-- Add `tools/bus_poke.py` — one-shot publisher: `python -m
-  tools.bus_poke <topic> '<json>'`.
-- Add a minimal launcher (`src/apps/launcher/`) that, for now, only
-  spawns the bus broker and watches its heartbeat. No respawn logic
-  yet.
-- Existing `src/main.py` is untouched; this phase runs **alongside**
-  the legacy code, not replacing it.
+- `src/core/bus.py` — endpoint constants, `publish()` / `recv()` helpers,
+  envelope builder, PUB/SUB factories per
+  [BUS.md §3](architecture/BUS.md#3-wire-format).
+- `src/apps/bus_broker/` — XSUB/XPUB proxy on `:5550` / `:5551` with a
+  1 Hz `heartbeat.bus_broker` carrying the full BUS.md §6.9 schema.
+- `src/core/config.py` — YAML loader + minimal validator covering the
+  fields needed by `bus_smoke.yaml` (per-team subsystem null-vs-active
+  mismatch, `collision_workers.count >= 0`, `bus_broker` must be `real`).
+  Extends as later phases need more.
+- `config/profiles/bus_smoke.yaml` matching
+  [CONFIG.md §4.1](architecture/CONFIG.md#41-bus_smokeyaml--first-0mq-backbone-test);
+  `config/launcher.yaml` sets `default_profile: bus_smoke`.
+- `tools/bus_tap.py` — SUB-all subscriber, indented or `--compact`
+  output, filterable by `--topics`.
+- `tools/bus_poke.py` — one-shot publisher with a 200 ms slow-joiner
+  grace window.
+- `src/apps/launcher/` — spawns the broker via `[python, -m, apps.bus_broker, ...]`
+  matching the [SUPERVISOR.md §3](architecture/SUPERVISOR.md#3-spawn-contract)
+  CLI contract, sets `PYTHONPATH=src` so the `-m` invocation resolves,
+  waits for the broker's first heartbeat (10 s startup timeout), then
+  prints a 5 s status table (per-child heartbeat age, reported `loop_hz`,
+  bus-observed heartbeat rate). No respawn yet — that lands in P12.
+- `requirements.txt` gains `pyzmq>=26` and `PyYAML>=6`.
+- Legacy `src/main.py` is untouched.
 
-**Exit criterion:** `python -m apps.launcher --profile bus_smoke` →
-broker is up, `tools/bus_tap.py` connects and prints traffic from
-`tools/bus_poke.py`.
+**Exit criterion (met):** `python -m apps.launcher --profile bus_smoke`
+(with `PYTHONPATH=src`) brings the broker up, the broker emits a 1 Hz
+heartbeat with the full BUS.md §6.9 schema, `tools/bus_poke.py` and
+`tools/bus_tap.py` round-trip a custom topic through the broker, and
+Ctrl-C tears everything down. Automated regression test:
+[tests/test_p1_bus_smoke.py](../tests/test_p1_bus_smoke.py).
 
 ---
 
@@ -176,9 +186,12 @@ sim.
 
 **Exit criterion:** `--profile dev_keyboard` brings up the broker,
 the collision broker, 4 collision workers, GC, sim robot (pybullet
-GUI), and the keyboard input window. Pressing keys jogs the arm in
-the pybullet window in real time; configurations that would collide
-are refused by the planner (arm visibly stops at the boundary).
+GUI), and the keyboard input window. 
+Confirms FPS for all processes are up to spec.
+(Automated test and then ask developer to test manually) 
+Pressing keys jogs the arm in the pybullet window in real time;
+configurations that would collide are refused by the planner 
+(arm visibly stops at the boundary).
 Benchmark numbers are recorded.
 
 This is the first visible demo. Everything after extends it.
