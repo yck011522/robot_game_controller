@@ -22,10 +22,10 @@ Rationale:
 
 ## 2. Environment Management (Conda)
 
-**Use Miniforge/Conda** with a dedicated `robot_game` environment.
+**Use Miniforge/Conda** with a dedicated `game` environment.
 
 This has been tested on the development machine and confirmed working:
-- `robot_game` environment with Python 3.12.13
+- `game` environment with Python 3.12.13
 - `ur_rtde 1.6.3` prebuilt wheel installs and imports correctly
 - `pyserial 3.5` installs correctly
 - All three ur_rtde modules verified: `rtde_control`, `rtde_receive`, `rtde_io`
@@ -96,8 +96,8 @@ control script upload, and timing synchronization on top of it.
 
 **On the development machine** (this computer), export the environment:
 ```powershell
-conda activate robot_game
-conda env export -n robot_game > environment.yml
+conda activate game
+conda env export -n game > environment.yml
 ```
 
 Copy `environment.yml` to the deployment machine (via USB, network, or include in repo).
@@ -105,16 +105,16 @@ Copy `environment.yml` to the deployment machine (via USB, network, or include i
 **On the deployment machine**, create the environment from the export:
 ```powershell
 conda env create -f environment.yml
-conda activate robot_game
+conda activate game
 ```
 
 This reproduces the exact same Python version and package versions.
 
 > **Alternative — create from scratch** (if environment.yml is not available):
 > ```powershell
-> conda create -n robot_game python=3.12 -y
-> conda activate robot_game
-> pip install pyserial ur_rtde
+> conda create -n game python=3.12 -y
+> conda activate game
+> pip install -r requirements.txt
 > ```
 
 ### 4.3 Clone / Copy the Project
@@ -125,7 +125,7 @@ Or copy the project folder to a fixed path like `C:\robot_game_controller`.
 
 ### 4.4 Verify ur_rtde Installation
 ```powershell
-conda activate robot_game
+conda activate game
 python -c "import rtde_control; import rtde_receive; print('ur_rtde OK')"
 ```
 
@@ -144,12 +144,17 @@ python -c "import serial.tools.list_ports; [print(p) for p in serial.tools.list_
 
 ## 5. Auto-Start on Boot (Optional, Later)
 
-For production deployment, set up the game controller to launch automatically:
+For production deployment, set up the game controller to launch automatically.
+
+> The new multi-process launcher lands in P1 of [MIGRATION_PLAN.md](MIGRATION_PLAN.md);
+> until then this section targets the legacy single-process entry point at
+> `src/main.py`. Once the launcher ships, replace `python src\main.py` below with
+> `python -m apps.launcher --profile config\profiles\production.yaml`.
 
 1. Create a batch file `C:\robot_game_controller\start_game.bat`:
    ```bat
    @echo off
-   call C:\Users\<USER>\miniforge3\Scripts\activate.bat robot_game
+   call C:\Users\<USER>\miniforge3\Scripts\activate.bat game
    cd /d C:\robot_game_controller
    python src\main.py
    ```
@@ -161,7 +166,7 @@ For production deployment, set up the game controller to launch automatically:
 
 - [ ] Windows 11 machine provisioned
 - [ ] Miniforge installed
-- [ ] `robot_game` conda environment created from `environment.yml`
+- [ ] `game` conda environment created from `environment.yml`
 - [ ] `ur_rtde` and `pyserial` verified (`tests/test_ur_rtde_import.py` passes)
 - [ ] Project files deployed to fixed path
 - [ ] USB serial access to haptic boards verified

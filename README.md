@@ -1,105 +1,82 @@
 # Robot Game Controller
 
-A competitive game where two teams of six players each control a robotic arm through haptic feedback dials. Each player manipulates one joint of the robot using a custom FOC-controlled motor that acts as both an absolute position input and a haptic feedback device.
+A two-team arcade installation. Each team has six players turning haptic
+dials that jog one joint of a UR10e robotic arm; balls are scooped from
+a shared pool into per-team buckets and weighed for score. The system
+runs 24/7 on a single Windows PC plus a Vision PC, an Audio PC, and a
+handful of Raspberry Pi display nodes.
 
-## Concept
+This repository is mid-migration from a single-process threaded
+prototype to a multi-process ZeroMQ-based architecture. The legacy
+code under `src/*.py` (top level) still runs; the new code is being
+built up under `src/{core,subsystems,apps}/` one phase at a time per
+[docs/MIGRATION_PLAN.md](docs/MIGRATION_PLAN.md).
 
-- **Two teams**, each with **six players**
-- Each team controls a **6-DOF robotic arm**
-- Each player turns a **haptic dial** that commands one joint of the robot
-- The dials provide **force feedback** so players can feel:
-  - Resistance when they command faster than the robot can move
-  - Hard stops and kick vibrations when hitting joint limits or collision zones
-  - The robot "catching up" to their commanded position
-
-## Hardware
-
-### Haptic Controllers
-
-Each dial is a brushless motor driven by a Field-Oriented Control (FOC) loop running at ~500–600 Hz on an ESP32 board. Two motors are paired per ESP32 board, for a total of **3 boards per team** (6 joints).
-
-The ESP32 controllers communicate over USB serial at 230400 baud. The host sends position targets and angle bounds at 50 Hz, and receives telemetry (angle, speed, torque, FOC rate) at 50 Hz. See [HAPTIC_PROTOCOL.md](HAPTIC_PROTOCOL.md) for the full communication protocol.
-
-### Robotic Arm
-
-Each team's robotic arm has 6 joints. The game controller host reads the haptic dials, processes the inputs through a safety pipeline, and sends the filtered commands to the robot.
-
-## Software Architecture
+## Where things live
 
 ```
-┌────────────────────────── Main Game Loop (~50 Hz) ──────────────────────────┐
-│                                                                              │
-│  1. Read haptic dials    ← HapticSystem     (self-threaded, register model) │
-│  2. Read robot position  ← RobotInterface   (self-threaded, register model) │
-│  3. Jog processing       ← JoggingController (called each tick, stateful)   │
-│  4. Motion planning      ← MotionPlanner     (called each tick, collision)  │
-│  5. Send to robot        ← RobotInterface.set_target()                      │
-│  6. Haptic feedback      ← HapticSystem.set_control()                       │
-│  7. Scoring / display    ← ScoringSystem, DisplaySystem (self-threaded)     │
-│                                                                              │
-└──────────────────────────────────────────────────────────────────────────────┘
+src/                          # Source.
+  core/        subsystems/    # New architecture (currently scaffolds; populated through P1+).
+  apps/                       # New architecture.
+  main.py, game_controller.py, gamemaster_ui.py, ...   # Legacy single-process code, still runnable.
+config/profiles/              # YAML profiles for the new launcher (CONFIG.md).
+docs/                         # All documentation.
+  architecture/               # Confirmed target architecture (read in this order):
+    OVERVIEW.md  SYSTEM_MAP.md  BUS.md  CONFIG.md  SUPERVISOR.md  LOGGING.md
+  MIGRATION_PLAN.md           # Phased path from legacy to target.
+  GAME_MECHANICS.md           # What the game is.
+  HAPTIC_PROTOCOL.md          # ESP32 dial firmware wire protocol.
+  NETWORK_PROTOCOL.md         # UDP payload to the RPi display nodes (unchanged from legacy).
+  LED_COLUMN.md               # Light-column hardware (wiring, addressing, RS-485).
+  DEPLOYMENT.md               # Windows + Conda setup on the deployment PC.
+incoming_code/                # Third-party assets to be lifted into src/ by upcoming phases.
+  ur10e_robot/                # URDF + meshes consumed by SimRobotIO and CollisionWorker (P2).
+  rtde_core.py                # Becomes the real RobotIO impl (P3).
+archive/                      # Reference-only; not on any import path. See archive/README.md.
+tests/                        # Real pytest tests live here. Ad-hoc probes are in archive/.
+tools/                        # Operator scripts (bus tap, view game state, ...).
+NEXT_STEPS.md                 # Live planning document — read this for the current state of the migration.
 ```
 
-**I/O subsystems** (haptic controllers, robot arm, load cells, displays) are each self-threaded with a register model — they manage their own communication timing internally. The main game loop reads and writes to them as shared registers.
+## Reading order for a new contributor
 
-**Processing stages** (jogging controller, motion planner) are stateful processors called synchronously by the main game loop each tick. They are not threaded — game logic stays sequential and easy to reason about.
+1. This file.
+2. [docs/architecture/OVERVIEW.md](docs/architecture/OVERVIEW.md) — the
+   system in one paragraph plus the four ideas everything else follows
+   from.
+3. [docs/architecture/SYSTEM_MAP.md](docs/architecture/SYSTEM_MAP.md) —
+   what processes exist and how they connect.
+4. [docs/MIGRATION_PLAN.md](docs/MIGRATION_PLAN.md) — what is being
+   built next.
+5. [NEXT_STEPS.md](NEXT_STEPS.md) — current status, feature inventory,
+   live decisions.
 
-### Haptic Controllers (`HapticSystem`)
+For domain-specific work, jump directly to the relevant doc under
+[docs/](docs/).
 
-See [HAPTIC_PROTOCOL.md](HAPTIC_PROTOCOL.md) for the ESP32 communication protocol. The `HapticSystem` auto-discovers controllers by USB VID/PID, manages reader/writer threads per board, and provides a motor-ID-based register interface.
+## Setup
 
-### Robot Arm (`RobotInterface`)
+See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the supported Python
+version, Conda environment, and install steps. Short version: Windows,
+Python 3.12 via Miniforge, conda env named `game`, then
+`pip install -r requirements.txt`.
 
-Each team's robotic arm is a UR robot communicated with via the **RTDE (Real-Time Data Exchange)** protocol library. RTDE supports up to 500 Hz bidirectional communication. The `RobotInterface` runs its own thread at the RTDE native rate and exposes a register model:
-- **Read**: current joint positions (updated at up to 500 Hz internally)
-- **Write**: target joint positions (sent at up to 500 Hz internally)
+## Running
 
-The main game loop reads the current robot position early in each tick and writes the planned target at the end — decoupled from the RTDE update rate.
+The new launcher is not wired up yet; that lands in P1 of
+[docs/MIGRATION_PLAN.md](docs/MIGRATION_PLAN.md). Until then, the
+legacy single-process app still works:
 
-### Jogging Controller
+```powershell
+conda activate game
+python src/main.py
+```
 
-Processes raw dial inputs into throttled joint targets: unit conversion → gearing → static range clamping → rate limiting. Stateful (tracks rate-limited positions). Does not handle collision detection.
+Once P1 ships, the entry point becomes:
 
-### Motion Planner
+```powershell
+python -m apps.launcher --profile config/profiles/<name>.yaml
+```
 
-Synthesizes all 6 joint targets with collision awareness. Takes the throttled targets from the jogging controller, checks for self-collision and environment collision, and produces the final planned target for each joint. May constrain some joints while allowing others to move freely.
-
-### Haptic Feedback Loop
-
-The planned position (or the robot's actual position) is sent back to the haptic controllers as a tracking target. The ESP32's PD controller creates a restoring force, so players feel:
-
-- **Tracking resistance** — When the player leads ahead of the rate-limited target
-- **Bounds restoration + OOB kick** — When the player pushes past a joint limit or into a detected collision zone
-
-## Current Status
-
-Implemented in the current repository:
-
-1. **Serial communication layer** — multi-board discovery, telemetry, reconnect, control writes
-2. **Input processing pipeline** — gearing, clamping, rate limiting
-3. **Haptic feedback loop** — closed-loop feedback from simulated/robot position back to the dials
-4. **Simulated robot arm** — threaded mock robot with simple joint-space dynamics
-5. **Autonomous game loop skeleton** — 5-stage state machine, countdowns, idle-to-start detection, manual override, software e-stop
-6. **Game Master UI** — Tkinter monitoring/control panel with simulator tools
-7. **UDP state publisher** — broadcast game state for remote display nodes
-8. **Scoring pipeline (simulated/live interface)** — score calculation and simulated bucket weights
-
-Still outstanding:
-
-1. **Real robot arm integration** — connect to actual UR robot / RTDE path
-2. **Collision-aware motion planning** — replace the current pass-through `planned_deg = throttled_deg`
-3. **Real weight sensor integration** — implement the RS-485 load-cell protocol
-4. **Runtime parameter plumbing** — ensure all UI controls reconfigure the live system immediately
-5. **Hardware validation and tuning** — finish end-to-end test coverage and record chosen settings
-6. **Profiles / persistence / logging** — presets, session logs, high-score persistence, analytics
-
-## Documentation
-
-- [GAME_MECHANICS.md](GAME_MECHANICS.md) — Game rules, team structure, scoring, and match flow
-- [HAPTIC_PROTOCOL.md](HAPTIC_PROTOCOL.md) — ESP32 haptic controller communication protocol
-- [NETWORK_PROTOCOL.md](NETWORK_PROTOCOL.md) — UDP game state broadcast protocol for display nodes
-- [LED_COLUMN.md](LED_COLUMN.md) — LED arena hardware documentation (wiring, addressing, RS485)
-- [LED_QUICKSTART.md](LED_QUICKSTART.md) — LED control system developer quickstart
-- [GAMEMASTER_UI_FEATURES.md](GAMEMASTER_UI_FEATURES.md) — UI feature checklist and implementation notes
-- [TESTING_PLAN.md](TESTING_PLAN.md) — Phased testing plan and test results log
-- [DEPLOYMENT_PLAN.md](DEPLOYMENT_PLAN.md) — Production machine setup (Windows 11, Conda, dependencies)
+with individual processes also launchable by hand per
+[docs/architecture/SUPERVISOR.md §3.1](docs/architecture/SUPERVISOR.md#31-launching-a-single-process-for-development).

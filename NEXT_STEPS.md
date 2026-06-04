@@ -219,23 +219,26 @@ These were settled across the planning conversation on 2026-06-01 and
 
 Order of reading for a fresh session:
 
-1. **[docs/architecture/SYSTEM_MAP.md](docs/architecture/SYSTEM_MAP.md)** — the
+1. **[README.md](README.md)** — entry point and doc index.
+2. **[docs/architecture/OVERVIEW.md](docs/architecture/OVERVIEW.md)** — one-paragraph
+   system summary and the four ideas that drive every other architecture doc.
+3. **[docs/architecture/SYSTEM_MAP.md](docs/architecture/SYSTEM_MAP.md)** — the
    process catalog, mermaid diagram, edge table, pybullet respawn pattern,
    bus topology, open items. **The authoritative reference for the target
    architecture.**
-2. **NEXT_STEPS.md** (this file) — decisions and feature inventory.
-3. Existing root markdown files (slated for cleanup, but still describe
-   current behavior):
-   - [README.md](README.md)
-   - [game_mechanics.md](game_mechanics.md)
-   - [GAMEMASTER_UI_FEATURES.md](GAMEMASTER_UI_FEATURES.md)
-   - [NETWORK_PROTOCOL.md](NETWORK_PROTOCOL.md) — keep this protocol; RPi
-     displays are unchanged.
-   - [PROTOCOL.md](PROTOCOL.md)
-   - [LED_COLUMN.md](LED_COLUMN.md)
-   - [LED_QUICKSTART.md](LED_QUICKSTART.md)
-   - [TESTING_PLAN.md](TESTING_PLAN.md)
-4. Current source (to map onto the target architecture):
+4. **[docs/MIGRATION_PLAN.md](docs/MIGRATION_PLAN.md)** — phased path from
+   legacy single-process code to the target architecture. Read this to find
+   the current phase.
+5. **NEXT_STEPS.md** (this file) — live decisions and feature inventory.
+6. Domain references (kept, now under `docs/`):
+   - [docs/GAME_MECHANICS.md](docs/GAME_MECHANICS.md)
+   - [docs/NETWORK_PROTOCOL.md](docs/NETWORK_PROTOCOL.md) — UDP payload to
+     RPi displays; unchanged by the migration.
+   - [docs/HAPTIC_PROTOCOL.md](docs/HAPTIC_PROTOCOL.md) — ESP32 dial wire
+     protocol; unchanged by the migration.
+   - [docs/LED_COLUMN.md](docs/LED_COLUMN.md)
+   - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
+7. Current source (legacy, to map onto the target architecture):
    - [src/main.py](src/main.py) — current single-process launcher (threads).
    - [src/game_controller.py](src/game_controller.py) — current GC + game loop.
    - [src/game_settings.py](src/game_settings.py) — current shared state object.
@@ -251,14 +254,15 @@ Order of reading for a fresh session:
    - [src/led_controller.py](src/led_controller.py)
    - [src/enumerate_usb.py](src/enumerate_usb.py)
    - [src/port_registry.py](src/port_registry.py)
-5. Code to integrate (currently outside `src/`):
+8. Code to integrate (currently outside `src/`):
    - [incoming_code/rtde_core.py](incoming_code/rtde_core.py) — UR10e
-     RTDE bridge → becomes `RobotIO` process.
-   - [incoming_code/bullet_collision_keyboard_explorer.py](incoming_code/bullet_collision_keyboard_explorer.py)
-     — pybullet sandbox → extract collision logic into `CollisionWorker`.
+     RTDE bridge → becomes the real `RobotIO` impl in P3.
    - [incoming_code/ur10e_robot/](incoming_code/ur10e_robot/) — URDF +
-     meshes for the collision worker.
-   - [incoming_code/Robot Control Code Implementation Guideline.md](incoming_code/Robot%20Control%20Code%20Implementation%20Guideline.md)
+     meshes for the collision worker and SimRobotIO (consumed in P2).
+   - [archive/bullet_collision_keyboard_explorer.py](archive/bullet_collision_keyboard_explorer.py)
+     — pybullet sandbox; collision logic + viewer extracted in P2.
+   - [archive/bullet_collision_keyboard_explorer_design.md](archive/bullet_collision_keyboard_explorer_design.md)
+     — design spec for the sandbox above; reference reading for P2.
 
 ---
 
@@ -299,15 +303,17 @@ via YAML. The phases below build up to and past that milestone.
 
 Suggested phases (to be refined):
 
-- **P0 — Repo reshape.** Move root `.md` files into `docs/` (rewriting
-  the stale ones in the same pass), move/archive
-  `incoming_code/bullet_collision_keyboard_explorer.py` and the old
-  `tests/test_*.py` exploration scripts into `archive/`, create
-  `src/{core,subsystems,apps}/` skeleton. The old
+- **P0 — Repo reshape.** ✅ Done. Kept root `.md` files moved into
+  `docs/`, stale ones deleted (full list in
+  [docs/MIGRATION_PLAN.md §P0](docs/MIGRATION_PLAN.md#p0--repo-reshape-no-behavior-change--done)),
+  `incoming_code/bullet_collision_keyboard_explorer.py` and its design
+  spec moved to `archive/`, the three exploration `tests/test_*.py`
+  scripts moved to `archive/`, `src/{core,subsystems,apps}/` skeleton +
+  `config/profiles/` created. The old
   `jogging_controller` velocity/acceleration knobs already live in
   CONFIG.md as `tuning.robot.max_velocity_deg_s` /
-  `max_acceleration_deg_s2` — no extra renaming work, just delete the
-  stale fields in `src/`. No behavior change.
+  `max_acceleration_deg_s2` — the stale fields in `src/` get deleted
+  in the phase that replaces `jogging_controller`. No behavior change.
 - **P1 — Introduce ZMQ bus + YAML config skeleton.** Add `core/bus.py`,
   publish a single `state.full` snapshot from the existing GameController
   loop, keep everything else identical. Add `config/profiles/dev.yaml`
