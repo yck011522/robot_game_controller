@@ -17,7 +17,12 @@ from core.proc import Proc, banner  # noqa: E402
 from subsystems.jogging.in_process import InProcessPlanner  # noqa: E402
 
 
-TICK_HZ = 50.0  # BUS.md 禮5.3 / GAMEMASTER_UI
+# game_controller ticks at a fixed rate. Each tick blocks on the
+# forward-collision certify (~worker compute + ZMQ round-trip), then
+# publishes one cmd.robot.target.<team> per team and one state.full.
+# 60 Hz gives ~16 ms per tick, which is comfortably above the
+# forward_timeout_ms budget and keeps state.full at a recordable rate.
+TICK_HZ = 60.0
 
 
 def main(argv: list[str] | None = None) -> int:

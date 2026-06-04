@@ -56,14 +56,29 @@ tuning:
   collision:
     check_self:  true
     check_world: true
-    # Forward-path bundle is 12 configs * ~1 ms/config; a worker pool
-    # of 4 keeps every request under ~12 ms in steady state. The
-    # planner blocks the GC tick while it waits for this reply, so a
-    # generous-but-tight cap keeps GC near its 50 Hz target. Larger
-    # values (e.g. 80) silently throttle GC to 12 Hz.
-    timeout_ms:  18
+    # Hard timeout for the forward-path certify. If the worker pool
+    # doesn't have ALL chunks back in this window, the planner stops
+    # the robot (path_scalar=0). No last-known-good fallback. Tune
+    # together with tuning.jogging.forward_bundle_size below.
+    timeout_ms:  40
     retries:     2
     bundle_size: 1
+  jogging:
+    # Forward-path safety check (HARD gate; must complete every tick).
+    n_forward_steps:     12   # how far ahead to scan, in step units
+    forward_step_deg:     1.0 # joint-space spacing per step
+    path_cutoff_deg:      3.0 # below this distance -> path_scalar=0
+    # Bundle size: how many configs per worker request. With 12 steps:
+    #   1 -> 12 tiny requests (max parallelism, max ZMQ overhead)
+    #   3 -> 4 requests of 3 configs each (good fit for 4 workers)
+    #   12 -> 1 monolithic request (no parallelism)
+    # Tune this against worker count + observed reply latency.
+    forward_bundle_size:  1
+    # Proximity-slowdown probes (SOFT; round-robin, async).
+    probe_half_deg:      10
+    prox_floor:           0.6
+    # Fallback if tuning.collision.timeout_ms is absent.
+    forward_timeout_ms:  40
   game:
     force_stage: play
 
