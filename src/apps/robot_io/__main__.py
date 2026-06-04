@@ -63,6 +63,7 @@ def main(argv: list[str] | None = None) -> int:
         nonlocal next_telem, seq
         # Drain every pending cmd; keep only the last (latest wins).
         latest_q = None
+        latest_clamps = None
         events = dict(poller.poll(1))
         if sub in events:
             while True:
@@ -71,10 +72,15 @@ def main(argv: list[str] | None = None) -> int:
                     q = body.get("q_target_rad")
                     if isinstance(q, list):
                         latest_q = q
+                    c = body.get("clamps")
+                    if isinstance(c, dict):
+                        latest_clamps = c
                 except zmq.Again:
                     break
         if latest_q is not None:
             impl.set_target([float(x) for x in latest_q])
+        if latest_clamps is not None and hasattr(impl, "set_clamps"):
+            impl.set_clamps(latest_clamps)
 
         impl.maybe_step()
 

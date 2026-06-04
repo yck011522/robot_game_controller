@@ -31,7 +31,7 @@ subsystems:
   safety_barrier_controller: null
 
   collision_workers:
-    count: 4
+    count: 8
 
   event_recorder: null
   gamemaster_ui: null
@@ -43,21 +43,25 @@ tuning:
     bounds_deg_min: [-180, -180, -180, -180, -180, -180]
     bounds_deg_max: [ 180,  180,  180,  180,  180,  180]
   robot:
-    max_velocity_deg_s:      [180, 180, 180, 180, 180, 180]
-    max_acceleration_deg_s2: [690, 690, 690, 690, 690, 690]
+    max_velocity_deg_s:      [30, 30, 30, 60, 60, 60]
+    max_acceleration_deg_s2: [50, 50, 50, 100, 200, 200]
     headless: false
     # Home / sim-start pose. The curated scene's `robot_configuration`
     # is zero on every joint, which sits inside the pedestal -> the
-    # planner would report an in-collision state from frame 0. The
-    # explorer's INITIAL_POS_DEG = [0, -90, 90, 0, 0, 0] is the
-    # collision-free "ready" pose we start from instead. With
-    # dial=0 the jogging planner outputs exactly this pose; holding a
-    # key offsets from here via the gear ratio.
+    # planner would report an in-collision state from frame 0.
+    # [0, 90, 90, 0, 0, 0] is the collision-free "ready" pose we start
+    # from instead. With dial=0 the jogging planner outputs exactly
+    # this pose; holding a key offsets from here via the gear ratio.
     initial_pose_deg: [0.0, -90.0, 90.0, 0.0, 0.0, 0.0]
   collision:
     check_self:  true
     check_world: true
-    timeout_ms:  80
+    # Forward-path bundle is 12 configs * ~1 ms/config; a worker pool
+    # of 4 keeps every request under ~12 ms in steady state. The
+    # planner blocks the GC tick while it waits for this reply, so a
+    # generous-but-tight cap keeps GC near its 50 Hz target. Larger
+    # values (e.g. 80) silently throttle GC to 12 Hz.
+    timeout_ms:  18
     retries:     2
     bundle_size: 1
   game:

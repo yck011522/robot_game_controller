@@ -50,10 +50,19 @@ def main(argv: list[str] | None = None) -> int:
             "sub_haptic": sub,
             "sub_actual": actual_sub,
             "last_dial": [0.0] * 6,
-            "last_q": [0.0] * 6,
-            "last_target": [0.0] * 6,
+            # last_q starts as None; planner only re-seeds once a real
+            # telem.robot.actual.<team> has actually arrived. Without
+            # this guard the very first tick would seed the planner's
+            # integrator with all-zero (the default) and the robot
+            # would snap to the in-pedestal pose.
+            "last_q": None,
+            "last_target": list(planner.q_cur),
             "last_collision": False,
             "last_first_hit": None,
+            "last_path_scalar": 1.0,
+            "last_prox_scalar": 1.0,
+            "last_final_scalar": 1.0,
+            "last_tick_t": time.perf_counter(),
         }
     banner(proc.proc, f"teams={active_teams} collision_check={collision_enabled}")
 
@@ -69,13 +78,40 @@ def main(argv: list[str] | None = None) -> int:
                           s.update(last_q=b.get("q_rad", s["last_q"])))
 
             planner: InProcessPlanner = st["planner"]
-            q_target, info = planner.plan(st["last_dial"])
+            # Only re-seed once we've actually received a measured
+            # pose; otherwise the planner keeps its home pose.
+            if st["last_q"] is not None:
+                planner.seed(st["last_q"])
+
+            now = time.perf_counter()
+            dt = now - st["last_tick_t"]
+            st["last_tick_t"] = now
+            # Cap dt: a long stall (debugger, GC pause) shouldn't push
+            # a huge accel-clamped velocity jump on the next tick.
+            if dt > 0.1:
+                dt = 0.1
+
+            q_target, info = planner.plan(
+                dial_pos_rad=st["last_dial"],
+                dt=dt,
+            )
             st["last_target"] = q_target
             st["last_collision"] = info.get("collision", False)
             st["last_first_hit"] = info.get("collision_first_hit")
+            st["last_path_scalar"] = float(info.get("path_scalar", 1.0))
+            st["last_prox_scalar"] = float(info.get("prox_scalar", 1.0))
+            st["last_final_scalar"] = float(info.get("final_scalar", 1.0))
 
             env = bus.make_envelope(p.proc)
-            env.update({"team": team, "q_target_rad": q_target})
+            env.update({
+                "team": team,
+                "q_target_rad": q_target,
+                "clamps": {
+                    "path": st["last_path_scalar"],
+                    "prox": st["last_prox_scalar"],
+                    "final": st["last_final_scalar"],
+                },
+            })
             bus.publish(pub, f"cmd.robot.target.{team}", env)
 
         # Emit a (very small) state.full snapshot per BUS.md 禮6.1.
@@ -88,7 +124,7 @@ def main(argv: list[str] | None = None) -> int:
                 team: {
                     "robot": {
                         "q_target_rad": st["last_target"],
-                        "q_rad": st["last_q"],
+                        "q_rad": st["last_q"] if st["last_q"] is not None else [0.0] * 6,
                     },
                     "haptic": {
                         "dial_pos_rad": st["last_dial"],
@@ -96,6 +132,9 @@ def main(argv: list[str] | None = None) -> int:
                     "collision": {
                         "in_collision": st["last_collision"],
                         "first_hit": st["last_first_hit"],
+                        "path_scalar": st["last_path_scalar"],
+                        "prox_scalar": st["last_prox_scalar"],
+                        "final_scalar": st["last_final_scalar"],
                     },
                 } for team, st in teams.items()
             },

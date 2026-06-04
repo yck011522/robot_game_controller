@@ -65,6 +65,22 @@ class SimPybulletRobot:
         except Exception:
             pass
 
+        # GUI-only HUD: overlay the jogging-planner clamps so the user
+        # can see path/prox/final scalars updating live while jogging.
+        # In headless (DIRECT) mode we skip the pybullet call entirely;
+        # addUserDebugText is a no-op without a window.
+        self._headless = headless
+        self._debug_text_id = -1
+        self._last_clamps: dict = {"path": 1.0, "prox": 1.0, "final": 1.0}
+        if not headless:
+            import pybullet as _pb
+            self._pb = _pb
+            self._client_id = self._client.client_id
+            self._render_clamps()
+        else:
+            self._pb = None
+            self._client_id = None
+
     @property
     def scene_stats(self) -> dict:
         return self._scene_stats
@@ -91,6 +107,48 @@ class SimPybulletRobot:
     def maybe_step(self) -> None:
         # Teleport mode: nothing to integrate.
         return
+
+    def set_clamps(self, clamps: dict) -> None:
+        """Update the GUI overlay with the latest planner scalars.
+
+        Called by robot_io with the `clamps` block off each
+        cmd.robot.target.<team> message. Headless mode is a no-op.
+        """
+        if self._headless:
+            return
+        self._last_clamps = {
+            "path": float(clamps.get("path", self._last_clamps["path"])),
+            "prox": float(clamps.get("prox", self._last_clamps["prox"])),
+            "final": float(clamps.get("final", self._last_clamps["final"])),
+        }
+        self._render_clamps()
+
+    def _render_clamps(self) -> None:
+        if self._headless or self._pb is None:
+            return
+        c = self._last_clamps
+        text = "path={:.2f}  prox={:.2f}  final={:.2f}".format(
+            c["path"], c["prox"], c["final"]
+        )
+        # Color tints with the final scalar: green (clear) -> red (blocked).
+        f = c["final"]
+        color = [1.0 - f, f, 0.2]
+        kwargs = dict(
+            textColorRGB=color,
+            textSize=1.4,
+            physicsClientId=self._client_id,
+        )
+        # Anchor in world space ~1.6 m above origin so it sits over
+        # the robot regardless of camera. replaceItemUniqueId keeps it
+        # flicker-free on every refresh.
+        if self._debug_text_id >= 0:
+            kwargs["replaceItemUniqueId"] = self._debug_text_id
+        try:
+            self._debug_text_id = self._pb.addUserDebugText(
+                text, [0.0, 0.0, 1.6], **kwargs
+            )
+        except Exception:
+            pass
 
     def read_state(self) -> Tuple[List[float], List[float]]:
         return list(self._q), list(self._qd)
