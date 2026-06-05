@@ -4,7 +4,7 @@ Phased path from the current single-process threaded codebase to the
 target multi-process architecture. Each phase ends with a working
 system the user can stop at and still demo or test.
 
-Status: **DRAFT.** Last reviewed: 2026-06-04.
+Status: **DRAFT.** Last reviewed: 2026-06-05.
 
 References:
 [OVERVIEW.md](architecture/OVERVIEW.md),
@@ -204,20 +204,21 @@ dial-driven joint target propagates through the planner (with
 collision check enabled) to the sim robot, and `state.full` carries
 the per-team summary.
 
-**Deferred to follow-up:**
-- **P2-bench** — collision-pool throughput sweep (bundle size N ×
-  worker count W). The framework is in place; the sweep itself is
-  better run on the target hardware once it exists.
-- Manual `dev_keyboard` smoke (real pygame window + pybullet GUI) is
-  not gated by CI; run it locally before P3.
-- Trajectory-time collision check (between current pose and target,
-  not just at the target) — current impl only checks the requested
-  pose, matching SUPERVISOR.md cross-cutting decision to defer
-  swept-volume checking until P3.
+**P2 follow-up closure (2026-06-05):**
+- **P2-bench completed.** `tools/benchmark_collision_workers.py` is in
+  place and the current sweep outputs live in `tools/` as
+  `benchmark_collision_workers_dev_keyboard_*.csv/.json`.
+- Manual `dev_keyboard` smoke was rerun locally in the validated
+  `game` conda environment; the launcher reached the full expected
+  child set with the pygame keyboard window and the pybullet GUI up.
+- The planner already performs forward-path certification across N
+  steps in the requested motion direction, so the earlier
+  trajectory-time collision-check note is no longer open.
+- **Next active phase:** P3 real-robot bring-up on **team B**.
 
 ---
 
-### P3 — Real UR10e on team A (still keyboard-driven)
+### P3 — Real UR10e on team B (still keyboard-driven)
 
 Same system as P2, but with the actual robot in place of the sim.
 Keyboard UI and pybullet viewer both stay — the viewer now mirrors
@@ -225,28 +226,28 @@ the real robot's actual joint angles so you can see the model match
 the hardware.
 
 - `src/subsystems/robot_io/real_rtde.py` built from
-  `incoming_code/rtde_core.py`. Consumes `cmd.robot.target.a`,
-  publishes `telem.robot.actual.a` at 100 Hz.
+  `incoming_code/rtde_core.py`. Consumes `cmd.robot.target.b`,
+  publishes `telem.robot.actual.b` at 100 Hz.
 - **Startup position sync (critical).** Before publishing any
   `state.full` with a non-null `q_target`, GC must seed its internal
   target from the robot's current `actual_q`. Sequence:
   1. RobotIO connects to RTDE and waits for the first valid
      `actual_q` sample.
-  2. RobotIO publishes one `telem.robot.actual.a` snapshot.
+  2. RobotIO publishes one `telem.robot.actual.b` snapshot.
   3. GC sees that snapshot, copies `q_actual` into its internal
      target, and only then begins forwarding planner output.
-  4. The keyboard UI also reads back `telem.robot.actual.a` on
+  4. The keyboard UI also reads back `telem.robot.actual.b` on
      startup and zeroes its per-key deltas against that position.
   Net effect: turning the system on does not snap the robot to
   `[0,0,0,0,0,0]`. If RobotIO can't read `actual_q` within 5 s, it
   exits non-zero (→ circuit breaker, see SUPERVISOR.md §6).
 - `sim_pybullet` impl from P2 stays as the dev-time alternative;
   this phase only adds `real_rtde` and a new profile
-  `dev_one_robot.yaml` selecting `robot_io.a: real_rtde`. The
+  `dev_one_robot.yaml` selecting `robot_io.b: real_rtde`. The
   pybullet **viewer** keeps running on the same machine, but as a
-  passive subscriber to `telem.robot.actual.a` rather than an
+  passive subscriber to `telem.robot.actual.b` rather than an
   authoritative robot — i.e. a third impl `viewer_only` is added
-  for `robot_io.a` or, simpler, the viewer is folded into a small
+  for `robot_io.b` or, simpler, the viewer is folded into a small
   tool `tools/robot_viewer.py` that the launcher does not manage.
   Pick whichever is shorter; both are reversible later.
 - RobotIO refuses to start (and exits) if
@@ -263,12 +264,12 @@ collision check still refuses bad configurations.
 
 Separate process, separate window. Read-only consumer of `state.full`
 plus a small REQ/REP socket for operator commands. **Two-team layout
-from day one** so adding team B later (P8) is a config change only.
+from day one** so adding team A later (P8) is a config change only.
 
 - `src/apps/gamemaster_ui/` — pygame app:
   - Stage indicator (even though only Play is wired up).
-  - Per-team score and bucket-weight panels (team B side shows “no
-    data” when `active_teams: [a]`).
+  - Per-team score and bucket-weight panels (team A side shows “no
+    data” when `active_teams: [b]`).
   - Per-process Hz boxes driven by `state.full.process_health`. Tiny
     colored squares per [NEXT_STEPS §2.G.43](../NEXT_STEPS.md).
   - Per-joint dial-position-vs-actual visualizer per team (lifted
@@ -284,14 +285,14 @@ from day one** so adding team B later (P8) is a config change only.
   robot) for off-hardware development.
 
 **Exit criterion:** dashboard window opens, shows live joint motion
-and process health for team A, accepts a `soft_estop` REQ. Kicking
+and process health for team B, accepts a `soft_estop` REQ. Kicking
 the dashboard window closed does not affect the rest of the system.
 
 ---
 
 ### P5 — HapticIO, real
 
-Real ESP32 haptic dials replace the keyboard producer on team A.
+Real ESP32 haptic dials replace the keyboard producer on team B.
 
 - `src/subsystems/haptic_io/` with `real`, `sim_keyboard`,
   `sim_replay` impls.
@@ -309,13 +310,13 @@ Real ESP32 haptic dials replace the keyboard producer on team A.
   tracking target there, so the first command doesn't yank the
   dials to zero.
 
-**Exit criterion:** running with `haptic_io.a: real` drives the real
+**Exit criterion:** running with `haptic_io.b: real` drives the real
 ESP32 dials against the real UR10e; switching to `sim_keyboard` is
 a one-line YAML change.
 
 ---
 
-### P6 — Remaining hardware subsystems (team A)
+### P6 — Remaining hardware subsystems (team B)
 
 Each gets its own RS-485 USB adapter. Order is not load-bearing;
 do them as hardware becomes available.
@@ -333,7 +334,7 @@ do them as hardware becomes available.
   while `safety.barrier.ok == false`).
 
 **Exit criterion:** `show.yaml` profile (still single team) runs the
-full hardware stack on team A. Play stage works end-to-end with
+full hardware stack on team B. Play stage works end-to-end with
 real weights scoring real points on the real scoreboard.
 
 ---
@@ -358,14 +359,15 @@ deliberately postponed.
   non-dev profiles.
 
 **Exit criterion:** a full game cycle runs end-to-end on `show` with
-team A, including the tutorial.
+team B, including the tutorial.
 
 ---
 
 ### P8 — Two-team bring-up
 
-- Enable `active_teams: [a, b]` in `show.yaml`.
-- Spawn a second `HapticIO`, `RobotIO`, `JoggingPlanner` for team B.
+- Enable `active_teams: [a, b]` in `show.yaml`, starting from the
+  already-working team B stack.
+- Spawn a second `HapticIO`, `RobotIO`, `JoggingPlanner` for team A.
 - Verify the collision-worker pool serves both teams without
   starvation (re-check P2-bench numbers under doubled load; rerun if
   borderline).
@@ -461,11 +463,11 @@ intervention.
 | P0 | Existing legacy launcher still runs. |
 | P1 | `bus_smoke` profile: tap + poke round-trip. |
 | P2 | `dev_keyboard`: keyboard window jogs sim arm in pybullet viewer, with collision check via worker pool. **Demo milestone.** |
-| P3 | `dev_one_robot`: real UR10e tracks keyboard input, no startup snap. |
+| P3 | `dev_one_robot`: real UR10e on team B tracks keyboard input, no startup snap. |
 | P4 | Pygame dashboard window alongside the keyboard UI, showing live two-team layout. |
 | P5 | Real haptic dials replace the keyboard producer. |
-| P6 | `show` on team A: weights, scoreboard, buckets, buttons, safety barrier all live. |
-| P7 | Full game cycle on `show` (team A), including tutorial. |
+| P6 | `show` on team B: weights, scoreboard, buckets, buttons, safety barrier all live. |
+| P7 | Full game cycle on `show` (team B), including tutorial. |
 | P8 | Both teams playing simultaneously. |
 | P9 | RPi displays show live state. |
 | P10 | LED columns animate to game state. |

@@ -26,9 +26,19 @@ Rationale:
 
 This has been tested on the development machine and confirmed working:
 - `game` environment with Python 3.12.13
-- `ur_rtde 1.6.3` prebuilt wheel installs and imports correctly
-- `pyserial 3.5` installs correctly
+- Current P2/P2.5 stack imports correctly from `requirements.txt`
+   (`pyserial`, `pyzmq`, `PyYAML`, `pybullet`, `pygame`, `compas`,
+   `compas_fab`)
+- `ur_rtde 1.6.3` prebuilt wheel installs and imports correctly when
+   preparing for P3 real-robot bring-up
 - All three ur_rtde modules verified: `rtde_control`, `rtde_receive`, `rtde_io`
+
+Current validated local interpreter on the development machine:
+`C:\Users\yck01\miniconda3\envs\game\python.exe`
+
+The repo-local `.conda` environment exists, but it was missing `pyzmq`
+during the 2026-06-05 P2 validation pass. Treat `game` as the reference
+environment until `.conda` is rebuilt from `requirements.txt`.
 
 The environment can be exported from the development machine and replicated
 exactly on the deployment machine (see Section 4).
@@ -40,9 +50,15 @@ exactly on the deployment machine (see Section 4).
 Current (`requirements.txt`):
 ```
 pyserial>=3.5
+pyzmq>=26
+PyYAML>=6
+pybullet>=3.2
+pygame>=2.5
+compas>=2.0
+compas_fab>=1.0
 ```
 
-To add for robot arm integration:
+Add for P3 real robot integration:
 ```
 ur_rtde>=1.6.0
 ```
@@ -51,11 +67,17 @@ Prebuilt Windows wheel verified: `ur_rtde-1.6.3-cp312-cp312-win_amd64.whl` (2.6 
 The wheel bundles the compiled C++ library with Boost already statically linked.
 **No manual Boost or Visual Studio install needed** — those are only required if building from source.
 
-All other imports in the project are Python standard library (`tkinter`, `threading`, `socket`, `json`, etc.) or local modules.
+All other imports in the project are Python standard library or local modules.
 
 ### Updated `requirements.txt` (when ready):
 ```
 pyserial>=3.5
+pyzmq>=26
+PyYAML>=6
+pybullet>=3.2
+pygame>=2.5
+compas>=2.0
+compas_fab>=1.0
 ur_rtde>=1.6.0
 ```
 
@@ -146,10 +168,10 @@ python -c "import serial.tools.list_ports; [print(p) for p in serial.tools.list_
 
 For production deployment, set up the game controller to launch automatically.
 
-> The new multi-process launcher lands in P1 of [MIGRATION_PLAN.md](MIGRATION_PLAN.md);
-> until then this section targets the legacy single-process entry point at
-> `src/main.py`. Once the launcher ships, replace `python src\main.py` below with
-> `python -m apps.launcher --profile config\profiles\production.yaml`.
+> The multi-process launcher already exists. Keep using the legacy
+> `src/main.py` entry point only while the deployment profile is still
+> under construction; once the deployment profile is finalized, switch
+> this batch file to `python -m apps.launcher --profile <profile>`.
 
 1. Create a batch file `C:\robot_game_controller\start_game.bat`:
    ```bat

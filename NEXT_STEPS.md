@@ -3,11 +3,12 @@
 **Purpose:** Temporary working file to (1) capture feature inventory decisions and
 (2) hand off context to a future Copilot session if this conversation ends.
 
-**Status:** Step 1 done; three architecture docs (SYSTEM_MAP, BUS, CONFIG) confirmed.
-Resuming at Step 2 — remaining architecture docs, then Step 3 (MIGRATION_PLAN).
+**Status:** P0-P2 are complete. P2 was revalidated on 2026-06-05
+(headless regression, local `dev_keyboard` smoke, and benchmark sweep).
+Next active phase: P3 real-robot bring-up on team B.
 
 **Created:** 2026-06-02
-**Last updated:** 2026-06-04
+**Last updated:** 2026-06-05
 
 ---
 
@@ -109,7 +110,7 @@ When done, tell Copilot: *"NEXT_STEPS.md is ready, proceed."*
 ### K. Additions (user-added items)
 Migrate all components to support two teams (team A and B, each has player 1 to 6), each with 6 haptic input devices, 6 multipurpose displays (over 3 Rpis), 1 robot, 3 weighing bucket for scoring, 3 score display board on (on the buckets). Only the LED columns, physical buttons, and the safety barriers are global and not shared. these components can either be sprawning 2 instances of the same type (in 1 vs 2 team mode) or by designing them to have one instance to support both modes. Decision can be mixed and based on whichever has simplier and cleaner implementation
 
-First we will test with only in the game Play state, controlling the 1 robot with keyboard. In a single team mode. The choice of turning team A versus team B on or off is probably in yaml. Either one of the teams or both teams can be turned on or off for testing and debugging purposes. 
+First we will test in the game Play state, controlling 1 robot with keyboard in single-team mode. The team choice is driven by YAML. P2 closed on the sim profile with team A active; the first real-hardware single-team bring-up must now be team B because the available hardware is wired that way. Either one team or both teams can still be turned on or off for testing and debugging purposes.
 
 We then test other sub systems, you can give me a testing plan for the remaining parts.
 
@@ -298,103 +299,24 @@ Phased plan from the current single-process threaded code to the target
 architecture. Each phase must be independently runnable and reviewable.
 
 **First milestone (from §2.K):** single team, keyboard input, robot
-moving in pybullet, Play-state only. Everything else stubbed/disabled
-via YAML. The phases below build up to and past that milestone.
+moving in pybullet, Play-state only. That milestone is now complete.
 
-Suggested phases (to be refined):
+Current rollout snapshot:
 
-- **P0 — Repo reshape.** ✅ Done. Kept root `.md` files moved into
-  `docs/`, stale ones deleted (full list in
-  [docs/MIGRATION_PLAN.md §P0](docs/MIGRATION_PLAN.md#p0--repo-reshape-no-behavior-change--done)),
-  `incoming_code/bullet_collision_keyboard_explorer.py` and its design
-  spec moved to `archive/`, the three exploration `tests/test_*.py`
-  scripts moved to `archive/`, `src/{core,subsystems,apps}/` skeleton +
-  `config/profiles/` created. The old
-  `jogging_controller` velocity/acceleration knobs already live in
-  CONFIG.md as `tuning.robot.max_velocity_deg_s` /
-  `max_acceleration_deg_s2` — the stale fields in `src/` get deleted
-  in the phase that replaces `jogging_controller`. No behavior change.
-- **P1 — ZMQ bus + YAML profile skeleton.** ✅ Done. `core/bus.py`,
-  `core/config.py`, the `bus_broker` and `launcher` apps, and
-  `tools/bus_tap.py` + `tools/bus_poke.py` all up.
-  `config/profiles/bus_smoke.yaml` (broker-only) confirms the 0MQ
-  backbone; broker emits 1 Hz heartbeats with the full
-  [BUS.md §6.9](docs/architecture/BUS.md#69-heartbeatproc) schema.
-  Automated regression: [tests/test_p1_bus_smoke.py](tests/test_p1_bus_smoke.py).
-  Publishing a `state.full` snapshot from the existing GameController
-  is deferred to P2 (where GC, the sim robot, and the keyboard UI all
-  come up together as the first end-to-end slice).
-- **P2 — First milestone: keyboard → sim robot → state.full, single team A.** ✅ Done.
-  - `apps/haptic_io/` (impl=`sim_keyboard` for the demo,
-    `sim_scripted` for tests) publishes `telem.haptic.a`.
-  - `subsystems/robot/sim_pybullet.py` + `apps/robot_io/` —
-    pybullet-backed (GUI by default, headless when
-    `tuning.robot.headless: true`); consumes
-    `cmd.robot.target.a`, publishes `telem.robot.actual.a` at 100 Hz.
-    URDF + meshes copied from `incoming_code/ur10e_robot/` into
-    `src/subsystems/robot/assets/` with `package://` URIs patched
-    relative.
-  - `subsystems/jogging/in_process.py` — in-process inside GC,
-    `req.collision_check` round-trip per tick.
-  - `apps/collision_broker/` (ROUTER/DEALER 5560/5561) +
-    `subsystems/collision_worker/` (headless pybullet REP, N
-    instances via `collision_workers.count`).
-  - `apps/game_controller/` — 50 Hz, pinned to Play stage, publishes
-    `cmd.robot.target.<team>` and a skeleton `state.full`.
-  - Launcher rewritten to spawn tier-ordered (bus → collision pool →
-    GC → per-team IO).
-  - Regression test: [tests/test_p2_demo.py](tests/test_p2_demo.py).
-  Manual `dev_keyboard` smoke (pygame window + pybullet GUI) is not
-  in CI — run it locally before starting P3.
-  This is the smoke test the rest of the architecture hangs off of.
-- **P3 — Full game state machine.** Idle → Tutorial → Play → Conclusion
-  → reset, with the playback-animation Idle, "all scrolled / timeout"
-  Tutorial exit, and per-bucket score recap in Conclusion (§2.A).
-- **P4 — Split EventRecorder out as its own process.** Per-game folder
-  layout + `index.jsonl` (also records final scores per §2.E.34).
-- **P5 — Split DisplayBroadcaster out as its own process.** Pure
-  SUB → UDP bridge. RPi protocol unchanged.
-- **P6 — Split LightColumnController out.** First slow subscriber.
-  Validates CONFLATE pattern.
-- **P7 — Introduce Launcher with profiles** (no respawn yet). YAML
-  profile selects which processes start and which teams are active
-  (`team_a_only` / `team_b_only` / `both_teams`). Real vs Sim impls
-  picked by profile.
-- **P8 — Split HapticIO out.** First two-way I/O subsystem on the bus.
-  Keyboard producer from P2 stays as the Sim impl behind the same
-  interface (§2.B.16).
-- **P9 — Split RobotIO out** using `incoming_code/rtde_core.py`. Real
-  UR10e becomes available; SimRobotIO stays for dev.
-- **P10 — CollisionWorker pool (16) + JoggingPlanner-as-process per team.**
-  REQ → ROUTER/DEALER → REP wired up. Self-collision and world-collision
-  toggles in YAML (default on, §2.D.28). Request schema is a **bundle**
-  of independent joint configurations per BUS.md §8.
-  - **P10-bench — Throughput / latency benchmark (gate before P10 ships).**
-    Run a synthetic JP that issues `req.collision_check` bundles of
-    size N ∈ {1, 2, 4, 8, 16, 32, 64} against a pool of W ∈ {1, 4, 8, 16}
-    workers, with a realistic per-config pybullet cost. Record p50 / p95 /
-    p99 latency per bundle, total checks/sec, and worker CPU
-    utilization. Compare against the prior single-config measurements
-    that motivated bundling, so we can confirm whether the
-    ROUTER/DEALER pattern keeps the throughput win or whether we
-    should fall back to single-check requests with a deeper DEALER
-    buffer. Output goes in `docs/benchmarks/collision_router_dealer.md`
-    and the chosen default bundle size is recorded in CONFIG.md under
-    `tuning.collision.bundle_size`.
-- **P11 — Add the remaining hardware subsystems**, in any order, each
-  with its own RS-485 USB adapter:
-  - `WeightSensorIO` (+ Sim + manual score adjust UI, §2.E.31/32).
-  - `ScoreboardBroadcaster`.
-  - `BucketController`.
-  - `ButtonController` (drives the physical stop button → soft stop
-    into Reset, §2.A.3).
-  - `SafetyBarrierController`.
-- **P12 — Two-team bring-up.** Enable `both_teams` profile. Verify each
-  per-team process pair starts and that shared/global processes serve
-  both. Skeleton tracking + prosody from external PCs land in
-  EventRecorder.
-- **P13 — Add Supervisor heartbeats + respawn.** Per-process policies.
-- **P14 — Crash files + retry-aware collision-check client.**
+- **P0-P2 are complete.** P2 is fully closed: the headless regression
+  passes, the collision benchmark sweep has been run and archived under
+  `tools/`, and the local `dev_keyboard` smoke was rerun on 2026-06-05.
+- **P3 is next.** Real RTDE bring-up now starts on **team B** because
+  that is how the available hardware is wired. The key work items are
+  startup position sync, a team-B `dev_one_robot` profile, and a viewer
+  path that mirrors `telem.robot.actual.b` instead of commanding the sim.
+- **After P3:** P4 dashboard, P5 real haptics on team B, P6 remaining
+  hardware on team B, P7 full game cycle, then P8 adds team A as the
+  second real team.
+- The authoritative detailed phase plan lives in
+  [docs/MIGRATION_PLAN.md](docs/MIGRATION_PLAN.md). Keep this file as a
+  short handoff and decision log rather than a second competing phase
+  breakdown.
 
 Each phase ends with a working system. The user should be able to stop
 at any phase and still have a usable game (or, before P2, a usable
@@ -415,6 +337,11 @@ Rewrite stale root `.md` to match the new architecture as part of P0/P1.
 - Do not over-engineer in early phases. Slots for later features
   (respawn, replay, structured logs) should exist, but implementation
   can be deferred until smoke tests reveal real needs.
+- Local validation on this machine should use
+  `C:\Users\yck01\miniconda3\envs\game\python.exe` (or an activated
+  `game` env that resolves there). The repo-local `.conda` env exists
+  but was missing `pyzmq` during the 2026-06-05 P2 recheck, so it is not
+  the reference launcher/test environment until rebuilt.
 - Type hints: no strict policy; clarity over rigor.
 - The `docs/` folder currently contains only `docs/architecture/`
   with `SYSTEM_MAP.md`, `BUS.md`, and `CONFIG.md`. Everything else

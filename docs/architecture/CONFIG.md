@@ -5,8 +5,8 @@ are active, which subsystems use Real vs Sim impls, and all tuning
 parameters**. There is no separate base / system file — every profile is
 self-contained so a deployment is one file.
 
-Status: **CONFIRMED — subject to revision after first integration tests.**
-Last reviewed: 2026-06-04.
+Status: **CONFIRMED for P1-P2; revise again when P3 real hardware lands.**
+Last reviewed: 2026-06-05.
 
 ---
 
@@ -17,8 +17,9 @@ config/
   launcher.yaml          # tiny file: which profile to use when --profile is not given
   profiles/
     bus_smoke.yaml       # absolute minimum: bus broker + a tap. Nothing else.
-    dev_keyboard.yaml    # P2 milestone: all sim, team A, keyboard input
-    dev_one_robot.yaml   # real UR10e on team A, everything else sim
+    dev_keyboard.yaml    # P2 manual smoke: all sim, keyboard input, pybullet GUI
+    dev_keyboard_headless.yaml  # P2 regression: scripted haptic + headless pybullet
+    dev_one_robot.yaml   # next P3 profile: real UR10e on team B, everything else sim
     show.yaml            # full hardware, both teams (deployment)
 ```
 
@@ -366,7 +367,7 @@ Recommended first-test workflow with this profile:
 
 ```yaml
 profile_name: dev_keyboard
-description: "Keyboard → SimRobot (pybullet) → pygame dashboard, team A only, Play stage only."
+description: "P2 milestone: keyboard → sim robot, single team A"
 
 active_teams: [a]
 
@@ -374,48 +375,61 @@ subsystems:
   haptic_io: {a: sim_keyboard, b: null}
   robot_io:  {a: sim_pybullet, b: null}
   jogging_planner: {a: in_process, b: null}
-  weight_sensor_io: sim
+  weight_sensor_io: null
   light_column_1_3:       null
   light_column_4_5:       null
   light_column_6_8:       null
   display_broadcaster:    null
   scoreboard_broadcaster: null
   bucket_controller:      null
-  button_controller:      sim_keyboard
-  safety_barrier_controller: sim_open
-  collision_workers: {count: 0}     # off for first smoke test
-  event_recorder: real
-  gamemaster_ui:  real
+  button_controller:      null
+  safety_barrier_controller: null
+  collision_workers: {count: 14}
+  event_recorder: null
+  gamemaster_ui:  null
   bus_broker:     real
 
 tuning:
-  haptic:  { ... defaults ... }
-  robot:   { ... defaults ... }
-  collision: { check_self: false, check_world: false, timeout_ms: 80, retries: 0, bundle_size: 1 }
+  haptic:
+    gear_ratio: [10.0, 10.0, 10.0, 5.0, 5.0, 5.0]
+  robot:
+    max_velocity_deg_s:      [30, 30, 30, 60, 60, 60]
+    max_acceleration_deg_s2: [50, 50, 50, 100, 200, 200]
+    headless: false
+    initial_pose_deg: [0.0, -90.0, 90.0, 0.0, 0.0, 0.0]
+  collision: { check_self: true, check_world: true, timeout_ms: 40, retries: 2, bundle_size: 1 }
+  jogging:
+    n_forward_steps: 12
+    forward_step_deg: 1.0
+    path_cutoff_deg: 3.0
+    forward_bundle_size: 1
+    probe_half_deg: 10
+    prox_floor: 0.6
+    forward_timeout_ms: 40
   game:
-    # Force GC to start in Play and stay there until manually reset.
     force_stage: play
-    tutorial_max_seconds: 0
-    play_max_seconds:     0           # 0 = no auto-advance
-    conclusion_seconds:   0
-    reset_seconds:        0
 
 hardware: {}
-recorder: { root: "./recordings", enabled: true, keep_raw_audio: false, keep_raw_video: false }
+recorder: { root: "./recordings", enabled: false, keep_raw_audio: false, keep_raw_video: false }
 ```
+
+`dev_keyboard_headless.yaml` is the CI / regression sibling profile: it
+switches `haptic_io.a` to `sim_scripted`, sets `tuning.robot.headless:
+true`, and reduces the collision-worker count for repeatable automated
+tests.
 
 ### 4.3 `dev_one_robot.yaml`
 
 ```yaml
 profile_name: dev_one_robot
-description: "Real UR10e on team A, everything else sim."
+description: "Real UR10e on team B, everything else sim."
 
-active_teams: [a]
+active_teams: [b]
 
 subsystems:
-  haptic_io: {a: sim_keyboard, b: null}
-  robot_io:  {a: real_rtde,    b: null}
-  jogging_planner: {a: in_process, b: null}
+  haptic_io: {a: null, b: sim_keyboard}
+  robot_io:  {a: null, b: real_rtde}
+  jogging_planner: {a: null, b: in_process}
   weight_sensor_io: sim
   light_column_1_3:       null
   light_column_4_5:       null
@@ -440,7 +454,7 @@ tuning:
               conclusion_seconds: 20, reset_seconds: 10 }
 
 hardware:
-  robot: { a: {host: "192.168.1.101", port: 30004} }
+  robot: { b: {host: "192.168.1.102", port: 30004} }
   serial_ports: {}
 ```
 

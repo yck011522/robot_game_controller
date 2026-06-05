@@ -61,25 +61,56 @@ version, Conda environment, and install steps. Short version: Windows,
 Python 3.12 via Miniforge, conda env named `game`, then
 `pip install -r requirements.txt`.
 
+On this development machine, the validated interpreter for launcher,
+tests, and benchmarks is
+`C:\Users\yck01\miniconda3\envs\game\python.exe`. The repo-local
+`.conda` environment currently needs to be rebuilt before it should be
+treated as authoritative for P2/P3 validation.
+
 ## Running
 
-The new multi-process launcher is up as of
-[docs/MIGRATION_PLAN.md §P1](docs/MIGRATION_PLAN.md). The current
-slice spawns only the ZMQ bus broker; later phases hang the rest of
-the system off the same entry point.
+The new multi-process launcher is live through
+[docs/MIGRATION_PLAN.md §P2](docs/MIGRATION_PLAN.md). The current
+working slice is the full P2 demo path: keyboard input → game
+controller → collision worker pool → pybullet robot viewer.
+
+Manual P2 smoke:
 
 ```powershell
 conda activate game
 # `apps.launcher` is at src/apps/launcher; set PYTHONPATH=src so -m can find it.
 $env:PYTHONPATH = "src"
-python -m apps.launcher --profile bus_smoke
+python -m apps.launcher --profile dev_keyboard
 ```
 
-In another terminal, tap the bus and poke a message at it:
+If activation is ambiguous on this machine, call the validated
+interpreter directly:
+
+```powershell
+$env:PYTHONPATH = "src"
+& C:\Users\yck01\miniconda3\envs\game\python.exe -m apps.launcher --profile config\profiles\dev_keyboard.yaml
+```
+
+Automated P2 regression:
+
+```powershell
+$env:PYTHONPATH = "src"
+& C:\Users\yck01\miniconda3\envs\game\python.exe tests\test_p2_demo.py
+```
+
+Collision-pool benchmark sweep:
+
+```powershell
+$env:PYTHONPATH = "src"
+& C:\Users\yck01\miniconda3\envs\game\python.exe tools\benchmark_collision_workers.py
+```
+
+For the broker-only smoke from P1, tap the bus and poke a message at it:
 
 ```powershell
 conda activate game
 $env:PYTHONPATH = "src"
+python -m apps.launcher --profile bus_smoke
 python tools/bus_tap.py                          # subscribes to everything
 python tools/bus_poke.py test.ping '{"hello":1}' # one-shot publish
 ```
