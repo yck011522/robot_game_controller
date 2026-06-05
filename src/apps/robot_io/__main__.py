@@ -113,12 +113,18 @@ def main(argv: list[str] | None = None) -> int:
             if next_telem < now:
                 next_telem = now + TELEM_PERIOD_S
             q, qd = impl.read_state()
+            robot_status = {}
+            if hasattr(impl, "status_snapshot"):
+                snapshot = impl.status_snapshot()
+                if isinstance(snapshot, dict):
+                    robot_status = snapshot
             env = bus.make_envelope(p.proc, seq=seq)
             env.update({
                 "team": team,
                 "q_rad": q,
                 "qd_rad_s": qd,
                 "rtde_ok": bool(getattr(impl, "rtde_ok", True)),
+                "robot_status": robot_status,
             })
             bus.publish(pub, telem_topic, env)
             seq += 1

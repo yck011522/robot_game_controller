@@ -67,6 +67,7 @@ def main(argv: list[str] | None = None) -> int:
             "last_path_scalar": 1.0,
             "last_prox_scalar": 1.0,
             "last_final_scalar": 1.0,
+            "robot_status": {},
             "last_tick_t": time.perf_counter(),
         }
     banner(proc.proc, f"teams={active_teams} collision_check={collision_enabled}")
@@ -79,8 +80,7 @@ def main(argv: list[str] | None = None) -> int:
         for team, st in teams.items():
             _drain_latest(st["sub_haptic"], on_msg=lambda b, s=st:
                           s.update(last_dial=b.get("dial_pos_rad", s["last_dial"])))
-            _drain_latest(st["sub_actual"], on_msg=lambda b, s=st:
-                          s.update(last_q=b.get("q_rad", s["last_q"])))
+            _drain_latest(st["sub_actual"], on_msg=lambda b, s=st: _update_actual_state(s, b))
 
             planner: InProcessPlanner = st["planner"]
             # Only re-seed once we've actually received a measured
@@ -103,6 +103,29 @@ def main(argv: list[str] | None = None) -> int:
                 st["last_path_scalar"] = 1.0
                 st["last_prox_scalar"] = 1.0
                 st["last_final_scalar"] = 1.0
+                continue
+
+            robot_status = st.get("robot_status", {})
+            robot_fault_active = bool(robot_status.get("fault_active", False))
+            if robot_fault_active:
+                st["last_target"] = list(st["last_q"])
+                st["last_collision"] = False
+                st["last_first_hit"] = None
+                st["last_path_scalar"] = 1.0
+                st["last_prox_scalar"] = 1.0
+                st["last_final_scalar"] = 1.0
+
+                env = bus.make_envelope(p.proc)
+                env.update({
+                    "team": team,
+                    "q_target_rad": list(st["last_q"]),
+                    "clamps": {
+                        "path": 1.0,
+                        "prox": 1.0,
+                        "final": 1.0,
+                    },
+                })
+                bus.publish(pub, f"cmd.robot.target.{team}", env)
                 continue
 
             q_target, info = planner.plan(
@@ -129,9 +152,22 @@ def main(argv: list[str] | None = None) -> int:
             bus.publish(pub, f"cmd.robot.target.{team}", env)
 
         # Emit a (very small) state.full snapshot per BUS.md 禮6.1.
+        paused_teams = [
+            team for team, st in teams.items()
+            if bool(st.get("robot_status", {}).get("fault_active", False))
+        ]
+        pause_reason = None
+        for team in paused_teams:
+            reason = teams[team].get("robot_status", {}).get("fault_reason")
+            if isinstance(reason, str) and reason:
+                pause_reason = f"{team}:{reason}"
+                break
+
         env = bus.make_envelope(p.proc, with_wall=True, seq=state_seq)
         env.update({
-            "stage": "play",
+            "stage": "paused" if paused_teams else "play",
+            "paused": bool(paused_teams),
+            "pause_reason": pause_reason,
             "stage_entered_mono_ns": started_mono_ns,
             "tutorial_entered_wall_ns": None,
             "teams": {
@@ -139,6 +175,7 @@ def main(argv: list[str] | None = None) -> int:
                     "robot": {
                         "q_target_rad": st["last_target"],
                         "q_rad": st["last_q"] if st["last_q"] is not None else [0.0] * 6,
+                        "status": st.get("robot_status", {}),
                     },
                     "haptic": {
                         "dial_pos_rad": st["last_dial"],
@@ -176,6 +213,13 @@ def _drain_latest(sub: zmq.Socket, *, on_msg) -> None:
             break
     if last is not None:
         on_msg(last)
+
+
+def _update_actual_state(state: dict, body: dict) -> None:
+    state["last_q"] = body.get("q_rad", state["last_q"])
+    robot_status = body.get("robot_status")
+    if isinstance(robot_status, dict):
+        state["robot_status"] = robot_status
 
 
 if __name__ == "__main__":

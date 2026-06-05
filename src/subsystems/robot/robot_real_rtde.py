@@ -46,8 +46,17 @@ class RealRtdeRobot:
         self._gain = int(gain)
         self._startup_poll_s = max(0.0, float(startup_poll_s))
         self._closed = False
-        self._rtde_ok = False
+        self._receive_ok = False
+        self._control_ok = False
         self._last_send_err: str | None = None
+        self._protective_stopped = False
+        self._emergency_stopped = False
+        self._safety_stopped = False
+        self._program_running: bool | None = None
+        self._robot_mode: int | None = None
+        self._robot_status: int | None = None
+        self._safety_mode: int | None = None
+        self._safety_status_bits: int | None = None
 
         self._rtde_r = self._rtde_helpers.connect_receive(host)
         self._actual_q = self._wait_for_initial_actual_q(float(startup_timeout_s))
@@ -55,11 +64,65 @@ class RealRtdeRobot:
         self._target_q = list(self._actual_q)
         self._last_send_t = time.perf_counter()
         self._rtde_c = self._rtde_helpers.connect_control(host, frequency_hz=self._servo_hz)
-        self._rtde_ok = True
+        self._receive_ok = True
+        self._control_ok = True
+        self._refresh_receive_status()
 
     @property
     def rtde_ok(self) -> bool:
-        return self._rtde_ok and not self._closed
+        return self._receive_ok and self._control_ok and not self._closed
+
+    def _call_optional_bool(self, name: str) -> bool | None:
+        if not hasattr(self._rtde_r, name):
+            return None
+        value = getattr(self._rtde_r, name)()
+        return bool(value)
+
+    def _call_optional_int(self, name: str) -> int | None:
+        if not hasattr(self._rtde_r, name):
+            return None
+        value = getattr(self._rtde_r, name)()
+        return int(value)
+
+    def _refresh_receive_status(self) -> None:
+        self._protective_stopped = bool(self._call_optional_bool("isProtectiveStopped") or False)
+        self._emergency_stopped = bool(self._call_optional_bool("isEmergencyStopped") or False)
+        self._safety_stopped = bool(self._call_optional_bool("isSafetyStopped") or False)
+        self._program_running = self._call_optional_bool("isProgramRunning")
+        self._robot_mode = self._call_optional_int("getRobotMode")
+        self._robot_status = self._call_optional_int("getRobotStatus")
+        self._safety_mode = self._call_optional_int("getSafetyMode")
+        self._safety_status_bits = self._call_optional_int("getSafetyStatusBits")
+
+    def status_snapshot(self) -> dict[str, Any]:
+        reason = None
+        if self._emergency_stopped:
+            reason = "emergency_stop"
+        elif self._protective_stopped:
+            reason = "protective_stop"
+        elif self._safety_stopped:
+            reason = "safety_stop"
+        elif not self._control_ok:
+            reason = "rtde_control_error"
+        elif not self._receive_ok:
+            reason = "rtde_receive_error"
+
+        return {
+            "rtde_ok": self.rtde_ok,
+            "receive_ok": self._receive_ok and not self._closed,
+            "control_ok": self._control_ok and not self._closed,
+            "fault_active": reason is not None,
+            "fault_reason": reason,
+            "protective_stopped": self._protective_stopped,
+            "emergency_stopped": self._emergency_stopped,
+            "safety_stopped": self._safety_stopped,
+            "program_running": self._program_running,
+            "robot_mode": self._robot_mode,
+            "robot_status": self._robot_status,
+            "safety_mode": self._safety_mode,
+            "safety_status_bits": self._safety_status_bits,
+            "last_send_error": self._last_send_err,
+        }
 
     def _wait_for_initial_actual_q(self, timeout_s: float) -> list[float]:
         deadline = time.monotonic() + max(0.0, timeout_s)
@@ -101,10 +164,10 @@ class RealRtdeRobot:
                 self._gain,
             )
             self._last_send_err = None
-            self._rtde_ok = True
+            self._control_ok = True
         except Exception as exc:  # noqa: BLE001
             self._last_send_err = str(exc)
-            self._rtde_ok = False
+            self._control_ok = False
 
     def read_state(self) -> tuple[list[float], list[float]]:
         if self._closed:
@@ -117,9 +180,10 @@ class RealRtdeRobot:
                 actual_qd = self._rtde_r.getActualQd()
                 if isinstance(actual_qd, (list, tuple)) and len(actual_qd) >= 6:
                     self._actual_qd = [float(v) for v in actual_qd[:6]]
-            self._rtde_ok = True
+            self._receive_ok = True
+            self._refresh_receive_status()
         except Exception:  # noqa: BLE001
-            self._rtde_ok = False
+            self._receive_ok = False
         return list(self._actual_q), list(self._actual_qd)
 
     def close(self) -> None:

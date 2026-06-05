@@ -236,7 +236,7 @@ hardware:
     light_column_6_8:    "COM27"   # LED columns 6, 7, 8
     scoreboard:          "COM22"
     bucket_motors:       "COM23"
-    start_stop_buttons:  "COM24"
+    admin_buttons:       "COM24"   # two stations: start_resume + reset (momentary NC), estop (latching NC)
     safety_barrier:      "COM25"
 
 # ============================================================
@@ -507,7 +507,7 @@ hardware:
     light_column_6_8:    "COM27"
     scoreboard:          "COM22"
     bucket_motors:       "COM23"
-    start_stop_buttons:  "COM24"
+    admin_buttons:       "COM24"
     safety_barrier:      "COM25"
 
 recorder: { root: "D:/recordings", enabled: true, keep_raw_audio: false, keep_raw_video: false }

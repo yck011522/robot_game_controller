@@ -70,11 +70,17 @@ see [SYSTEM_MAP.md](SYSTEM_MAP.md). The short version:
 
 ## 4. Lifecycle
 
-A "game" is one pass through the state machine:
+A "game" is one pass through the main state machine:
 
 ```
 Idle  →  Tutorial  →  Play  →  Conclusion  →  Reset  →  (back to Idle)
 ```
+
+`Paused` is an overlay entered from any runnable stage when an admin
+pause, latching e-stop, barrier fault, or recoverable robot fault
+occurs. Resume never happens automatically: once the blocking condition
+is clear, the operator must still press the shared `start_resume`
+button (or issue the equivalent UI command) to acknowledge and resume.
 
 - **Idle**: robot + haptic dials slowly play back an animation. Auto-
   cycle arcade mode lives here.
@@ -83,6 +89,10 @@ Idle  →  Tutorial  →  Play  →  Conclusion  →  Reset  →  (back to Idle)
   players have scrolled to the bottom.
 - **Play**: the actual game. Players jog the arm with dials, drop
   objects, score from the load cells.
+- **Paused**: motion is inhibited and GameController holds robot target
+  at actual pose. Typical causes are admin pause, physical e-stop,
+  barrier break, or robot protective stop. Leaving this state requires
+  an explicit operator acknowledge via `start_resume`.
 - **Conclusion**: robot points at each bucket in turn, sums up the
   score, then returns to start.
 - **Reset**: short cooldown / cleanup, then back to Idle.

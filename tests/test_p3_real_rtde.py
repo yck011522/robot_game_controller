@@ -28,12 +28,37 @@ class _FakeReceive:
         self.q = [0.1, -1.2, 1.3, 0.4, -0.5, 0.6]
         self.qd = [0.0] * 6
         self.disconnected = False
+        self.protective_stopped = False
 
     def getActualQ(self) -> list[float]:
         return list(self.q)
 
     def getActualQd(self) -> list[float]:
         return list(self.qd)
+
+    def isProtectiveStopped(self) -> bool:
+        return self.protective_stopped
+
+    def isEmergencyStopped(self) -> bool:
+        return False
+
+    def isSafetyStopped(self) -> bool:
+        return False
+
+    def isProgramRunning(self) -> bool:
+        return True
+
+    def getRobotMode(self) -> int:
+        return 7
+
+    def getRobotStatus(self) -> int:
+        return 1
+
+    def getSafetyMode(self) -> int:
+        return 1
+
+    def getSafetyStatusBits(self) -> int:
+        return 2049
 
     def disconnect(self) -> None:
         self.disconnected = True
@@ -44,8 +69,12 @@ class _FakeControl:
         self.servo_calls: list[tuple] = []
         self.stopped = False
         self.script_stopped = False
+        self.fail_next = False
 
     def servoJ(self, q, speed, acceleration, dt, lookahead_time, gain) -> None:
+        if self.fail_next:
+            self.fail_next = False
+            raise RuntimeError("RTDE control script is not running!")
         self.servo_calls.append((list(q), speed, acceleration, dt, lookahead_time, gain))
 
     def servoStop(self) -> None:
@@ -87,6 +116,11 @@ def main() -> int:
     assert fake.connect_receive_calls == ["192.168.0.2"]
     assert fake.connect_control_calls == [("192.168.0.2", 200.0)]
     assert robot.rtde_ok is True
+    status0 = robot.status_snapshot()
+    assert status0["fault_active"] is False
+    assert status0["fault_reason"] is None
+    assert status0["control_ok"] is True
+    assert status0["receive_ok"] is True
 
     target = [v + 0.05 for v in q0]
     robot.set_target(target)
@@ -106,6 +140,23 @@ def main() -> int:
     q1, qd1 = robot.read_state()
     assert q1 == fake.receive.q, f"updated actual_q mismatch: {q1}"
     assert qd1 == fake.receive.qd, f"updated actual_qd mismatch: {qd1}"
+
+    fake.control.fail_next = True
+    robot.maybe_step()
+    assert robot.rtde_ok is False
+    robot.read_state()
+    assert robot.rtde_ok is False, "receive health should not mask control failure"
+    status1 = robot.status_snapshot()
+    assert status1["fault_active"] is True
+    assert status1["fault_reason"] == "rtde_control_error"
+
+    robot.maybe_step()
+    assert robot.rtde_ok is True
+    fake.receive.protective_stopped = True
+    robot.read_state()
+    status2 = robot.status_snapshot()
+    assert status2["fault_active"] is True
+    assert status2["fault_reason"] == "protective_stop"
 
     robot.close()
     assert fake.control.stopped is True

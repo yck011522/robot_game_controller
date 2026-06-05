@@ -89,7 +89,7 @@ Each packet is a single UDP datagram containing a UTF-8 JSON object.
 |-----|------|-------------|
 | `v` | int | Protocol version. Current: `1` |
 | `ts` | float | Unix timestamp of the packet (seconds since epoch) |
-| `stage` | string | Current game stage: `"Idle"`, `"Tutorial"`, `"GameOn"`, `"Conclusion"`, `"Reset"` |
+| `stage` | string | Current game stage: `"Idle"`, `"Tutorial"`, `"GameOn"`, `"Conclusion"`, `"Reset"`, `"Paused"` |
 | `countdown_s` | int | Seconds remaining in the current stage |
 | `estop` | bool | Emergency stop active |
 | `joints` | object | Per-joint state, keyed by motor ID string |

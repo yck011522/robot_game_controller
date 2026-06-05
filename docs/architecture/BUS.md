@@ -253,7 +253,9 @@ Subscribers that care about stage edges detect them by comparing
   "seq": 12345,                   // monotonic per-publisher counter; gaps = dropped snapshots
 
   // ---- stage -------------------------------------------------------
-  "stage": "play",                // "idle" | "tutorial" | "play" | "conclusion" | "reset"
+  "stage": "paused",              // "idle" | "tutorial" | "play" | "paused" | "conclusion" | "reset"
+  "paused": true,                  // convenience mirror for UI / display consumers
+  "pause_reason": "b:protective_stop", // null when not paused; examples: admin_pause, estop, barrier_open, b:protective_stop
   "stage_t_s": 7.42,              // seconds since current stage entered (monotonic, GC-local)
 
   // Reference timestamps the replay tool and dashboards use to anchor
@@ -325,8 +327,10 @@ Subscribers that care about stage edges detect them by comparing
   //   barrier.ok        — false iff ANY channel is broken (any breach
   //                       halts the whole system; the array is not
   //                       zoned per team).
-  //   estop.pressed     — hardwired e-stop loop status as reported by
-  //                       ButtonController.
+  //   estop.pressed     — logical e-stop assertion status as reported
+  //                       by ButtonController. The field is normalized
+  //                       to logical semantics; downstream consumers do
+  //                       not see raw normally-closed wiring polarity.
   "safety": {
     "barrier": {
       "ok": true,
@@ -335,13 +339,16 @@ Subscribers that care about stage edges detect them by comparing
     "estop": {"pressed": false}
   },
 
-  // Two global gamemaster button stations, positioned at opposite
-  // corners of the setup. Both stations carry the same buttons and
-  // any press on either station is treated as the override. Station
-  // ids are "left" and "right" (physical corner labels).
+  // Two global admin button stations, positioned at opposite corners
+  // of the setup. Both stations carry the same controls and any press
+  // on either station is treated as the same command. Each station has
+  // two momentary normally-closed buttons (start_resume, reset) and
+  // one normally-closed latching e-stop mushroom. ButtonController
+  // debounces and inverts the raw contact polarity so the bus always
+  // exposes logical states here.
   "buttons": {
-    "left":  {"play": false, "stop": false, "estop": false},
-    "right": {"play": false, "stop": false, "estop": false}
+    "left":  {"start_resume": false, "reset": false, "estop": false},
+    "right": {"start_resume": false, "reset": false, "estop": false}
   },
 
   // Liveness of every long-lived process the supervisor monitors.
@@ -405,7 +412,23 @@ Latest-wins (CONFLATE).
   "team": "a",
   "q_rad":   [.., .., .., .., .., ..],
   "qd_rad_s":[.., .., .., .., .., ..],
-  "rtde_ok": true
+  "rtde_ok": false,
+  "robot_status": {
+    "rtde_ok": false,
+    "receive_ok": true,
+    "control_ok": false,
+    "fault_active": true,
+    "fault_reason": "protective_stop",
+    "protective_stopped": true,
+    "emergency_stopped": false,
+    "safety_stopped": false,
+    "program_running": false,
+    "robot_mode": 7,
+    "robot_status": 1,
+    "safety_mode": 3,
+    "safety_status_bits": 3076,
+    "last_send_error": "RTDE control script is not running!"
+  }
 }
 ```
 
@@ -434,9 +457,12 @@ Latest-wins (CONFLATE).
 
 ### 6.7 `telem.buttons`
 
-Two global gamemaster button stations ("left" and "right" corners),
-both read by the single `button_controller` process. Either station's
-press is treated as the same override.
+Two global admin button stations ("left" and "right" corners), both
+read by the single `button_controller` process. Either station's press
+is treated as the same command. The physical contacts may be
+normally-closed, but this topic is already normalized to logical
+`pressed` semantics, so `pressed: true` always means the operator is
+asserting that control.
 
 ```jsonc
 {
@@ -444,18 +470,24 @@ press is treated as the same override.
   "producer": "button_controller",
   "stations": {
     "left": {
-      "play":  {"pressed": false, "edge": null},   // "edge" ∈ null | "rise" | "fall"
-      "stop":  {"pressed": false, "edge": null},
-      "estop": {"pressed": false, "edge": null}
+      "start_resume": {"pressed": false, "edge": null}, // "edge" ∈ null | "rise" | "fall"
+      "reset":        {"pressed": false, "edge": null},
+      "estop":        {"pressed": false, "edge": null}
     },
     "right": {
-      "play":  {"pressed": false, "edge": null},
-      "stop":  {"pressed": false, "edge": null},
-      "estop": {"pressed": false, "edge": null}
+      "start_resume": {"pressed": false, "edge": null},
+      "reset":        {"pressed": false, "edge": null},
+      "estop":        {"pressed": false, "edge": null}
     }
   }
 }
 ```
+
+Logical meaning:
+
+- `start_resume` is the single acknowledge path. In `idle` it starts a run (`idle -> tutorial`). In `paused` it resumes only if every blocking condition is clear: barrier OK, e-stop physically unlatched, and any recoverable robot fault either already cleared or clearable by the robot recovery hook.
+- `reset` aborts the current run and enters `reset`. It clears round-scoped game state but does not unlatch a physical e-stop or silently clear a safety stop.
+- `estop` is level-triggered, not edge-triggered. While asserted, GameController keeps the game in `paused` and inhibits all robot motion. Releasing the latching mushroom only removes the interlock; the game still waits for a later `start_resume` edge before motion resumes.
 
 ### 6.8 `telem.safety`
 
@@ -487,11 +519,12 @@ press is treated as the same override.
 
 ---
 
-## 7. UI → GC commands (REQ/REP at `:5570`)
+## 7. Admin/UI → GC commands (REQ/REP at `:5570`)
 
-The pygame UI sends commands that need an acknowledgment (stage change,
-soft e-stop, manual score adjust). One REQ on the UI side, one REP in
-GC's main loop.
+The pygame UI sends commands that need an acknowledgment. These commands
+should mirror the same logical admin actions as the physical button
+stations so there is only one control vocabulary in the system. One REQ
+on the UI side, one REP in GC's main loop.
 
 Request envelope:
 
@@ -499,7 +532,7 @@ Request envelope:
 {
   "ts_mono_ns": ...,
   "producer": "gamemaster_ui",
-  "verb": "set_stage",            // see verbs below
+  "verb": "admin_command",        // see verbs below
   "args": { ... }
 }
 ```
@@ -520,8 +553,8 @@ Verbs (initial set, expand as needed):
 
 | Verb | Args | Notes |
 |------|------|-------|
-| `set_stage` | `{"to": "idle"\|"tutorial"\|"play"\|"conclusion"\|"reset"}` | Manual override. |
-| `soft_estop` | `{}` | Forces Reset. |
+| `admin_command` | `{"action": "start_resume"\|"reset"\|"pause", "source": "ui"}` | Mirrors the physical admin controls. `start_resume` is the acknowledge path out of recoverable pause states; `pause` is a software pause only and does not emulate a hardwired safety loop. |
+| `set_stage` | `{"to": "idle"\|"tutorial"\|"play"\|"paused"\|"conclusion"\|"reset"}` | Maintenance-only manual override; bypasses the normal admin-button policy. |
 | `adjust_score` | `{"team": "a"\|"b", "delta": int}` | Sensor fallback. |
 | `reload_config` | `{}` | Re-reads the active profile YAML. |
 | `ping` | `{}` | Health check. |
@@ -529,6 +562,19 @@ Verbs (initial set, expand as needed):
 REQ sockets get stuck after a timeout, so the UI must rebuild its REQ
 socket on timeout — same gotcha as the collision check (see SYSTEM_MAP
 §5).
+
+### 7.1 Acknowledge / resume path
+
+All recoverable pauses use the same path:
+
+1. A pause cause arrives: `telem.buttons.*.estop`, a barrier breach, `admin_command {action: "pause"}`, or a recoverable robot fault such as `robot_status.fault_reason == "protective_stop"`.
+2. GameController enters `state.full.stage = "paused"`, sets `paused = true`, records `pause_reason`, freezes new motion planning, and keeps robot targets pinned to actual pose.
+3. The operator clears the physical cause: unlatches the e-stop mushroom, clears the barrier, or inspects and clears the robot protective stop.
+4. The operator presses `start_resume` on either admin station, or the UI issues `admin_command {action: "start_resume"}`.
+5. GameController validates that every resume guard is clear. If a robot recovery hook is configured, this is where it may run the Dashboard `unlock protective stop` / `power on` / `brake release` sequence.
+6. Only after that explicit acknowledge edge does GameController return to the prior runnable stage.
+
+This keeps the safety model simple: clearing an interlock never restarts the game by itself; an explicit acknowledge is always required.
 
 ---
 
