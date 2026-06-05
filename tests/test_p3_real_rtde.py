@@ -1,7 +1,7 @@
 """Focused P3 test for the real RTDE RobotIO backend.
 
-Uses a stub `rtde_core` module so the startup-sync and `servoJ` path
-can be validated without a real robot or the external `ur_rtde`
+Uses a stub `rtde_helpers` module so the startup-sync and `servoJ`
+path can be validated without a real robot or the external `ur_rtde`
 dependency.
 """
 
@@ -16,7 +16,7 @@ SRC = REPO_ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from subsystems.robot.real_rtde import (  # noqa: E402
+from subsystems.robot.robot_real_rtde import (  # noqa: E402
     DEFAULT_LOOKAHEAD_TIME,
     DEFAULT_SERVO_GAIN,
     RealRtdeRobot,
@@ -78,7 +78,7 @@ def main() -> int:
         servo_hz=200.0,
         startup_timeout_s=0.1,
         startup_poll_s=0.0,
-        _rtde_core=fake,
+        _rtde_helpers=fake,
     )
 
     q0, qd0 = robot.read_state()

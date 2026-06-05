@@ -2,12 +2,12 @@
 
 Owns a compas_fab `PyBulletClient` (gui or direct) loaded with the
 curated RobotCell + RobotCellState from
-[scene.make_planner](./scene.py). On every `set_target(q)` we teleport
-the robot's `robot_configuration` to `q` and push the updated
-RobotCellState into the planner -- this both moves the visible robot
-in the GUI viewer and (because compas_fab also tracks contact state on
-the same client) keeps the scene's collision world consistent with
-what the GUI shows.
+[shared_compas_scene.make_planner](./shared_compas_scene.py). On every
+`set_target(q)` we teleport the robot's `robot_configuration` to `q`
+and push the updated RobotCellState into the planner -- this both moves
+the visible robot in the GUI viewer and (because compas_fab also tracks
+contact state on the same client) keeps the scene's collision world
+consistent with what the GUI shows.
 
 We deliberately use teleport, not pybullet POSITION_CONTROL, for the
 P2 demo. The "follow the dial" feel is what the game needs; PD tuning
@@ -33,7 +33,7 @@ class SimPybulletRobot:
     def __init__(self, *, headless: bool, initial_pose_rad: List[float] | None = None):
         # Late import so a tooling import of this module (e.g. for
         # --help) doesn't drag in compas_fab + pybullet.
-        from subsystems.robot.scene import make_planner, UR10E_JOINT_NAMES
+        from subsystems.robot.shared_compas_scene import make_planner, UR10E_JOINT_NAMES
         connection_type = "direct" if headless else "gui"
         client, planner, robot_cell, rcs, stats = make_planner(
             connection_type=connection_type, verbose=False

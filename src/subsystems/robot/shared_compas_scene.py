@@ -119,13 +119,13 @@ def make_planner(*, connection_type: str = "direct", verbose: bool = False
 
     Caller owns the client lifecycle (must call `client.__exit__(...)`
     on shutdown). A throwaway `check_collision` is run on startup the
-    same way the explorer does it ??this primes pybullet's internal
+    same way the explorer does it -- this primes pybullet's internal
     contact caches so the first request from a real client doesn't pay
     a one-shot warmup cost.
 
     `connection_type` is passed through to compas_fab's PyBulletClient:
-      - "direct" ??headless (collision workers, CI)
-      - "gui"    ??OpenGL viewer (manual P2 demo)
+      - "direct" -- headless (collision workers, CI)
+      - "gui"    -- OpenGL viewer (manual P2 demo)
     """
     robot_cell, robot_cell_state, stats = load_scene(apply_touch=True)
     client = PyBulletClient(connection_type=connection_type, verbose=verbose)

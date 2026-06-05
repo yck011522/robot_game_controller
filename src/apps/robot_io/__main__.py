@@ -134,10 +134,10 @@ def main(argv: list[str] | None = None) -> int:
 def _make_impl(name: str, *, team: str, headless: bool,
                initial_pose_rad=None, robot_cfg: dict | None = None):
     if name == "sim_pybullet":
-        from subsystems.robot.sim_pybullet import SimPybulletRobot
+        from subsystems.robot.robot_sim_pybullet import SimPybulletRobot
         return SimPybulletRobot(headless=headless, initial_pose_rad=initial_pose_rad)
     if name == "real_rtde":
-        from subsystems.robot.real_rtde import RealRtdeRobot
+        from subsystems.robot.robot_real_rtde import RealRtdeRobot
         robot_cfg = robot_cfg or {}
         host = robot_cfg.get("host")
         if not isinstance(host, str) or not host:

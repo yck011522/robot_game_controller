@@ -30,15 +30,15 @@ class RealRtdeRobot:
         gain: int = DEFAULT_SERVO_GAIN,
         startup_timeout_s: float = 5.0,
         startup_poll_s: float = 0.05,
-        _rtde_core: Any | None = None,
+        _rtde_helpers: Any | None = None,
     ) -> None:
         del port  # `ur_rtde` selects the standard RTDE ports internally.
-        if _rtde_core is None:
-            from subsystems.robot import rtde_core as _local_rtde_core
+        if _rtde_helpers is None:
+            from subsystems.robot import rtde_helpers as _local_rtde_helpers
 
-            _rtde_core = _local_rtde_core
+            _rtde_helpers = _local_rtde_helpers
 
-        self._rtde_core = _rtde_core
+        self._rtde_helpers = _rtde_helpers
         self._host = host
         self._servo_hz = float(servo_hz)
         self._servo_dt = 1.0 / self._servo_hz if self._servo_hz > 0 else 0.005
@@ -49,12 +49,12 @@ class RealRtdeRobot:
         self._rtde_ok = False
         self._last_send_err: str | None = None
 
-        self._rtde_r = self._rtde_core.connect_receive(host)
+        self._rtde_r = self._rtde_helpers.connect_receive(host)
         self._actual_q = self._wait_for_initial_actual_q(float(startup_timeout_s))
         self._actual_qd = [0.0] * len(self._actual_q)
         self._target_q = list(self._actual_q)
         self._last_send_t = time.perf_counter()
-        self._rtde_c = self._rtde_core.connect_control(host, frequency_hz=self._servo_hz)
+        self._rtde_c = self._rtde_helpers.connect_control(host, frequency_hz=self._servo_hz)
         self._rtde_ok = True
 
     @property

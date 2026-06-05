@@ -165,19 +165,16 @@ sim.
   of N configs per request; `performCollisionDetection()` +
   `getContactPoints()` for the actual check. Honors `--instance N`
   and reports as `collision_worker_NN` in heartbeats.
-- `src/subsystems/robot/sim_pybullet.py` + `src/apps/robot_io/` —
+- `src/subsystems/robot/robot_sim_pybullet.py` + `src/apps/robot_io/` —
   pybullet-backed RobotIO. GUI (`pybullet.connect(GUI)`) by default,
   headless `DIRECT` when `tuning.robot.headless: true`. Subscribes
   `cmd.robot.target.<team>`, publishes `telem.robot.actual.<team>`
   at 100 Hz. P2 uses simple teleport tracking; the
   `setJointMotorControl2` path with proper PD gains lands when the
   real-RTDE impl is wired in P3.
-- `src/subsystems/robot/urdf_loader.py` — patches the upstream
-  URDF's `package://ur_description/...` mesh URIs to relative paths
-  pybullet can resolve. URDF + meshes copied from
-  `incoming_code/ur10e_robot/` into `src/subsystems/robot/assets/`.
-  The same patched URDF loads in both the GUI viewer and the
-  collision workers so the two pybullet worlds match exactly.
+- `archive/urdf_loader.py` — archived raw-pybullet URDF patch helper,
+  retained for reference only. The active P2 runtime path uses the
+  curated compas_fab scene assets under `src/subsystems/robot/assets/`.
 - `src/apps/game_controller/` — minimal GC: 50 Hz loop pinned to
   Play stage (`tuning.game.force_stage: play`), runs the in-process
   planner per active team, publishes `cmd.robot.target.<team>` and
@@ -225,8 +222,9 @@ Keyboard UI and pybullet viewer both stay — the viewer now mirrors
 the real robot's actual joint angles so you can see the model match
 the hardware.
 
-- `src/subsystems/robot_io/real_rtde.py` built from
-  `incoming_code/rtde_core.py`. Consumes `cmd.robot.target.b`,
+- `src/subsystems/robot/robot_real_rtde.py` built from
+  `src/subsystems/robot/rtde_helpers.py` and the archived RTDE bring-up.
+  Consumes `cmd.robot.target.b`,
   publishes `telem.robot.actual.b` at 100 Hz.
 - **Startup position sync (critical).** Before publishing any
   `state.full` with a non-null `q_target`, GC must seed its internal

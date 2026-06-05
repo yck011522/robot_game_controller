@@ -2,7 +2,7 @@
 
 Loads the curated `robot_cell_and_state.json` scene into a **headless**
 compas_fab `PyBulletClient(direct)` via
-[scene.make_planner](../robot/scene.py), opens a REP socket connected
+[shared_compas_scene.make_planner](../robot/shared_compas_scene.py), opens a REP socket connected
 to the collision broker's DEALER endpoint (`tcp://127.0.0.1:5561`), and
 answers `req.collision_check` bundles with `rep.collision_result` per
 [BUS.md 8](../../../docs/architecture/BUS.md#8-collision-reqrep-router--dealer-at-55605561).
@@ -83,7 +83,7 @@ def main(argv: list[str] | None = None) -> int:
     # Late imports keep `--help` cheap and avoid pulling in pybullet at
     # module import time (collision worker is the only consumer here).
     from compas_fab.backends.exceptions import CollisionCheckError
-    from subsystems.robot.scene import make_planner, UR10E_JOINT_NAMES
+    from subsystems.robot.shared_compas_scene import make_planner, UR10E_JOINT_NAMES
 
     rep: zmq.Socket | None = None
     client = None

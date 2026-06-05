@@ -21,7 +21,7 @@ import zmq  # noqa: E402
 
 from core import bus  # noqa: E402
 from core.config import load as load_profile  # noqa: E402
-from subsystems.robot.sim_pybullet import SimPybulletRobot  # noqa: E402
+from subsystems.robot.robot_sim_pybullet import SimPybulletRobot  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -31,7 +31,7 @@ docs/                         # All documentation.
   DEPLOYMENT.md               # Windows + Conda setup on the deployment PC.
 incoming_code/                # Third-party assets to be lifted into src/ by upcoming phases.
   ur10e_robot/                # URDF + meshes consumed by SimRobotIO and CollisionWorker (P2).
-  rtde_core.py                # Becomes the real RobotIO impl (P3).
+  rtde_core.py                # Source material for rtde_helpers.py and robot_real_rtde.py (P3).
 archive/                      # Reference-only; not on any import path. See archive/README.md.
 tests/                        # Real pytest tests live here. Ad-hoc probes are in archive/.
 tools/                        # Operator scripts (bus tap, view game state, ...).

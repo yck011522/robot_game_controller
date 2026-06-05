@@ -20,6 +20,8 @@ the archive untouched as a historical reference.
 |------|--------------|---------------|
 | `bullet_collision_keyboard_explorer.py` | pybullet sandbox with keyboard jog + collision worker pool. | Logic extracted into `src/subsystems/collision_worker/` (P2) and the keyboard-input UI (`src/apps/keyboard_input_ui/`, P2). |
 | `bullet_collision_keyboard_explorer_design.md` | Design spec that accompanies the above script. | Reference reading for P2 implementers; not promoted into `docs/`. |
+| `robot_assets/` | Archived raw URDF + mesh bundle for the old direct-URDF pybullet path. | Kept only so `urdf_loader.py` remains runnable as reference code. |
+| `urdf_loader.py` | Archived raw-pybullet URDF patch/load helper. | Historical reference only; active runtime uses `shared_compas_scene.py` instead. |
 | `test_led_animation_rate.py` | Ad-hoc rate test for the legacy LED stack. | Superseded by P10 acceptance criteria in `docs/MIGRATION_PLAN.md`. |
 | `test_led_comm.py` | Ad-hoc LED RS-485 probe. | Same. |
 | `test_probe_94.py` | One-shot probe for the LED controller's `0x94` address-query command. | Same. |
