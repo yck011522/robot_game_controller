@@ -31,7 +31,7 @@ subsystems:
   safety_barrier_controller: null
 
   collision_workers:
-    count: 8
+    count: 14
 
   event_recorder: null
   gamemaster_ui: null
