@@ -241,7 +241,7 @@ the hardware.
   exits non-zero (→ circuit breaker, see SUPERVISOR.md §6).
 - `sim_pybullet` impl from P2 stays as the dev-time alternative;
   this phase only adds `real_rtde` and a new profile
-  `dev_one_robot.yaml` selecting `robot_io.b: real_rtde`. The
+  `dev_one_robot_keyboard` selecting `robot_io.b: real_rtde`. The
   pybullet **viewer** keeps running on the same machine, but as a
   passive subscriber to `telem.robot.actual.b` rather than an
   authoritative robot — i.e. a third impl `viewer_only` is added
@@ -252,7 +252,7 @@ the hardware.
   `safety.barrier.ok == false` in the latest `state.full`.
 
 **Exit criterion:** with the real UR10e powered and connected,
-`--profile dev_one_robot` brings everything up without any sudden
+`--profile dev_one_robot_keyboard` brings everything up without any sudden
 robot motion at startup. Keyboard input then jogs the real arm;
 collision check still refuses bad configurations.
 
@@ -278,7 +278,7 @@ from day one** so adding team A later (P8) is a config change only.
     (CONFIG.md §2), reloadable via the `reload_config` REQ.
 - The keyboard input UI from P2 stays untouched and keeps running in
   its own window alongside the dashboard.
-- Add profile `dev_dashboard.yaml` = `dev_one_robot` + dashboard
+- Add profile `dev_dashboard.yaml` = `dev_one_robot_keyboard` + dashboard
   enabled. The dashboard is also addable to `dev_keyboard` (sim
   robot) for off-hardware development.
 
@@ -461,7 +461,7 @@ intervention.
 | P0 | Existing legacy launcher still runs. |
 | P1 | `bus_smoke` profile: tap + poke round-trip. |
 | P2 | `dev_keyboard`: keyboard window jogs sim arm in pybullet viewer, with collision check via worker pool. **Demo milestone.** |
-| P3 | `dev_one_robot`: real UR10e on team B tracks keyboard input, no startup snap. |
+| P3 | `dev_one_robot_keyboard`: real UR10e on team B tracks keyboard input, no startup snap. |
 | P4 | Pygame dashboard window alongside the keyboard UI, showing live two-team layout. |
 | P5 | Real haptic dials replace the keyboard producer. |
 | P6 | `show` on team B: weights, scoreboard, buckets, buttons, safety barrier all live. |

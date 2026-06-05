@@ -19,7 +19,7 @@ config/
     bus_smoke.yaml       # absolute minimum: bus broker + a tap. Nothing else.
     dev_keyboard.yaml    # P2 manual smoke: all sim, keyboard input, pybullet GUI
     dev_keyboard_headless.yaml  # P2 regression: scripted haptic + headless pybullet
-    dev_one_robot.yaml   # next P3 profile: real UR10e on team B, everything else sim
+    dev_one_robot_keyboard.yaml   # next P3 profile: real UR10e on team B, everything else sim
     show.yaml            # full hardware, both teams (deployment)
 ```
 
@@ -418,10 +418,10 @@ switches `haptic_io.a` to `sim_scripted`, sets `tuning.robot.headless:
 true`, and reduces the collision-worker count for repeatable automated
 tests.
 
-### 4.3 `dev_one_robot.yaml`
+### 4.3 `dev_one_robot_keyboard.yaml`
 
 ```yaml
-profile_name: dev_one_robot
+profile_name: dev_one_robot_keyboard
 description: "Real UR10e on team B, everything else sim."
 
 active_teams: [b]

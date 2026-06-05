@@ -1,6 +1,6 @@
 """Pybullet viewer that mirrors telem.robot.actual.<team>.
 
-Use this alongside `dev_one_robot.yaml` so the real RTDE-backed
+Use this alongside `dev_one_robot_keyboard` so the real RTDE-backed
 RobotIO stays authoritative and the viewer remains a passive bus
 consumer.
 """
@@ -24,15 +24,25 @@ from core.config import load as load_profile  # noqa: E402
 from subsystems.robot.robot_sim_pybullet import SimPybulletRobot  # noqa: E402
 
 
+def _resolve_profile_arg(profile_arg: str) -> Path:
+    path = Path(profile_arg)
+    if path.exists():
+        return path
+    if path.suffix:
+        return path
+    return REPO_ROOT / "config" / "profiles" / f"{profile_arg}.yaml"
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Passive pybullet viewer for telem.robot.actual.<team>")
-    ap.add_argument("--profile", default=str(REPO_ROOT / "config" / "profiles" / "dev_one_robot.yaml"))
+    ap.add_argument("--profile", default="dev_one_robot_keyboard",
+                    help="Profile path, or bare name under config/profiles/.")
     ap.add_argument("--team", default="b", choices=["a", "b"])
     ap.add_argument("--headless", action="store_true",
                     help="Run without the pybullet GUI window")
     args = ap.parse_args(argv)
 
-    profile = load_profile(args.profile)
+    profile = load_profile(_resolve_profile_arg(args.profile))
     initial_pose_deg = profile.tuning.get("robot", {}).get(
         "initial_pose_deg", [0.0, -90.0, 90.0, 0.0, 0.0, 0.0]
     )

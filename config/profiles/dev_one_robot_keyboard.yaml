@@ -2,7 +2,7 @@
 # Pybullet viewer is launched separately via tools/robot_viewer.py so
 # robot_io.b can stay authoritative for the hardware.
 
-profile_name: dev_one_robot
+profile_name: dev_one_robot_keyboard
 description: "P3 bring-up: keyboard -> real UR10e on team B"
 
 active_teams: [b]

@@ -2,7 +2,9 @@
 # omitted. The value is a bare name under config/profiles/ (no .yaml suffix).
 # See docs/architecture/CONFIG.md §1.
 
-default_profile: dev_keyboard
+# dev_keyboard - Simulated single robot controlled by keyboard.
+# dev_one_robot_keyboard - Real single robot controlled by keyboard.
+default_profile: dev_one_robot_keyboard
 
 # Maps a logical process name to the python module the launcher spawns
 # for it. Default for anything not listed here is `apps.<name>`, which

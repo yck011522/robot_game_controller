@@ -308,7 +308,7 @@ Current rollout snapshot:
   `tools/`, and the local `dev_keyboard` smoke was rerun on 2026-06-05.
 - **P3 is next.** Real RTDE bring-up now starts on **team B** because
   that is how the available hardware is wired. The key work items are
-  startup position sync, a team-B `dev_one_robot` profile, and a viewer
+  startup position sync, a team-B `dev_one_robot_keyboard` profile, and a viewer
   path that mirrors `telem.robot.actual.b` instead of commanding the sim.
 - **After P3:** P4 dashboard, P5 real haptics on team B, P6 remaining
   hardware on team B, P7 full game cycle, then P8 adds team A as the
