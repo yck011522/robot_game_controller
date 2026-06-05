@@ -41,6 +41,10 @@ import time
 from collections import deque
 from pathlib import Path
 
+if os.name == "nt":
+    import ctypes
+    from ctypes import wintypes
+
 _SRC = Path(__file__).resolve().parents[2]
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
@@ -57,6 +61,133 @@ REPO_ROOT = _SRC.parent
 # giving up and shutting the whole thing down. Pybullet startup can be
 # slow on first run (loading meshes), hence the generous cap.
 STARTUP_HEARTBEAT_TIMEOUT_S = 20.0
+
+
+# ---------------------------------------------------------------- orphan prevention (Windows-only)
+
+if os.name == "nt":
+    _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _kernel32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+    _kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+    _kernel32.SetInformationJobObject.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+    ]
+    _kernel32.SetInformationJobObject.restype = wintypes.BOOL
+    _kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    _kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+    _kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    _kernel32.CloseHandle.restype = wintypes.BOOL
+
+    _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+    _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
+
+
+    class _IO_COUNTERS(ctypes.Structure):
+        _fields_ = [
+            ("ReadOperationCount", ctypes.c_ulonglong),
+            ("WriteOperationCount", ctypes.c_ulonglong),
+            ("OtherOperationCount", ctypes.c_ulonglong),
+            ("ReadTransferCount", ctypes.c_ulonglong),
+            ("WriteTransferCount", ctypes.c_ulonglong),
+            ("OtherTransferCount", ctypes.c_ulonglong),
+        ]
+
+
+    class _JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("PerProcessUserTimeLimit", ctypes.c_longlong),
+            ("PerJobUserTimeLimit", ctypes.c_longlong),
+            ("LimitFlags", wintypes.DWORD),
+            ("MinimumWorkingSetSize", ctypes.c_size_t),
+            ("MaximumWorkingSetSize", ctypes.c_size_t),
+            ("ActiveProcessLimit", wintypes.DWORD),
+            ("Affinity", ctypes.c_size_t),
+            ("PriorityClass", wintypes.DWORD),
+            ("SchedulingClass", wintypes.DWORD),
+        ]
+
+
+    class _JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("BasicLimitInformation", _JOBOBJECT_BASIC_LIMIT_INFORMATION),
+            ("IoInfo", _IO_COUNTERS),
+            ("ProcessMemoryLimit", ctypes.c_size_t),
+            ("JobMemoryLimit", ctypes.c_size_t),
+            ("PeakProcessMemoryUsed", ctypes.c_size_t),
+            ("PeakJobMemoryUsed", ctypes.c_size_t),
+        ]
+
+
+    class _WindowsProcessJob:
+        """Windows-only orphan prevention for launcher children.
+
+        This repository is intended to run on Windows. We keep each child
+        in a Job Object with KILL_ON_JOB_CLOSE so a forced launcher exit
+        still tears down the supervised processes.
+        """
+
+        def __init__(self) -> None:
+            self._handle = _kernel32.CreateJobObjectW(None, None)
+            if not self._handle:
+                raise ctypes.WinError(ctypes.get_last_error())
+
+            info = _JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+            # If this launcher process dies without running our normal
+            # shutdown path, Windows closes the job handle and terminates
+            # every assigned child for us.
+            info.BasicLimitInformation.LimitFlags = _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            if not _kernel32.SetInformationJobObject(
+                self._handle,
+                _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
+                ctypes.byref(info),
+                ctypes.sizeof(info),
+            ):
+                err = ctypes.get_last_error()
+                _kernel32.CloseHandle(self._handle)
+                self._handle = None
+                raise ctypes.WinError(err)
+
+        def assign(self, child: subprocess.Popen) -> None:
+            if self._handle is None:
+                return
+            # Reuse the child process handle that Python already opened
+            # for the Popen object instead of opening a second handle.
+            process_handle = wintypes.HANDLE(child._handle)  # type: ignore[attr-defined]
+            if not _kernel32.AssignProcessToJobObject(self._handle, process_handle):
+                raise ctypes.WinError(ctypes.get_last_error())
+
+        def close(self) -> None:
+            if self._handle is None:
+                return
+            # On clean shutdown the children should already be gone; this
+            # close mainly releases the Windows handle and resets state.
+            _kernel32.CloseHandle(self._handle)
+            self._handle = None
+
+
+    _PROCESS_JOB: _WindowsProcessJob | None = None
+else:
+    _PROCESS_JOB = None
+
+
+def _ensure_process_job() -> _WindowsProcessJob | None:
+    global _PROCESS_JOB
+    if os.name != "nt":
+        return None
+    if _PROCESS_JOB is not None:
+        return _PROCESS_JOB
+    try:
+        # Create the shared job lazily so every spawned child can be
+        # attached to the same ownership boundary.
+        _PROCESS_JOB = _WindowsProcessJob()
+    except OSError as e:
+        print(f"[launcher] warning: could not create Windows job object: {e}",
+              file=sys.stderr, flush=True)
+        _PROCESS_JOB = None
+    return _PROCESS_JOB
 
 
 # ---------------------------------------------------------------- helpers
@@ -137,7 +268,17 @@ def _spawn(proc_name: str, profile_path: Path, *,
         popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
 
     print(f"[launcher] spawn {proc_name}: {' '.join(argv)}", flush=True)
-    return subprocess.Popen(argv, **popen_kwargs)  # type: ignore[arg-type]
+    child = subprocess.Popen(argv, **popen_kwargs)  # type: ignore[arg-type]
+    process_job = _ensure_process_job()
+    if process_job is not None:
+        try:
+            # Direct child tracking handles graceful shutdown; the job is
+            # the backstop for unexpected launcher death.
+            process_job.assign(child)
+        except OSError as e:
+            print(f"[launcher] warning: could not add {proc_name} to Windows job object: {e}",
+                  file=sys.stderr, flush=True)
+    return child
 
 
 def _terminate(child: subprocess.Popen, name: str, grace_s: float = 3.0) -> None:
@@ -320,6 +461,11 @@ def main(argv: list[str] | None = None) -> int:
         print("[launcher] shutting down children...", flush=True)
         for name, child in reversed(list(children.items())):
             _terminate(child, name)
+        process_job = _ensure_process_job()
+        if process_job is not None:
+            # Closing the job after explicit child termination keeps the
+            # graceful path unchanged while still handling crash-only exits.
+            process_job.close()
         sub.close(0)
         ctx.destroy(linger=0)
 
