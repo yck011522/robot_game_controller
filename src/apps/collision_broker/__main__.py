@@ -50,9 +50,16 @@ def _run_proxy(ctx: zmq.Context) -> None:
         zmq.proxy(router, dealer)
     except zmq.ContextTerminated:
         pass
+    except zmq.ZMQError as exc:
+        if exc.errno not in (zmq.ETERM, zmq.ENOTSOCK):
+            raise
     finally:
-        router.close(0)
-        dealer.close(0)
+        for sock in (router, dealer):
+            try:
+                sock.close(0)
+            except zmq.ZMQError as exc:
+                if exc.errno != zmq.ENOTSOCK:
+                    raise
 
 
 def main(argv: list[str] | None = None) -> int:

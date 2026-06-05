@@ -101,12 +101,14 @@ class Proc:
     a new PUB is created on the standard bus.
     """
 
-    def __init__(self, args: ProcArgs, profile: Profile, *, target_hz: float):
+    def __init__(self, args: ProcArgs, profile: Profile, *, target_hz: float,
+                 heartbeat_extra_fields: Callable[[], dict[str, float]] | None = None):
         self.args = args
         self.profile = profile
         self.proc: str = args.proc
         self.target_hz = float(target_hz)
         self._period_s = 1.0 / self.target_hz
+        self._heartbeat_extra_fields = heartbeat_extra_fields
 
         self.ctx = zmq.Context.instance()
 
@@ -240,6 +242,8 @@ class Proc:
             "loop_jitter_ms_p95": jitter_ms_p95,
             "queue_depth": 0,
         })
+        if self._heartbeat_extra_fields is not None:
+            env.update(self._heartbeat_extra_fields())
         assert self._heartbeat_pub is not None
         bus.publish(self._heartbeat_pub, f"heartbeat.{self.proc}", env)
         self._heartbeat_seq += 1

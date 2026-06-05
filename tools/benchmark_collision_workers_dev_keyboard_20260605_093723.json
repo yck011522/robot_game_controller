@@ -1,0 +1,149 @@
+{
+  "profile": "dev_keyboard",
+  "worker_counts": [
+    14,
+    16,
+    18,
+    20,
+    22,
+    24
+  ],
+  "bundle_sizes": [
+    1,
+    2
+  ],
+  "rows": [
+    {
+      "workers": 14.0,
+      "bundle_size": 1.0,
+      "frames": 435.0,
+      "elapsed_s": 6.003513399999974,
+      "fps": 72.45757126152193,
+      "checks_per_sec": 4637.284560737404,
+      "avg_reply_ms": 7.094028631465135,
+      "requests_per_frame": 64.0,
+      "configs_per_frame": 64.0
+    },
+    {
+      "workers": 14.0,
+      "bundle_size": 2.0,
+      "frames": 407.0,
+      "elapsed_s": 6.013898100000006,
+      "fps": 67.676570708772,
+      "checks_per_sec": 4331.300525361408,
+      "avg_reply_ms": 8.021742529176718,
+      "requests_per_frame": 32.0,
+      "configs_per_frame": 64.0
+    },
+    {
+      "workers": 16.0,
+      "bundle_size": 1.0,
+      "frames": 482.0,
+      "elapsed_s": 6.012011400000006,
+      "fps": 80.17283533427756,
+      "checks_per_sec": 5131.061461393764,
+      "avg_reply_ms": 7.01911661047752,
+      "requests_per_frame": 64.0,
+      "configs_per_frame": 64.0
+    },
+    {
+      "workers": 16.0,
+      "bundle_size": 2.0,
+      "frames": 439.0,
+      "elapsed_s": 6.010487499999954,
+      "fps": 73.03900058023636,
+      "checks_per_sec": 4674.496037135127,
+      "avg_reply_ms": 9.201346746865521,
+      "requests_per_frame": 32.0,
+      "configs_per_frame": 64.0
+    },
+    {
+      "workers": 18.0,
+      "bundle_size": 1.0,
+      "frames": 443.0,
+      "elapsed_s": 6.005050600000004,
+      "fps": 73.7712351666112,
+      "checks_per_sec": 4721.359050663117,
+      "avg_reply_ms": 7.358778463599764,
+      "requests_per_frame": 64.0,
+      "configs_per_frame": 64.0
+    },
+    {
+      "workers": 18.0,
+      "bundle_size": 2.0,
+      "frames": 466.0,
+      "elapsed_s": 6.00563319999992,
+      "fps": 77.59381641889254,
+      "checks_per_sec": 4966.004250809123,
+      "avg_reply_ms": 8.47501506169126,
+      "requests_per_frame": 32.0,
+      "configs_per_frame": 64.0
+    },
+    {
+      "workers": 20.0,
+      "bundle_size": 1.0,
+      "frames": 446.0,
+      "elapsed_s": 6.011043399999949,
+      "fps": 74.19676923310915,
+      "checks_per_sec": 4748.593230918986,
+      "avg_reply_ms": 7.2369422365498215,
+      "requests_per_frame": 64.0,
+      "configs_per_frame": 64.0
+    },
+    {
+      "workers": 20.0,
+      "bundle_size": 2.0,
+      "frames": 446.0,
+      "elapsed_s": 6.0094084999999495,
+      "fps": 74.21695496320541,
+      "checks_per_sec": 4749.885117645146,
+      "avg_reply_ms": 8.765738614069095,
+      "requests_per_frame": 32.0,
+      "configs_per_frame": 64.0
+    },
+    {
+      "workers": 22.0,
+      "bundle_size": 1.0,
+      "frames": 431.0,
+      "elapsed_s": 6.004328099999952,
+      "fps": 71.7815537095655,
+      "checks_per_sec": 4594.019437412192,
+      "avg_reply_ms": 8.207488254059545,
+      "requests_per_frame": 64.0,
+      "configs_per_frame": 64.0
+    },
+    {
+      "workers": 22.0,
+      "bundle_size": 2.0,
+      "frames": 372.0,
+      "elapsed_s": 6.005814399999963,
+      "fps": 61.9399760338918,
+      "checks_per_sec": 3964.1584661690754,
+      "avg_reply_ms": 10.60436534778466,
+      "requests_per_frame": 32.0,
+      "configs_per_frame": 64.0
+    },
+    {
+      "workers": 24.0,
+      "bundle_size": 1.0,
+      "frames": 415.0,
+      "elapsed_s": 6.012003100000015,
+      "fps": 69.02857385419495,
+      "checks_per_sec": 4417.8287266684765,
+      "avg_reply_ms": 8.692065429218035,
+      "requests_per_frame": 64.0,
+      "configs_per_frame": 64.0
+    },
+    {
+      "workers": 24.0,
+      "bundle_size": 2.0,
+      "frames": 393.0,
+      "elapsed_s": 6.005835999999931,
+      "fps": 65.4363522413873,
+      "checks_per_sec": 4187.926543448787,
+      "avg_reply_ms": 9.791901812976736,
+      "requests_per_frame": 32.0,
+      "configs_per_frame": 64.0
+    }
+  ]
+}

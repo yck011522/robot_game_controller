@@ -65,11 +65,18 @@ def _run_proxy(ctx: zmq.Context, stop: threading.Event, bound: threading.Event) 
     except zmq.ContextTerminated:
         # Expected on shutdown ??`ctx.destroy(linger=0)` is the trigger.
         pass
+    except zmq.ZMQError as exc:
+        if exc.errno not in (zmq.ETERM, zmq.ENOTSOCK):
+            raise
     finally:
         # `close(0)` = linger=0; drop any queued messages immediately
         # so a hung peer doesn't keep the socket alive.
-        xsub.close(0)
-        xpub.close(0)
+        for sock in (xsub, xpub):
+            try:
+                sock.close(0)
+            except zmq.ZMQError as exc:
+                if exc.errno != zmq.ENOTSOCK:
+                    raise
 
 
 def main(argv: list[str] | None = None) -> int:

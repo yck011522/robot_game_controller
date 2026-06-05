@@ -205,6 +205,7 @@ def main(argv: list[str] | None = None) -> int:
     seen_first: dict[str, bool] = {}
     last_recv_mono_ns: dict[str, int] = {}
     last_loop_hz: dict[str, float] = {}
+    last_heartbeat_body: dict[str, dict] = {}
     recv_window: dict[str, deque[int]] = {}
 
     exit_code = 0
@@ -296,6 +297,8 @@ def main(argv: list[str] | None = None) -> int:
                         topic, body = bus.recv(sub, flags=zmq.NOBLOCK)
                     except zmq.Again:
                         break
+                    if topic.startswith("heartbeat."):
+                        last_heartbeat_body[topic[len("heartbeat."):]] = body
                     _record_heartbeat(topic, body, last_recv_mono_ns, last_loop_hz,
                                        recv_window, seen_first)
 
@@ -309,7 +312,8 @@ def main(argv: list[str] | None = None) -> int:
                     break
 
             if time.perf_counter() >= next_status:
-                _print_status(children, last_recv_mono_ns, last_loop_hz, recv_window)
+                _print_status(children, last_recv_mono_ns, last_loop_hz,
+                              last_heartbeat_body, recv_window)
                 next_status = time.perf_counter() + 5.0
 
     finally:
@@ -348,7 +352,8 @@ def _record_heartbeat(topic: str, body: dict, last_recv_mono_ns: dict,
 
 
 def _print_status(children: dict, last_recv_mono_ns: dict,
-                  last_loop_hz: dict, recv_window: dict) -> None:
+                  last_loop_hz: dict, last_heartbeat_body: dict,
+                  recv_window: dict) -> None:
     now_ns = time.perf_counter_ns()
     print("[launcher] --- status ---", flush=True)
     for name in children:
@@ -358,9 +363,13 @@ def _print_status(children: dict, last_recv_mono_ns: dict,
             continue
         age_ms = (now_ns - last) / 1e6
         observed_hz = _observed_hz(recv_window.get(name))
-        print(f"  {name:28s}  age {age_ms:6.1f} ms  "
-              f"reported_loop_hz {last_loop_hz.get(name, 0.0):7.2f}  "
-              f"observed_hb_hz {observed_hz:5.2f}", flush=True)
+        line = (f"  {name:28s}  age {age_ms:6.1f} ms  "
+            f"reported_loop_hz {last_loop_hz.get(name, 0.0):7.2f}  "
+            f"observed_hb_hz {observed_hz:5.2f}")
+        checks_per_sec = last_heartbeat_body.get(name, {}).get("checks_per_sec")
+        if checks_per_sec is not None:
+            line += f"  checks_per_sec {float(checks_per_sec):7.2f}"
+        print(line, flush=True)
 
 
 def _observed_hz(window) -> float:

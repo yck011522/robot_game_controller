@@ -85,13 +85,15 @@ def main(argv: list[str] | None = None) -> int:
     from compas_fab.backends.exceptions import CollisionCheckError
     from subsystems.robot.scene import make_planner, UR10E_JOINT_NAMES
 
-    proc = Proc(args, profile, target_hz=TICK_HZ)
-
     rep: zmq.Socket | None = None
     client = None
     planner = None
     rcs = None
     cfg = None  # working copy of robot_configuration; mutated per request
+    metric_state = {
+        "checks_since_heartbeat": 0,
+        "last_heartbeat_mono_ns": time.perf_counter_ns(),
+    }
 
     def setup(p: Proc) -> None:
         nonlocal rep, client, planner, rcs, cfg
@@ -108,6 +110,15 @@ def main(argv: list[str] | None = None) -> int:
             f"{stats.get('n_tools_patched', 0)}t, "
             f"connected to {bus.COLLISION_DEALER_ENDPOINT}",
         )
+
+    def heartbeat_extras() -> dict[str, float]:
+        now_ns = time.perf_counter_ns()
+        elapsed_s = (now_ns - metric_state["last_heartbeat_mono_ns"]) / 1e9
+        checks_since_heartbeat = metric_state["checks_since_heartbeat"]
+        checks_per_sec = (checks_since_heartbeat / elapsed_s) if elapsed_s > 0 else 0.0
+        metric_state["checks_since_heartbeat"] = 0
+        metric_state["last_heartbeat_mono_ns"] = now_ns
+        return {"checks_per_sec": checks_per_sec}
 
     def teardown(_: Proc) -> None:
         if rep is not None:
@@ -136,9 +147,10 @@ def main(argv: list[str] | None = None) -> int:
 
         reply_topic = "rep.collision_result"
         try:
-            results, compute_ms = _check_bundle(
+            results, compute_ms, checks_processed = _check_bundle(
                 planner, rcs, cfg, UR10E_JOINT_NAMES, CollisionCheckError, body
             )
+            metric_state["checks_since_heartbeat"] += checks_processed
             reply = bus.make_envelope(p.proc, seq=int(body.get("request_id", 0)))
             reply.update({
                 "request_id": body.get("request_id"),
@@ -158,21 +170,26 @@ def main(argv: list[str] | None = None) -> int:
             })
         bus.publish(rep, reply_topic, reply)
 
+    proc = Proc(args, profile, target_hz=TICK_HZ,
+                heartbeat_extra_fields=heartbeat_extras)
+
     return proc.run(tick, setup=setup, teardown=teardown)
 
 
 def _check_bundle(planner, rcs, cfg, joint_names, CollisionCheckError, body
-                  ) -> tuple[list[dict], float]:
+                  ) -> tuple[list[dict], float, int]:
     """Run check_collision once per config in the bundle."""
     configs = body.get("configs_rad") or []
     n_joints = len(joint_names)
     t0 = time.perf_counter_ns()
     results: list[dict] = []
+    checks_processed = 0
     for q in configs:
         if len(q) != n_joints:
             raise ValueError(f"expected {n_joints} joints, got {len(q)}")
         cfg.joint_values = [float(v) for v in q]
         rcs.robot_configuration = cfg
+        checks_processed += 1
         try:
             planner.check_collision(rcs, options={"verbose": False})
             results.append({"collision": False, "first_hit": None})
@@ -184,7 +201,7 @@ def _check_bundle(planner, rcs, cfg, joint_names, CollisionCheckError, body
                 "first_hit": {"detail": str(exc)},
             })
     compute_ms = (time.perf_counter_ns() - t0) / 1e6
-    return results, compute_ms
+    return results, compute_ms, checks_processed
 
 
 if __name__ == "__main__":
