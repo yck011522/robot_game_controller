@@ -1,0 +1,70 @@
+# P3 bring-up profile — keyboard input on team B driving the real UR10e.
+# Pybullet viewer is launched separately via tools/robot_viewer.py so
+# robot_io.b can stay authoritative for the hardware.
+
+profile_name: dev_one_robot
+description: "P3 bring-up: keyboard -> real UR10e on team B"
+
+active_teams: [b]
+
+subsystems:
+  haptic_io:
+    a: null
+    b: sim_keyboard
+
+  robot_io:
+    a: null
+    b: real_rtde
+
+  jogging_planner:
+    a: null
+    b: in_process
+
+  weight_sensor_io: null
+  light_column_1_3: null
+  light_column_4_5: null
+  light_column_6_8: null
+  display_broadcaster: null
+  scoreboard_broadcaster: null
+  bucket_controller: null
+  button_controller: null
+  safety_barrier_controller: null
+
+  collision_workers:
+    count: 4
+
+  event_recorder: null
+  gamemaster_ui: null
+  bus_broker: real
+
+tuning:
+  haptic:
+    gear_ratio: [10.0, 10.0, 10.0, 5.0, 5.0, 5.0]
+    bounds_deg_min: [-180, -180, -180, -180, -180, -180]
+    bounds_deg_max: [180, 180, 180, 180, 180, 180]
+  robot:
+    max_velocity_deg_s:      [30, 30, 30, 30, 30, 30]
+    max_acceleration_deg_s2: [115, 115, 115, 115, 115, 115]
+    headless: false
+    initial_pose_deg: [0.0, -90.0, 90.0, 0.0, 0.0, 0.0]
+  collision:
+    check_self: true
+    check_world: true
+    timeout_ms: 40
+    retries: 2
+    bundle_size: 1
+  jogging:
+    n_forward_steps: 12
+    forward_step_deg: 1.0
+    path_cutoff_deg: 3.0
+    forward_bundle_size: 1
+    probe_half_deg: 10
+    prox_floor: 0.6
+    forward_timeout_ms: 40
+  game:
+    force_stage: play
+
+hardware:
+  robot:
+    # Matches the archived keyboard explorer's working default.
+    b: {host: "192.168.0.2", port: 30004}

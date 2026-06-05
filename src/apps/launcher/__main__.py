@@ -340,8 +340,11 @@ def main(argv: list[str] | None = None) -> int:
 
     ctx = zmq.Context.instance()
     sub = bus.make_sub(ctx, topics=["heartbeat."])
+    actual_sub = bus.make_sub(ctx, topics=["telem.robot.actual."])
     poller = zmq.Poller()
     poller.register(sub, zmq.POLLIN)
+    actual_poller = zmq.Poller()
+    actual_poller.register(actual_sub, zmq.POLLIN)
 
     seen_first: dict[str, bool] = {}
     last_recv_mono_ns: dict[str, int] = {}
@@ -393,7 +396,29 @@ def main(argv: list[str] | None = None) -> int:
                 exit_code = 1
                 return exit_code
 
-        # ---- tier 3: game controller (only if any team is active) ------
+        preseed_teams = _preseed_robot_teams(profile)
+
+        # ---- tier 3: RobotIO pre-seed ----------------------------------
+        for team in preseed_teams:
+            pname = f"robot_io.{team}"
+            children[pname] = _spawn(pname, profile_path,
+                                      module_registry=module_registry)
+
+        for team in preseed_teams:
+            pname = f"robot_io.{team}"
+            if not _wait_for_first_heartbeat(sub, poller, pname,
+                                              STARTUP_HEARTBEAT_TIMEOUT_S,
+                                              children, seen_first,
+                                              last_recv_mono_ns, last_loop_hz, recv_window):
+                exit_code = 1
+                return exit_code
+            if not _wait_for_first_robot_actual(actual_sub, actual_poller, team,
+                                                STARTUP_HEARTBEAT_TIMEOUT_S,
+                                                children):
+                exit_code = 1
+                return exit_code
+
+        # ---- tier 4: game controller (only if any team is active) ------
         if profile.active_teams:
             children["game_controller"] = _spawn("game_controller", profile_path,
                                                   module_registry=module_registry)
@@ -404,12 +429,13 @@ def main(argv: list[str] | None = None) -> int:
                 exit_code = 1
                 return exit_code
 
-        # ---- tier 4: per-team IO ---------------------------------------
+        # ---- tier 5: remaining per-team IO -----------------------------
         for team in profile.active_teams:
             if profile.is_enabled("robot_io", team=team):
                 pname = f"robot_io.{team}"
-                children[pname] = _spawn(pname, profile_path,
-                                          module_registry=module_registry)
+                if pname not in children:
+                    children[pname] = _spawn(pname, profile_path,
+                                              module_registry=module_registry)
             if profile.is_enabled("haptic_io", team=team):
                 pname = f"haptic_io.{team}"
                 children[pname] = _spawn(pname, profile_path,
@@ -467,6 +493,7 @@ def main(argv: list[str] | None = None) -> int:
             # graceful path unchanged while still handling crash-only exits.
             process_job.close()
         sub.close(0)
+        actual_sub.close(0)
         ctx.destroy(linger=0)
 
     return exit_code
@@ -527,6 +554,14 @@ def _observed_hz(window) -> float:
     return (len(window) - 1) * 1e9 / span_ns
 
 
+def _preseed_robot_teams(profile: Profile) -> list[str]:
+    robot_io = profile.subsystems.get("robot_io", {}) or {}
+    return [
+        team for team in profile.active_teams
+        if robot_io.get(team) is not None
+    ]
+
+
 def _wait_for_first_heartbeat(sub, poller, name: str, timeout_s: float,
                               children: dict, seen_first: dict,
                               last_recv_mono_ns: dict, last_loop_hz: dict,
@@ -558,6 +593,34 @@ def _wait_for_first_heartbeat(sub, poller, name: str, timeout_s: float,
                       file=sys.stderr, flush=True)
                 return False
     print(f"[launcher] timeout waiting for {name} heartbeat", file=sys.stderr, flush=True)
+    return False
+
+
+def _wait_for_first_robot_actual(sub, poller, team: str, timeout_s: float,
+                                 children: dict) -> bool:
+    deadline = time.perf_counter() + timeout_s
+    topic_name = f"telem.robot.actual.{team}"
+    print(f"[launcher] waiting for {topic_name} first sample...", flush=True)
+    while time.perf_counter() < deadline:
+        events = dict(poller.poll(timeout=200))
+        if sub in events:
+            while True:
+                try:
+                    topic, body = bus.recv(sub, flags=zmq.NOBLOCK)
+                except zmq.Again:
+                    break
+                if topic != topic_name:
+                    continue
+                q = body.get("q_rad")
+                if isinstance(q, list) and len(q) >= 6:
+                    print(f"[launcher] {topic_name} sample received", flush=True)
+                    return True
+        for cn, child in children.items():
+            if child.poll() is not None:
+                print(f"[launcher] {cn} died (rc={child.returncode}) while waiting for {topic_name}",
+                      file=sys.stderr, flush=True)
+                return False
+    print(f"[launcher] timeout waiting for {topic_name}", file=sys.stderr, flush=True)
     return False
 
 

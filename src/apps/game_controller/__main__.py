@@ -61,7 +61,7 @@ def main(argv: list[str] | None = None) -> int:
             # integrator with all-zero (the default) and the robot
             # would snap to the in-pedestal pose.
             "last_q": None,
-            "last_target": list(planner.q_cur),
+            "last_target": None,
             "last_collision": False,
             "last_first_hit": None,
             "last_path_scalar": 1.0,
@@ -95,6 +95,15 @@ def main(argv: list[str] | None = None) -> int:
             # a huge accel-clamped velocity jump on the next tick.
             if dt > 0.1:
                 dt = 0.1
+
+            if st["last_q"] is None:
+                st["last_target"] = None
+                st["last_collision"] = False
+                st["last_first_hit"] = None
+                st["last_path_scalar"] = 1.0
+                st["last_prox_scalar"] = 1.0
+                st["last_final_scalar"] = 1.0
+                continue
 
             q_target, info = planner.plan(
                 dial_pos_rad=st["last_dial"],

@@ -5,3 +5,4 @@ pybullet>=3.2
 pygame>=2.5
 compas>=2.0
 compas_fab>=1.0
+ur_rtde==1.6.3

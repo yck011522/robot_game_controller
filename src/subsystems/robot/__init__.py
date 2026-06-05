@@ -10,6 +10,9 @@ Modules:
 - `sim_pybullet.py` — compas_fab `PyBulletPlanner`-backed `RobotIO`
   (P2). Supports both a GUI viewer (default in `dev_keyboard.yaml`)
   and a headless DIRECT mode (used by tests).
+- `real_rtde.py` — real UR10e `RobotIO` using `ur_rtde` with the
+  startup-sync and `servoJ` behavior proven in the archived keyboard
+  explorer.
 - `urdf_loader.py` — legacy raw-pybullet URDF loader. Kept on disk for
   diff-history; nothing imports it any more.
 """

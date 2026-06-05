@@ -135,3 +135,27 @@ def _validate(data: dict[str, Any], errors: list[str]) -> None:
     # bus_broker is always required at runtime (CONFIG.md §3.2).
     if subs.get("bus_broker") != "real":
         errors.append("subsystems.bus_broker must be 'real' (no other impl exists)")
+
+    hardware = data.get("hardware") or {}
+    robot_hw = hardware.get("robot") if isinstance(hardware, dict) else None
+    for t in VALID_TEAMS:
+        robot_impl = subs.get("robot_io", {}).get(t) if isinstance(subs.get("robot_io"), dict) else None
+        if robot_impl != "real_rtde":
+            continue
+        if not isinstance(robot_hw, dict):
+            errors.append(f"hardware.robot.{t}.host is required when subsystems.robot_io.{t} is 'real_rtde'")
+            continue
+        team_hw = robot_hw.get(t)
+        if not isinstance(team_hw, dict):
+            errors.append(f"hardware.robot.{t}.host is required when subsystems.robot_io.{t} is 'real_rtde'")
+            continue
+        host = team_hw.get("host")
+        if not isinstance(host, str) or not host.strip():
+            errors.append(f"hardware.robot.{t}.host must be a non-empty string when subsystems.robot_io.{t} is 'real_rtde'")
+        port = team_hw.get("port")
+        if port is not None:
+            try:
+                if int(port) <= 0:
+                    errors.append(f"hardware.robot.{t}.port must be > 0 when provided")
+            except (TypeError, ValueError):
+                errors.append(f"hardware.robot.{t}.port must be an integer when provided")

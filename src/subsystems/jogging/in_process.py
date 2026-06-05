@@ -73,7 +73,6 @@ from core import bus
 
 # Robot kinematics defaults (used only when tuning.robot omits them).
 _DEFAULT_LIMIT_RAD = math.pi
-_DEFAULT_HOME_DEG = [0.0, -90.0, 90.0, 0.0, 0.0, 0.0]
 _DEFAULT_MAX_VEL_DPS = [20.0, 20.0, 20.0, 30.0, 30.0, 30.0]
 _DEFAULT_MAX_ACCEL_DPS2 = [50.0, 50.0, 50.0, 80.0, 80.0, 80.0]
 
@@ -118,10 +117,6 @@ class InProcessPlanner:
         q_max = robot_tune.get("q_limits_max_rad", [_DEFAULT_LIMIT_RAD] * 6)
         self._q_min = list(q_min)[:6]
         self._q_max = list(q_max)[:6]
-        home_deg = robot_tune.get("initial_pose_deg", _DEFAULT_HOME_DEG)
-        self._q_home = [math.radians(float(v)) for v in home_deg][:6]
-        while len(self._q_home) < 6:
-            self._q_home.append(0.0)
         max_vel_dps = robot_tune.get("max_velocity_deg_s", _DEFAULT_MAX_VEL_DPS)
         max_accel_dps2 = robot_tune.get("max_acceleration_deg_s2", _DEFAULT_MAX_ACCEL_DPS2)
         self._max_vel = [math.radians(float(v)) for v in max_vel_dps][:6]
@@ -155,7 +150,7 @@ class InProcessPlanner:
         self._timeout_s = float(timeout_ms) / 1000.0
 
         # ---- integrator + cache state -------------------------------
-        self._q_cur = list(self._q_home)
+        self._q_cur = [0.0] * 6
         self._v_cur = [0.0] * 6
         self._seeded = False
         self._prev_dial_pos: Optional[list[float]] = None
@@ -205,8 +200,6 @@ class InProcessPlanner:
 
     def plan(self, *, dial_pos_rad: list[float],
              dt: float) -> tuple[list[float], dict]:
-        if not self._seeded:
-            self._seeded = True
         if dt <= 0.0:
             dt = 1.0 / 50.0
 
