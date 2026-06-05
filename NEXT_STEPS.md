@@ -339,9 +339,7 @@ Rewrite stale root `.md` to match the new architecture as part of P0/P1.
   can be deferred until smoke tests reveal real needs.
 - Local validation on this machine should use
   `C:\Users\yck01\miniconda3\envs\game\python.exe` (or an activated
-  `game` env that resolves there). The repo-local `.conda` env exists
-  but was missing `pyzmq` during the 2026-06-05 P2 recheck, so it is not
-  the reference launcher/test environment until rebuilt.
+  `game` env that resolves there).
 - Type hints: no strict policy; clarity over rigor.
 - The `docs/` folder currently contains only `docs/architecture/`
   with `SYSTEM_MAP.md`, `BUS.md`, and `CONFIG.md`. Everything else

@@ -63,9 +63,7 @@ Python 3.12 via Miniforge, conda env named `game`, then
 
 On this development machine, the validated interpreter for launcher,
 tests, and benchmarks is
-`C:\Users\yck01\miniconda3\envs\game\python.exe`. The repo-local
-`.conda` environment currently needs to be rebuilt before it should be
-treated as authoritative for P2/P3 validation.
+`C:\Users\yck01\miniconda3\envs\game\python.exe`.
 
 ## Running
 

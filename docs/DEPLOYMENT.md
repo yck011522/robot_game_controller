@@ -36,10 +36,6 @@ This has been tested on the development machine and confirmed working:
 Current validated local interpreter on the development machine:
 `C:\Users\yck01\miniconda3\envs\game\python.exe`
 
-The repo-local `.conda` environment exists, but it was missing `pyzmq`
-during the 2026-06-05 P2 validation pass. Treat `game` as the reference
-environment until `.conda` is rebuilt from `requirements.txt`.
-
 The environment can be exported from the development machine and replicated
 exactly on the deployment machine (see Section 4).
 
