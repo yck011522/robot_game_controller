@@ -67,6 +67,7 @@ from typing import Optional
 import zmq
 
 from core import bus
+from subsystems.robot.joint_limits import resolve_joint_limits_rad
 
 
 # --- Defaults (overridden by profile.tuning.jogging / .robot / .collision) ---
@@ -113,10 +114,7 @@ class InProcessPlanner:
             self._gear.append(1.0)
 
         robot_tune = profile.tuning.get("robot", {})
-        q_min = robot_tune.get("q_limits_min_rad", [-_DEFAULT_LIMIT_RAD] * 6)
-        q_max = robot_tune.get("q_limits_max_rad", [_DEFAULT_LIMIT_RAD] * 6)
-        self._q_min = list(q_min)[:6]
-        self._q_max = list(q_max)[:6]
+        self._q_min, self._q_max = resolve_joint_limits_rad(robot_tune, axes=6)
         max_vel_dps = robot_tune.get("max_velocity_deg_s", _DEFAULT_MAX_VEL_DPS)
         max_accel_dps2 = robot_tune.get("max_acceleration_deg_s2", _DEFAULT_MAX_ACCEL_DPS2)
         self._max_vel = [math.radians(float(v)) for v in max_vel_dps][:6]

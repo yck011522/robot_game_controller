@@ -141,7 +141,25 @@ def _validate(data: dict[str, Any], errors: list[str]) -> None:
         errors.append("subsystems.bus_broker must be 'real' (no other impl exists)")
 
     hardware = data.get("hardware") or {}
+    tuning = data.get("tuning") or {}
+    robot_tune = tuning.get("robot") if isinstance(tuning, dict) else None
     robot_hw = hardware.get("robot") if isinstance(hardware, dict) else None
+
+    needs_robot_limits = False
+    for t in teams:
+        robot_impl = subs.get("robot_io", {}).get(t) if isinstance(subs.get("robot_io"), dict) else None
+        planner_impl = subs.get("jogging_planner", {}).get(t) if isinstance(subs.get("jogging_planner"), dict) else None
+        if robot_impl is not None or planner_impl is not None:
+            needs_robot_limits = True
+            break
+
+    if needs_robot_limits:
+        if not isinstance(robot_tune, dict):
+            errors.append("tuning.robot.q_limits_min_deg and tuning.robot.q_limits_max_deg are required when robot_io or jogging_planner is enabled")
+        else:
+            _validate_robot_limit_array(robot_tune.get("q_limits_min_deg"), "tuning.robot.q_limits_min_deg", errors)
+            _validate_robot_limit_array(robot_tune.get("q_limits_max_deg"), "tuning.robot.q_limits_max_deg", errors)
+
     for t in VALID_TEAMS:
         robot_impl = subs.get("robot_io", {}).get(t) if isinstance(subs.get("robot_io"), dict) else None
         if robot_impl != "real_rtde":
@@ -163,3 +181,17 @@ def _validate(data: dict[str, Any], errors: list[str]) -> None:
                     errors.append(f"hardware.robot.{t}.port must be > 0 when provided")
             except (TypeError, ValueError):
                 errors.append(f"hardware.robot.{t}.port must be an integer when provided")
+
+
+def _validate_robot_limit_array(value: Any, field: str, errors: list[str]) -> None:
+    if not isinstance(value, list):
+        errors.append(f"{field} must be a list of 6 degree values")
+        return
+    if len(value) < 6:
+        errors.append(f"{field} must provide 6 values")
+        return
+    for idx, item in enumerate(value[:6]):
+        try:
+            float(item)
+        except (TypeError, ValueError):
+            errors.append(f"{field}[{idx}] must be numeric")

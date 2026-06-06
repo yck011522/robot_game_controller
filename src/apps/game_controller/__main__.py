@@ -55,6 +55,8 @@ def main(argv: list[str] | None = None) -> int:
             "sub_haptic": sub,
             "sub_actual": actual_sub,
             "last_dial": [0.0] * 6,
+            "last_haptic_connected": [False] * 6,
+            "last_haptic_loop_hz": [0.0] * 6,
             # last_q starts as None; planner only re-seeds once a real
             # telem.robot.actual.<team> has actually arrived. Without
             # this guard the very first tick would seed the planner's
@@ -78,8 +80,7 @@ def main(argv: list[str] | None = None) -> int:
     def tick(p: Proc) -> None:
         nonlocal state_seq
         for team, st in teams.items():
-            _drain_latest(st["sub_haptic"], on_msg=lambda b, s=st:
-                          s.update(last_dial=b.get("dial_pos_rad", s["last_dial"])))
+            _drain_latest(st["sub_haptic"], on_msg=lambda b, s=st: _update_haptic_state(s, b))
             _drain_latest(st["sub_actual"], on_msg=lambda b, s=st: _update_actual_state(s, b))
 
             planner: InProcessPlanner = st["planner"]
@@ -179,6 +180,8 @@ def main(argv: list[str] | None = None) -> int:
                     },
                     "haptic": {
                         "dial_pos_rad": st["last_dial"],
+                        "connected": st["last_haptic_connected"],
+                        "board_loop_hz": st["last_haptic_loop_hz"],
                     },
                     "collision": {
                         "in_collision": st["last_collision"],
@@ -220,6 +223,18 @@ def _update_actual_state(state: dict, body: dict) -> None:
     robot_status = body.get("robot_status")
     if isinstance(robot_status, dict):
         state["robot_status"] = robot_status
+
+
+def _update_haptic_state(state: dict, body: dict) -> None:
+    state["last_dial"] = body.get("dial_pos_rad", state["last_dial"])
+    connected = body.get("board_connected")
+    if isinstance(connected, list):
+        state["last_haptic_connected"] = [bool(v) for v in connected[:6]] + [False] * max(0, 6 - len(connected[:6]))
+        state["last_haptic_connected"] = state["last_haptic_connected"][:6]
+    loop_hz = body.get("board_loop_hz")
+    if isinstance(loop_hz, list):
+        state["last_haptic_loop_hz"] = [float(v) for v in loop_hz[:6]] + [0.0] * max(0, 6 - len(loop_hz[:6]))
+        state["last_haptic_loop_hz"] = state["last_haptic_loop_hz"][:6]
 
 
 if __name__ == "__main__":

@@ -14,6 +14,7 @@ import zmq  # noqa: E402
 
 from core import bus  # noqa: E402
 from core.proc import Proc, banner  # noqa: E402
+from subsystems.robot.joint_limits import clamp_joint_target_rad, resolve_joint_limits_rad  # noqa: E402
 
 
 # Internal tick rate. We poll the cmd sub at this rate and step
@@ -38,6 +39,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     robot_hw = proc.profile.hardware.get("robot", {}) or {}
     robot_cfg = robot_hw.get(team, {}) or {}
+    q_min, q_max = resolve_joint_limits_rad(proc.profile.tuning.get("robot", {}), axes=6)
     import math as _math
     initial_pose_rad = [_math.radians(float(v)) for v in initial_pose_deg]
 
@@ -98,7 +100,7 @@ def main(argv: list[str] | None = None) -> int:
                 except zmq.Again:
                     break
         if latest_q is not None:
-            impl.set_target([float(x) for x in latest_q])
+            impl.set_target(clamp_joint_target_rad(latest_q, q_min, q_max, axes=6))
         if latest_clamps is not None and hasattr(impl, "set_clamps"):
             impl.set_clamps(latest_clamps)
 

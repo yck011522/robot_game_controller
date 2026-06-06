@@ -315,6 +315,7 @@ Subscribers that care about stage edges detect them by comparing
   "haptic": {
     "a": {
       "connected":  [true, true, true, true, true, true],   // ESP32 board link up
+      "board_loop_hz": [200, 200, 198, 200, 200, 200],      // per-board measured loop rate, Hz
       "dial_pos":   [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],         // dial angle, rad
       "dial_vel":   [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],         // dial angular velocity, rad/s
       "bounds_min": [-3.14, -3.14, -3.14, -3.14, -3.14, -3.14], // active soft lower bound per dial, rad

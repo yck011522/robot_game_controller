@@ -195,6 +195,8 @@ def main() -> int:
         team_a = last_state["teams"]["a"]
         assert "robot" in team_a and "q_target_rad" in team_a["robot"]
         assert "haptic" in team_a and "dial_pos_rad" in team_a["haptic"]
+        assert "connected" in team_a["haptic"]
+        assert "board_loop_hz" in team_a["haptic"]
         print("[test] OK: state.full schema looks right")
 
         print("\n[test] P2 SMOKE TEST PASSED\n")

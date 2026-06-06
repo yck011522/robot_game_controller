@@ -282,8 +282,11 @@ from day one** so adding team A later (P8) is a config change only.
 
 This dashboard will become full screen on a 2560x1440 (dev) or 4k (production) monitor, 
 we need to find a way such that this is scaled down and in window mode during development, 
-but we primarily design this for fullscreen at 4k. This should have a dark theme and use blue vs red colour
-to represent two teams. Team A is blue, Team B is red.
+but we primarily design this for fullscreen at 4k. This should have a dark theme.
+Team A is always rendered on the right and Team B on the left. Their colour assignment must be
+configurable per profile; the current default is Team A = blue and Team B = red.
+Legacy `src/gamemaster_ui.py` is not the visual baseline for P4; only reusable data plumbing, if any,
+should be carried forward.
 
 - `src/apps/gamemaster_ui/` — pygame app:
   - Game Clock (because this dashboard is actually visible to the audience)
@@ -293,7 +296,12 @@ to represent two teams. Team A is blue, Team B is red.
   - Per-process Hz boxes driven by `state.full.process_health`. Tiny
     colored squares per [NEXT_STEPS §2.G.43](../NEXT_STEPS.md).
   - Per-joint dial-position-vs-actual visualizer per team (lifted
-    from the keyboard explorer).
+    from the keyboard explorer). These vertical lanes use the robot's
+    fixed joint hard limits as their range. Haptic dial min/max is a
+    runtime soft-bound signal, not the lane extent; those bounds may
+    change during play as collision logic tightens or relaxes motion.
+    RobotIO should remain the final hard-limit check before commands
+    leave the controller PC.
   - Manual REQs: `set_stage` (one tiny button for each stage), `soft_estop`, `start_resume`, `adjust_score`,
     per [BUS.md §7](architecture/BUS.md#7-ui--gc-commands-reqrep-at-5570).
   - **No editable tuning widgets.** All tuning lives in YAML

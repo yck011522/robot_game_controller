@@ -43,6 +43,8 @@ tuning:
     bounds_deg_min: [-180, -180, -180, -180, -180, -180]
     bounds_deg_max: [180, 180, 180, 180, 180, 180]
   robot:
+    q_limits_min_deg: [-180, -180, -180, -180, -180, -180]
+    q_limits_max_deg: [ 180,  180,  180,  180,  180,  180]
     max_velocity_deg_s:      [30, 30, 30, 30, 30, 30]
     max_acceleration_deg_s2: [115, 115, 115, 115, 115, 115]
     headless: false

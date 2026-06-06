@@ -39,6 +39,8 @@ tuning:
   haptic:
     gear_ratio: [10.0, 10.0, 10.0, 5.0, 5.0, 5.0]
   robot:
+    q_limits_min_deg: [-180, -180, -180, -180, -180, -180]
+    q_limits_max_deg: [ 180,  180,  180,  180,  180,  180]
     initial_pose_deg: [0.0, -90.0, 90.0, 0.0, 0.0, 0.0]
     headless: true
   collision:
