@@ -274,13 +274,13 @@ collision check still refuses bad configurations.
 
 ---
 
-### P4 — Gamemaster dashboard (pygame, separate from keyboard UI) ◐ IN PROGRESS
+### P4 — Gamemaster dashboard (pygame, separate from keyboard UI) ✅ DONE
 
 Separate process, separate window. The current implementation is a
-read-only consumer of `state.full` plus `heartbeat.*`; the UI → GC
-REQ/REP control path is still open work. **Two-team layout from day
-one** remains the target so adding team A later (P8) is a config
-change only.
+consumer of `state.full` plus `heartbeat.*`, with acknowledged UI → GC
+operator commands on the dedicated `:5570` REQ/REP path. **Two-team
+layout from day one** remains the target so adding team A later (P8)
+is a config change only.
 
 This dashboard is designed against a fullscreen 4k target while still
 running scaled-down in a resizable dev window. It uses a dark theme.
@@ -301,36 +301,40 @@ reusable data plumbing, if any, should be carried forward.
 - Team A is rendered on the right and Team B on the left, with the
   chosen broadcast layout, per-joint actual-vs-target lanes, and live
   proximity rails driven by planner probe samples.
+- `state.full` now carries the live audience timer, per-team bucket
+  values, integer `summed_score`, and conclusion data needed for the
+  dashboard's score presentation.
+- The dashboard renders the live timer, bucket panels, conclusion
+  score total, and local winner/tie presentation from the live game
+  snapshot instead of placeholder-only content.
+- Operator controls (`play_resume`, `soft_estop`, `end_game`) are live
+  on the dedicated UI command socket at `:5570`; the dashboard issues
+  acknowledged REQ/REP commands, surfaces pending/timeout state, and
+  GameController deduplicates retried request IDs.
 - Core-process and collision-worker health are shown live from
-  `heartbeat.*`, with profile-driven `fps_target`, `fps_min`, and
+  `heartbeat.*`, with shared runtime-config `fps_target`, `fps_min`, and
   `heartbeat_age_max` thresholds.
 - The current runnable slice is validated on both `dev_keyboard`
   (sim) and `dev_one_robot_keyboard` (real UR10e bring-up).
 
-**Remaining before P4 can close:**
+**Deferred follow-up after P4 closure:**
 
-- The audience clock is still a placeholder (`--:--`); GameController
-  does not yet publish a proper countdown / timer field for the
-  dashboard.
-- Score and bucket panels are still placeholder-only; current
-  `state.full` does not carry the needed live score / bucket-weight
-  data and the dashboard does not consume them yet.
-- Manual operator REQs (`set_stage`, `soft_estop`, `start_resume`,
-  `adjust_score`, `reload_config`) on the UI socket at `:5570` are not
-  implemented yet.
-- Process health is not yet sourced from `state.full.process_health`;
-  the dashboard derives it directly from `heartbeat.*` for now.
-- Closing the dashboard window does not meet the original restart
-  requirement; `gamemaster_ui` is still treated as a non-respawned
-  process.
+- The wider maintenance verb set from BUS.md (`set_stage`,
+  `adjust_score`, `reload_config`) is still future work; P4 only needed
+  the operator controls used by the current observer dashboard.
+- Dashboard liveness remains derived directly from `heartbeat.*` by
+  design; no duplicated liveness block is required inside `state.full`.
+- Closing the dashboard window still does not meet the original
+  auto-respawn expectation; that hardening belongs with the broader
+  supervisor / self-healing work in P12 rather than blocking P4.
 
 **Current runnable criterion reached:** dashboard window opens, shows
-live joint motion and heartbeat-derived process health, and runs
-alongside the keyboard UI.
+live joint motion, live timer and score state, acknowledged operator
+controls, and heartbeat-derived liveness alongside the keyboard UI.
 
-**P4 closure criterion:** close this phase only after the live timer,
-score / bucket data, and at least the `soft_estop` UI → GC path are
-implemented and validated end-to-end.
+**P4 closure criterion (met):** live timer, score / bucket data, and
+the acknowledged UI → GC control path are implemented and validated
+end-to-end on the current runtime profiles.
 
 ---
 

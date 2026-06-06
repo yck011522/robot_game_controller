@@ -1,0 +1,39 @@
+# Shared runtime settings for the launched processes.
+# These values are not profile-selectable; profiles only choose impls,
+# team activation, counts, and tuning/hardware data.
+
+subsystems:
+  haptic_io:
+    fps_target: 55.0
+    fps_min: 50.0
+    heartbeat_age_max: 1100
+
+  robot_io:
+    fps_target: 200.0
+    fps_min: 80.0
+    heartbeat_age_max: 1100
+
+  collision_workers:
+    fps_target: 1000.0
+    fps_min: 40.0
+    heartbeat_age_max: 1100
+
+  collision_broker:
+    fps_target: 1.0
+    fps_min: 0.8
+    heartbeat_age_max: 1100
+
+  bus_broker:
+    fps_target: 1.0
+    fps_min: 0.8
+    heartbeat_age_max: 1100
+
+  game_controller:
+    fps_target: 60.0
+    fps_min: 45.0
+    heartbeat_age_max: 1100
+
+  gamemaster_ui:
+    fps_target: 60.0
+    fps_min: 50.0
+    heartbeat_age_max: 1100

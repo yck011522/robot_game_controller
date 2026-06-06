@@ -221,7 +221,7 @@ the last line per `game_id`.
 
 ---
 
-## 4. Process health summary
+## 4. Heartbeat audit summary
 
 The recorder also subscribes to every `heartbeat.<proc>` topic ([BUS.md
 §6.9](BUS.md#69-heartbeatproc)) and tracks per-process last-seen

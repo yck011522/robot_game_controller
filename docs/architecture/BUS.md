@@ -174,7 +174,7 @@ internals read from the `telem.*` and `cmd.*` topics below.
 
 | Topic | Rate | Body summary |
 |-------|------|--------------|
-| `state.full` | 50 Hz | Authoritative game snapshot (see §6.1). Includes stage, scores, bucket weights, per-team robot/haptic summaries, safety/buttons, process health, and the `tutorial_entered_mono_ns` / `tutorial_entered_wall_ns` reference timestamps. |
+| `state.full` | 50 Hz | Authoritative game snapshot (see §6.1). Includes stage, scores, bucket weights, per-team robot/haptic summaries, safety/buttons, and the `tutorial_entered_mono_ns` / `tutorial_entered_wall_ns` reference timestamps. |
 
 The GC ↔ JoggingPlanner pipeline does **not** produce `state.*` topics.
 JP subscribes to `telem.haptic.<team>` directly and publishes its
@@ -350,18 +350,6 @@ Subscribers that care about stage edges detect them by comparing
   "buttons": {
     "left":  {"start_resume": false, "reset": false, "estop": false},
     "right": {"start_resume": false, "reset": false, "estop": false}
-  },
-
-  // Liveness of every long-lived process the supervisor monitors.
-  // Value = milliseconds since this producer last saw a heartbeat
-  // from that process. Higher = more stale; `null` means the process
-  // is not configured to run in the active profile.
-  "process_health": {
-    "haptic_io.a":       4,
-    "robot_io.a":        2,
-    "weight_sensor_io": 20,
-    "vision_pc":       950,   // external PC heartbeat, see BUS.md §11
-    "audio_pc":       1020
   }
 }
 ```
@@ -527,14 +515,19 @@ should mirror the same logical admin actions as the physical button
 stations so there is only one control vocabulary in the system. One REQ
 on the UI side, one REP in GC's main loop.
 
+Current P4 scope: this path is live for the observer-dashboard controls
+only. The broader maintenance verb set remains future work.
+
 Request envelope:
 
 ```jsonc
 {
   "ts_mono_ns": ...,
+  "ts_wall_ns": ...,
   "producer": "gamemaster_ui",
-  "verb": "admin_command",        // see verbs below
-  "args": { ... }
+  "request_id": 42,               // echoed by GC; used for retry dedupe
+  "action": "soft_estop",        // current action set listed below
+  "source": "keyboard"           // e.g. keyboard | mouse
 }
 ```
 
@@ -543,35 +536,46 @@ Reply envelope:
 ```jsonc
 {
   "ts_mono_ns": ...,
+  "ts_wall_ns": ...,
   "producer": "game_controller",
   "ok": true,
   "error": null,                  // string when ok=false
-  "result": { ... }               // verb-specific
+  "request_id": 42,
+  "source": "keyboard",
+  "result": {
+    "action": "soft_estop",
+    "soft_estop": true,
+    "active_stage": "play",
+    "last_action": "soft_estop"
+  }
 }
 ```
 
-Verbs (initial set, expand as needed):
+Current action set:
 
-| Verb | Args | Notes |
-|------|------|-------|
-| `admin_command` | `{"action": "start_resume"\|"reset"\|"pause", "source": "ui"}` | Mirrors the physical admin controls. `start_resume` is the acknowledge path out of recoverable pause states; `pause` is a software pause only and does not emulate a hardwired safety loop. |
-| `set_stage` | `{"to": "idle"\|"tutorial"\|"play"\|"paused"\|"conclusion"\|"reset"}` | Maintenance-only manual override; bypasses the normal admin-button policy. |
-| `adjust_score` | `{"team": "a"\|"b", "delta": int}` | Sensor fallback. |
-| `reload_config` | `{}` | Re-reads the active profile YAML. |
-| `ping` | `{}` | Health check. |
+| Action | Effect | Notes |
+|--------|--------|-------|
+| `play_resume` | Clear the current software pause. | Current dashboard label is "PLAY / RESUME". This is the temporary UI-side acknowledge path in the P4 runtime. |
+| `soft_estop` | Assert the software pause / soft e-stop. | This is a software-only pause, not a substitute for a hardwired safety loop. |
+| `end_game` | Force the game into conclusion. | Intended for operator control during the observer-dashboard flow. |
+
+Planned but not yet implemented on this socket: `set_stage`,
+`adjust_score`, `reload_config`, and any richer maintenance/admin
+verbs.
 
 REQ sockets get stuck after a timeout, so the UI must rebuild its REQ
 socket on timeout — same gotcha as the collision check (see SYSTEM_MAP
-§5).
+§5). The current dashboard implementation does exactly that.
 
 ### 7.1 Acknowledge / resume path
 
-All recoverable pauses use the same path:
+All recoverable pauses use the same path conceptually, but only part of
+it is implemented today:
 
-1. A pause cause arrives: `telem.buttons.*.estop`, a barrier breach, `admin_command {action: "pause"}`, or a recoverable robot fault such as `robot_status.fault_reason == "protective_stop"`.
+1. A pause cause arrives: `telem.buttons.*.estop`, a barrier breach, the UI `soft_estop` command, or a recoverable robot fault such as `robot_status.fault_reason == "protective_stop"`.
 2. GameController enters `state.full.stage = "paused"`, sets `paused = true`, records `pause_reason`, freezes new motion planning, and keeps robot targets pinned to actual pose.
 3. The operator clears the physical cause: unlatches the e-stop mushroom, clears the barrier, or inspects and clears the robot protective stop.
-4. The operator presses `start_resume` on either admin station, or the UI issues `admin_command {action: "start_resume"}`.
+4. The operator presses `start_resume` on either admin station. In the current dashboard runtime, the UI-side counterpart is `play_resume`.
 5. GameController validates that every resume guard is clear. If a robot recovery hook is configured, this is where it may run the Dashboard `unlock protective stop` / `power on` / `brake release` sequence.
 6. Only after that explicit acknowledge edge does GameController return to the prior runnable stage.
 

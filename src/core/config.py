@@ -7,6 +7,7 @@ phases extend `validate()` with the rest of [CONFIG.md §5](../../docs/architect
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -32,43 +33,8 @@ GLOBAL_SUBSYSTEMS = (
 
 POOLED_SUBSYSTEMS = ("collision_workers",)
 
-DEFAULT_SUBSYSTEM_RUNTIME: dict[str, dict[str, float]] = {
-    "bus_broker": {
-        "fps_target": 1.0,
-        "fps_min": 0.8,
-        "heartbeat_age_max": 1100.0,
-    },
-    "collision_broker": {
-        "fps_target": 1.0,
-        "fps_min": 0.8,
-        "heartbeat_age_max": 1100.0,
-    },
-    "collision_workers": {
-        "fps_target": 1000.0,
-        "fps_min": 800.0,
-        "heartbeat_age_max": 1100.0,
-    },
-    "robot_io": {
-        "fps_target": 200.0,
-        "fps_min": 180.0,
-        "heartbeat_age_max": 1100.0,
-    },
-    "haptic_io": {
-        "fps_target": 50.0,
-        "fps_min": 45.0,
-        "heartbeat_age_max": 1100.0,
-    },
-    "game_controller": {
-        "fps_target": 60.0,
-        "fps_min": 45.0,
-        "heartbeat_age_max": 1100.0,
-    },
-    "gamemaster_ui": {
-        "fps_target": 30.0,
-        "fps_min": 20.0,
-        "heartbeat_age_max": 1100.0,
-    },
-}
+REPO_ROOT = Path(__file__).resolve().parents[2]
+RUNTIME_CONFIG_PATH = REPO_ROOT / "config" / "runtime.yaml"
 
 
 class ConfigError(ValueError):
@@ -115,16 +81,7 @@ class Profile:
         return _normalize_impl_value(node)
 
     def subsystem_float(self, subsystem: str, key: str, default: float | None = None) -> float | None:
-        node = self.subsystems.get(subsystem)
-        if not isinstance(node, dict):
-            return default_runtime_setting(subsystem, key, default)
-        raw = node.get(key, default_runtime_setting(subsystem, key, default))
-        if raw is None:
-            return None
-        try:
-            return float(raw)
-        except (TypeError, ValueError):
-            return default_runtime_setting(subsystem, key, default)
+        return default_runtime_setting(subsystem, key, default)
 
 
 def load(path: str | Path) -> Profile:
@@ -258,7 +215,7 @@ def _validate_robot_limit_array(value: Any, field: str, errors: list[str]) -> No
 
 
 def default_runtime_setting(subsystem: str, key: str, default: float | None = None) -> float | None:
-    node = DEFAULT_SUBSYSTEM_RUNTIME.get(subsystem, {})
+    node = _runtime_subsystems().get(subsystem, {})
     raw = node.get(key, default)
     if raw is None:
         return None
@@ -266,6 +223,23 @@ def default_runtime_setting(subsystem: str, key: str, default: float | None = No
         return float(raw)
     except (TypeError, ValueError):
         return default
+
+
+@lru_cache(maxsize=1)
+def _runtime_subsystems() -> dict[str, dict[str, Any]]:
+    if not RUNTIME_CONFIG_PATH.exists():
+        return {}
+    data = yaml.safe_load(RUNTIME_CONFIG_PATH.read_text(encoding="utf-8")) or {}
+    if not isinstance(data, dict):
+        return {}
+    subsystems = data.get("subsystems", data)
+    if not isinstance(subsystems, dict):
+        return {}
+    return {
+        str(name): dict(node)
+        for name, node in subsystems.items()
+        if isinstance(name, str) and isinstance(node, dict)
+    }
 
 
 def _normalize_impl_value(value: Any) -> str | None:

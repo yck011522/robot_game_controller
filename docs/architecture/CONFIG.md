@@ -74,12 +74,12 @@ active_teams: [a]
 #   null                 — subsystem not spawned at all (its bus topics
 #                          simply will not exist; consumers must handle this)
 #   "<impl name>"        — direct impl selection for simple/global entries
-#   {impl: <name>, ...}  — global subsystem with optional runtime settings
+#   {impl: <name>, ...}  — global subsystem with impl-specific settings
 #   {count: N, ...}      — spawn a pool of N processes (collision_workers)
-# Per-team subsystems take a mapping {a: ..., b: ...} and may also carry
-# optional runtime settings alongside the team keys.
+# Per-team subsystems take a mapping {a: ..., b: ...}.
 #
-# Optional runtime settings currently used by the live dashboard/runtime:
+# Shared runtime settings currently used by the live dashboard/runtime
+# live in config/runtime.yaml:
 #   fps_target         — actual loop target used by that process (or broker heartbeat cadence)
 #   fps_min            — dashboard warning threshold for loop_hz
 #   heartbeat_age_max  — dashboard warning threshold for last-seen heartbeat age (ms)
@@ -91,9 +91,6 @@ subsystems:
   # sim_replay   — replays a recorded telem.haptic.<team> stream
   # real         — actual ESP32 boards
   haptic_io:
-    fps_target: 55.0
-    fps_min: 50.0
-    heartbeat_age_max: 1100
     a: sim_keyboard
     b: null
 
@@ -102,9 +99,6 @@ subsystems:
   #                incoming_code/ur10e_robot/. No real robot needed.
   # real_rtde    — actual UR10e over RTDE TCP (uses hardware.robot.<team>).
   robot_io:
-    fps_target: 200.0
-    fps_min: 180.0
-    heartbeat_age_max: 1100
     a: sim_pybullet
     b: null
 
@@ -294,13 +288,11 @@ of four outcomes:
    would have produced simply do not exist. Consumers must treat
    missing topics as "no data" (e.g. UI greys out the team).
 2. **String value matching a known impl** — the subsystem is enabled
-  with its default runtime thresholds.
-3. **Object with `impl: ...` plus optional runtime-health fields** —
-  same impl selection as above, but with explicit `fps_target`,
-  `fps_min`, and `heartbeat_age_max` values for the runtime/dashboard.
+  with runtime thresholds loaded from `config/runtime.yaml`.
+3. **Object with `impl: ...`** — same impl selection as above, but with
+  explicit impl/config payload when the subsystem needs it.
 4. **Object with `count: N`** — pool of N processes (only
-  `collision_workers` for now), again with optional runtime-health
-  fields.
+  `collision_workers` for now).
 
 ### 3.1 Per-team subsystems
 
@@ -401,8 +393,8 @@ description: "P2 milestone: keyboard → sim robot, single team A"
 active_teams: [a]
 
 subsystems:
-  haptic_io: {fps_target: 55.0, fps_min: 50.0, heartbeat_age_max: 1100, a: sim_keyboard, b: null}
-  robot_io:  {fps_target: 200.0, fps_min: 180.0, heartbeat_age_max: 1100, a: sim_pybullet, b: null}
+  haptic_io: {a: sim_keyboard, b: null}
+  robot_io:  {a: sim_pybullet, b: null}
   jogging_planner: {a: in_process, b: null}
   weight_sensor_io: null
   light_column_1_3:       null
@@ -413,11 +405,11 @@ subsystems:
   bucket_controller:      null
   button_controller:      null
   safety_barrier_controller: null
-  collision_workers: {count: 14, fps_target: 1000.0, fps_min: 800.0, heartbeat_age_max: 1100}
-  collision_broker: {fps_target: 1.0, fps_min: 0.8, heartbeat_age_max: 1100}
+  collision_workers: {count: 14}
+  collision_broker: null
   event_recorder: null
   gamemaster_ui:  null
-  bus_broker:     {impl: real, fps_target: 1.0, fps_min: 0.8, heartbeat_age_max: 1100}
+  bus_broker:     {impl: real}
 
 tuning:
   haptic:
@@ -460,8 +452,8 @@ description: "Real UR10e on team B, everything else sim."
 active_teams: [b]
 
 subsystems:
-  haptic_io: {fps_target: 55.0, fps_min: 50.0, heartbeat_age_max: 1100, a: null, b: sim_keyboard}
-  robot_io:  {fps_target: 200.0, fps_min: 180.0, heartbeat_age_max: 1100, a: null, b: real_rtde}
+  haptic_io: {a: null, b: sim_keyboard}
+  robot_io:  {a: null, b: real_rtde}
   jogging_planner: {a: null, b: in_process}
   weight_sensor_io: null
   light_column_1_3:       null
@@ -472,11 +464,11 @@ subsystems:
   bucket_controller:      null
   button_controller:      null
   safety_barrier_controller: null
-  collision_workers: {count: 6, fps_target: 1000.0, fps_min: 800.0, heartbeat_age_max: 1100}
-  collision_broker: {fps_target: 1.0, fps_min: 0.8, heartbeat_age_max: 1100}
+  collision_workers: {count: 6}
+  collision_broker: null
   event_recorder: null
   gamemaster_ui:  null
-  bus_broker:     {impl: real, fps_target: 1.0, fps_min: 0.8, heartbeat_age_max: 1100}
+  bus_broker:     {impl: real}
 
 tuning:
   # Reduced limits for first real-robot bring-up.

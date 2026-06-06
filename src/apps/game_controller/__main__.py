@@ -45,7 +45,7 @@ def main(argv: list[str] | None = None) -> int:
     game_cfg = _game_config(proc.profile.tuning.get("game"))
     robot_show_poses = _load_robot_show_poses_deg()
     pub = bus.make_pub(proc.ctx)
-    control_sub = bus.make_sub(proc.ctx, topics=[UI_GAME_CONTROL_TOPIC])
+    control_rep = bus.make_rep(proc.ctx)
     proc.use_heartbeat_pub(pub)
 
     # P2 ships team-A only; team-B wiring is symmetric and lands when
@@ -120,14 +120,24 @@ def main(argv: list[str] | None = None) -> int:
         "soft_pause": False,
         "last_action": None,
         "last_action_ts_mono_ns": None,
+        # Cache the last reply per source so a UI retry with the same
+        # request_id can be acknowledged without reapplying the action.
+        "last_request_id_by_source": {},
+        "last_reply_by_source": {},
     }
 
     def tick(p: Proc) -> None:
         nonlocal state_seq
         now_ns = time.perf_counter_ns()
-        _drain_ui_game_controls(
-            control_sub,
-            on_msg=lambda body: _apply_ui_game_control(control_state, stage_state, teams, body, time.perf_counter_ns()),
+        _drain_ui_game_control_requests(
+            control_rep,
+            on_msg=lambda body: _handle_ui_game_control_request(
+                control_state,
+                stage_state,
+                teams,
+                body,
+                time.perf_counter_ns(),
+            ),
         )
         soft_paused = bool(control_state.get("soft_pause", False))
         for team, st in teams.items():
@@ -326,7 +336,7 @@ def main(argv: list[str] | None = None) -> int:
             st["planner"].close()
             st["sub_haptic"].close(0)
             st["sub_actual"].close(0)
-        control_sub.close(0)
+        control_rep.close(0)
 
     return proc.run(tick, teardown=teardown)
 
@@ -344,13 +354,18 @@ def _drain_latest(sub: zmq.Socket, *, on_msg) -> None:
         on_msg(last)
 
 
-def _drain_ui_game_controls(sub: zmq.Socket, *, on_msg) -> None:
+def _drain_ui_game_control_requests(rep: zmq.Socket, *, on_msg) -> None:
+    """Drain pending UI admin requests and reply to each one.
+
+    The GC owns the bind-side REP socket, so every received request must
+    produce exactly one reply before the next request can be received.
+    """
     while True:
         try:
-            _, body = bus.recv(sub, flags=zmq.NOBLOCK)
+            body = bus.recv_json(rep, flags=zmq.NOBLOCK)
         except zmq.Again:
             break
-        on_msg(body)
+        bus.send_json(rep, on_msg(body))
 
 
 def _update_actual_state(state: dict, body: dict) -> None:
@@ -400,7 +415,38 @@ def _tick_stage_state(stage_state: dict[str, Any], teams: dict[str, dict], game_
         stage_state["winner_team"] = _winner_team(teams)
 
     if all(bool(st.get("conclusion_done", False)) for st in teams.values()):
-        stage_state["winner_team"] = _winner_team(teams)
+        # Temporary P4 short-circuit: once the conclusion sequence has
+        # fully finished for every team, jump straight back into play so
+        # repeated dev runs do not need an external reset path yet.
+        # TODO(state-machine): implement a proper Idle/Tutorial stage and transition
+        #                      to that instead of hard-resetting play on conclusion end.
+        _reset_for_play(stage_state, teams, game_cfg, now_ns)
+
+
+def _reset_for_play(stage_state: dict[str, Any], teams: dict[str, dict], game_cfg: dict[str, float], now_ns: int) -> None:
+    stage_state["stage"] = "play"
+    stage_state["stage_entered_mono_ns"] = now_ns
+    stage_state["winner_team"] = None
+    stage_state["pause_started_mono_ns"] = None
+    stage_state["paused_total_ns"] = 0
+
+    sim_bucket_values = game_cfg.get("sim_bucket_values") if isinstance(game_cfg, dict) else {}
+    if not isinstance(sim_bucket_values, dict):
+        sim_bucket_values = {}
+
+    for team, st in teams.items():
+        seed_buckets = sim_bucket_values.get(team, DEFAULT_BUCKET_VALUES)
+        st["bucket_values"] = list(seed_buckets)
+        st["score"] = int(sum(st["bucket_values"]))
+        st["summed_score"] = 0
+        st["conclusion_phase"] = None
+        st["conclusion_active_bucket_index"] = None
+        st["conclusion_target_pose_name"] = None
+        st["conclusion_target_pose_deg"] = None
+        st["conclusion_bucket_open_triggered"] = False
+        st["conclusion_phase_started_mono_ns"] = None
+        st["conclusion_done"] = False
+        st["conclusion_sum_remainder_units"] = 0.0
 
 
 def _stage_countdown_s(stage_state: dict[str, Any], game_cfg: dict[str, float], now_ns: int) -> int:
@@ -458,16 +504,54 @@ def _force_conclusion(stage_state: dict[str, Any], teams: dict[str, dict], now_n
         _enter_conclusion(st, now_ns)
 
 
+def _handle_ui_game_control_request(
+    control_state: dict[str, Any],
+    stage_state: dict[str, Any],
+    teams: dict[str, dict],
+    body: dict[str, Any],
+    now_ns: int,
+) -> dict[str, Any]:
+    request = body if isinstance(body, dict) else {}
+    source = request.get("source") if isinstance(request.get("source"), str) else "unknown"
+    request_id = request.get("request_id") if isinstance(request.get("request_id"), (int, str)) else None
+
+    last_request_id_by_source = control_state.setdefault("last_request_id_by_source", {})
+    last_reply_by_source = control_state.setdefault("last_reply_by_source", {})
+    if request_id is not None and last_request_id_by_source.get(source) == request_id:
+        cached = last_reply_by_source.get(source)
+        if isinstance(cached, dict):
+            return dict(cached)
+
+    ok, error, action = _apply_ui_game_control(control_state, stage_state, teams, request, now_ns)
+    reply = bus.make_envelope("game_controller", with_wall=True)
+    reply.update({
+        "ok": ok,
+        "error": error,
+        "request_id": request_id,
+        "source": source,
+        "result": {
+            "action": action,
+            "soft_estop": bool(control_state.get("soft_pause", False)),
+            "active_stage": stage_state["stage"],
+            "last_action": control_state.get("last_action"),
+        },
+    })
+    if request_id is not None:
+        last_request_id_by_source[source] = request_id
+        last_reply_by_source[source] = dict(reply)
+    return reply
+
+
 def _apply_ui_game_control(
     control_state: dict[str, Any],
     stage_state: dict[str, Any],
     teams: dict[str, dict],
     body: dict[str, Any],
     now_ns: int,
-) -> None:
+) -> tuple[bool, str | None, str | None]:
     action = body.get("action") if isinstance(body, dict) else None
     if not isinstance(action, str):
-        return
+        return False, "missing action", None
     if action == "play_resume":
         control_state["soft_pause"] = False
     elif action == "soft_estop":
@@ -476,9 +560,10 @@ def _apply_ui_game_control(
         control_state["soft_pause"] = False
         _force_conclusion(stage_state, teams, now_ns)
     else:
-        return
+        return False, f"unsupported action: {action}", action
     control_state["last_action"] = action
     control_state["last_action_ts_mono_ns"] = now_ns
+    return True, None, action
 
 
 def _tick_conclusion_team(

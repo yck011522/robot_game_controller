@@ -38,16 +38,16 @@ from core.config import ConfigError, default_runtime_setting, load as load_profi
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 LOGICAL_SIZE = (3840, 2160)
-FPS = 30
 TEAM_A = "a"
 TEAM_B = "b"
 HEARTBEAT_HZ = 1.0
+UI_COMMAND_ACK_TIMEOUT_S = 0.25
+UI_COMMAND_ACK_BANNER_S = 1.5
+UI_COMMAND_ERROR_BANNER_S = 4.0
 DEFAULT_Q_MIN_RAD = [-math.pi] * 6
 DEFAULT_Q_MAX_RAD = [math.pi] * 6
-FIXED_LAYOUT = 4
 MAX_COLLISION_WORKER_SLOTS = 16
 DEFAULT_HEARTBEAT_AGE_MAX_MS = 1100.0
-UI_GAME_CONTROL_TOPIC = "cmd.ui.game_control"
 
 COLORS = {
     "bg": (11, 16, 24),
@@ -71,58 +71,24 @@ COLORS = {
     "black": (0, 0, 0),
 }
 
-LAYOUT_NAMES = {
-    1: "Central Spine Rounded",
-    2: "Central Spine Hard Edge",
-    3: "Central Spine Split Frame",
-    4: "Central Spine Broadcast Tech",
+LAYOUT_NAME = "Central Spine Broadcast Tech"
+
+CONTROL_ACTION_LABELS = {
+    "play_resume": "PLAY/RESUME",
+    "end_game": "END GAME",
+    "soft_estop": "E-STOP",
 }
 
-OPTION_STYLES = {
-    1: {
-        "name": "Option 1",
-        "panel_radius": 24,
-        "lane_radius": 18,
-        "outline_width": 2,
-        "corner_brackets": False,
-        "heavy_dividers": False,
-        "worker_tile_radius": 10,
-        "spine_inset": 30,
-        "match_widget_inset": 62,
-    },
-    2: {
-        "name": "Option 2",
-        "panel_radius": 0,
-        "lane_radius": 0,
-        "outline_width": 2,
-        "corner_brackets": False,
-        "heavy_dividers": True,
-        "worker_tile_radius": 0,
-        "spine_inset": 30,
-        "match_widget_inset": 54,
-    },
-    3: {
-        "name": "Option 3",
-        "panel_radius": 8,
-        "lane_radius": 6,
-        "outline_width": 2,
-        "corner_brackets": True,
-        "heavy_dividers": False,
-        "worker_tile_radius": 4,
-        "spine_inset": 26,
-        "match_widget_inset": 48,
-    },
-    4: {
-        "name": "Option 4",
-        "panel_radius": 0,
-        "lane_radius": 2,
-        "outline_width": 3,
-        "corner_brackets": True,
-        "heavy_dividers": True,
-        "worker_tile_radius": 0,
-        "spine_inset": 22,
-        "match_widget_inset": 40,
-    },
+LAYOUT_STYLE = {
+    "name": "Broadcast Tech",
+    "panel_radius": 0,
+    "lane_radius": 2,
+    "outline_width": 3,
+    "corner_brackets": True,
+    "heavy_dividers": True,
+    "worker_tile_radius": 0,
+    "spine_inset": 22,
+    "match_widget_inset": 40,
 }
 
 
@@ -186,10 +152,9 @@ class FontBook:
 
 
 class DashboardMockup:
-    def __init__(self, layout: int, native_4k: bool, fit: float, profile_path: str | None = None) -> None:
+    def __init__(self, native_4k: bool, fit: float, profile_path: str | None = None) -> None:
         pygame.init()
         pygame.font.init()
-        self._layout = FIXED_LAYOUT
         self._native_4k = native_4k
         self._fit = max(0.3, min(1.0, fit))
         self._fonts = FontBook()
@@ -202,7 +167,11 @@ class DashboardMockup:
         self._state_sub = bus.make_sub(self._ctx, topics=["state.full"])
         self._heartbeat_sub = bus.make_sub(self._ctx, topics=["heartbeat."])
         self._heartbeat_pub = bus.make_pub(self._ctx)
+        self._ui_req: zmq.Socket | None = None
+        self._ui_req_poller = zmq.Poller()
+        self._reset_ui_req_socket()
         self._profile = _load_profile_if_available(profile_path)
+        self._target_fps = _profile_fps_target(self._profile, "gamemaster_ui")
         self._q_min_rad, self._q_max_rad = _profile_joint_limits_rad(self._profile)
         self._collision_worker_count = _profile_collision_worker_count(self._profile)
         self._latest_state_full: dict[str, Any] | None = None
@@ -210,13 +179,17 @@ class DashboardMockup:
         self._heartbeat_body_by_proc: dict[str, dict[str, Any]] = {}
         self._heartbeat_recv_mono_ns: dict[str, int] = {}
         self._heartbeat_window_by_proc: dict[str, deque[int]] = {}
+        self._next_control_request_id = 1
+        self._pending_control_request: dict[str, Any] | None = None
+        self._last_control_ack: dict[str, Any] | None = None
+        self._last_control_error: dict[str, Any] | None = None
         self._next_heartbeat_t = time.perf_counter() + (1.0 / HEARTBEAT_HZ)
         pygame.display.set_caption("Observer dashboard | P play/resume | Space soft e-stop | E end game")
 
     def run(self) -> int:
         try:
             while True:
-                self._clock.tick(FPS)
+                self._clock.tick(self._target_fps)
                 for event in pygame.event.get():
                     if event.type == pygame.QUIT:
                         return 0
@@ -227,21 +200,22 @@ class DashboardMockup:
                             self._fullscreen = not self._fullscreen
                             self._screen = self._create_screen()
                         elif event.key == pygame.K_p:
-                            self._publish_control_action("play_resume", source="keyboard")
+                            self._request_control_action("play_resume", source="keyboard")
                         elif event.key == pygame.K_SPACE:
-                            self._publish_control_action("soft_estop", source="keyboard")
+                            self._request_control_action("soft_estop", source="keyboard")
                         elif event.key == pygame.K_e:
-                            self._publish_control_action("end_game", source="keyboard")
+                            self._request_control_action("end_game", source="keyboard")
                     if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                         logical_pos = self._screen_to_logical(event.pos)
                         if logical_pos is not None:
                             action = self._control_action_at(logical_pos, self._render_state())
                             if action is not None:
-                                self._publish_control_action(action, source="mouse")
+                                self._request_control_action(action, source="mouse")
                     if event.type == pygame.VIDEORESIZE and not self._fullscreen and not self._native_4k:
                         self._screen = pygame.display.set_mode(event.size, pygame.RESIZABLE)
 
                 self._poll_bus()
+                self._poll_control_channel()
                 self._publish_heartbeat_if_due()
                 state = self._render_state()
                 self._draw(state)
@@ -253,6 +227,18 @@ class DashboardMockup:
         self._state_sub.close(0)
         self._heartbeat_sub.close(0)
         self._heartbeat_pub.close(0)
+        if self._ui_req is not None:
+            self._ui_req.close(0)
+
+    def _reset_ui_req_socket(self) -> None:
+        # REQ sockets become unusable after a timeout until the missing
+        # reply arrives, so the dashboard rebuilds the socket when a
+        # command times out instead of stalling future operator input.
+        self._ui_req_poller = zmq.Poller()
+        if self._ui_req is not None:
+            self._ui_req.close(0)
+        self._ui_req = bus.make_req(self._ctx)
+        self._ui_req_poller.register(self._ui_req, zmq.POLLIN)
 
     def _create_screen(self) -> pygame.Surface:
         if self._native_4k:
@@ -286,18 +272,72 @@ class DashboardMockup:
         out_dir = REPO_ROOT / "tools" / "mockups"
         out_dir.mkdir(parents=True, exist_ok=True)
         self._screenshot_index += 1
-        stem = LAYOUT_NAMES[self._layout].lower().replace(" ", "_")
+        stem = LAYOUT_NAME.lower().replace(" ", "_")
         path = out_dir / f"observer_dashboard_{stem}_{self._screenshot_index:02d}.png"
         pygame.image.save(self._logical, str(path))
         print(f"[gamemaster_ui] exported {path}", flush=True)
 
-    def _publish_control_action(self, action: str, *, source: str) -> None:
+    def _request_control_action(self, action: str, *, source: str) -> None:
+        if self._pending_control_request is not None:
+            pending_action = _control_action_label(self._pending_control_request.get("action"))
+            self._last_control_error = {
+                "message": f"Waiting for {pending_action} ack",
+                "ts_mono_ns": time.perf_counter_ns(),
+            }
+            return
+        if self._ui_req is None:
+            self._last_control_error = {
+                "message": "Control channel unavailable",
+                "ts_mono_ns": time.perf_counter_ns(),
+            }
+            self._reset_ui_req_socket()
+            return
+
         env = bus.make_envelope("gamemaster_ui", with_wall=True)
         env.update({
+            "request_id": self._next_control_request_id,
             "action": action,
             "source": source,
         })
-        bus.publish(self._heartbeat_pub, UI_GAME_CONTROL_TOPIC, env)
+        self._next_control_request_id += 1
+        bus.send_json(self._ui_req, env)
+        self._pending_control_request = {
+            "request_id": env["request_id"],
+            "action": action,
+            "deadline_t": time.perf_counter() + UI_COMMAND_ACK_TIMEOUT_S,
+        }
+        self._last_control_error = None
+
+    def _poll_control_channel(self) -> None:
+        pending = self._pending_control_request
+        if pending is None or self._ui_req is None:
+            return
+
+        events = dict(self._ui_req_poller.poll(timeout=0))
+        if events.get(self._ui_req) == zmq.POLLIN:
+            reply = bus.recv_json(self._ui_req)
+            action = reply.get("result", {}).get("action") if isinstance(reply.get("result"), dict) else None
+            if bool(reply.get("ok", False)):
+                self._last_control_ack = {
+                    "action": action,
+                    "ts_mono_ns": time.perf_counter_ns(),
+                }
+                self._last_control_error = None
+            else:
+                self._last_control_error = {
+                    "message": str(reply.get("error") or "Command rejected"),
+                    "ts_mono_ns": time.perf_counter_ns(),
+                }
+            self._pending_control_request = None
+            return
+
+        if time.perf_counter() >= float(pending.get("deadline_t", 0.0)):
+            self._last_control_error = {
+                "message": f"{_control_action_label(pending.get('action'))} timed out",
+                "ts_mono_ns": time.perf_counter_ns(),
+            }
+            self._pending_control_request = None
+            self._reset_ui_req_socket()
 
     def _screen_to_logical(self, screen_pos: tuple[int, int]) -> tuple[int, int] | None:
         if self._native_4k:
@@ -342,7 +382,6 @@ class DashboardMockup:
         env = bus.make_envelope("gamemaster_ui", with_wall=True)
         env.update({
             "loop_hz": float(self._clock.get_fps()),
-            "layout_option": self._layout,
         })
         bus.publish(self._heartbeat_pub, "heartbeat.gamemaster_ui", env)
         self._next_heartbeat_t = now + (1.0 / HEARTBEAT_HZ)
@@ -360,12 +399,16 @@ class DashboardMockup:
         team_a = self._team_from_state(TEAM_A, teams.get(TEAM_A))
         stage = str(body.get("stage", "waiting"))
         active_stage = str(body.get("active_stage", stage))
+        control_feedback = self._control_feedback_state()
         return {
             "stage": stage,
             "active_stage": active_stage,
             "paused": bool(body.get("paused", False)),
             "pause_reason": body.get("pause_reason"),
             "soft_estop": bool(body.get("soft_estop", False)),
+            "control_pending_action": control_feedback["pending_action"],
+            "control_last_ack_action": control_feedback["last_ack_action"],
+            "control_error": control_feedback["error"],
             "timer_label": _format_timer_label(body.get("countdown_s")),
             "team_b": team_b,
             "team_a": team_a,
@@ -382,6 +425,9 @@ class DashboardMockup:
             "paused": False,
             "pause_reason": None,
             "soft_estop": False,
+            "control_pending_action": None,
+            "control_last_ack_action": None,
+            "control_error": None,
             "timer_label": "--:--",
             "team_b": self._placeholder_team(TEAM_B),
             "team_a": self._placeholder_team(TEAM_A),
@@ -389,6 +435,30 @@ class DashboardMockup:
             "core_processes": self._core_processes_from_heartbeats(),
             "collision_workers": self._collision_workers_from_heartbeats(),
             "waiting_reason": reason,
+        }
+
+    def _control_feedback_state(self) -> dict[str, Any]:
+        now_ns = time.perf_counter_ns()
+        error = None
+        if isinstance(self._last_control_error, dict):
+            age_s = (now_ns - int(self._last_control_error.get("ts_mono_ns") or now_ns)) / 1e9
+            if age_s <= UI_COMMAND_ERROR_BANNER_S:
+                error = self._last_control_error.get("message")
+
+        last_ack_action = None
+        if isinstance(self._last_control_ack, dict):
+            age_s = (now_ns - int(self._last_control_ack.get("ts_mono_ns") or now_ns)) / 1e9
+            if age_s <= UI_COMMAND_ACK_BANNER_S:
+                last_ack_action = self._last_control_ack.get("action")
+
+        pending_action = None
+        if isinstance(self._pending_control_request, dict):
+            pending_action = self._pending_control_request.get("action")
+
+        return {
+            "pending_action": pending_action,
+            "last_ack_action": last_ack_action,
+            "error": error,
         }
 
     def _placeholder_team(self, team: str) -> TeamMock:
@@ -471,6 +541,7 @@ class DashboardMockup:
 
     def _core_processes_from_heartbeats(self) -> list[ProcessMock]:
         preferred = [
+            "gamemaster_ui",
             "game_controller",
             "collision_broker",
             "bus_broker",
@@ -481,6 +552,8 @@ class DashboardMockup:
         ]
         workers = {name for name in self._heartbeat_body_by_proc if name.startswith("collision_worker_")}
         procs = [name for name in self._heartbeat_body_by_proc if name not in workers]
+        if "gamemaster_ui" not in procs:
+            procs.append("gamemaster_ui")
         order = {name: i for i, name in enumerate(preferred)}
         procs.sort(key=lambda name: (order.get(name, 999), name))
         return [self._process_from_heartbeat(name) for name in procs]
@@ -528,6 +601,13 @@ class DashboardMockup:
         return workers
 
     def _process_from_heartbeat(self, name: str) -> ProcessMock:
+        if name == "gamemaster_ui":
+            return ProcessMock(
+                name="gamemaster_ui",
+                proc_key=name,
+                hz=float(self._clock.get_fps()),
+                age_ms=0.0,
+            )
         body = self._heartbeat_body_by_proc.get(name, {})
         last_ns = self._heartbeat_recv_mono_ns.get(name)
         age_ms = 0.0 if last_ns is None else (time.perf_counter_ns() - last_ns) / 1e6
@@ -571,10 +651,19 @@ class DashboardMockup:
         pygame.draw.circle(surface, (45, 64, 85), (3240, 1680), 420, width=2)
 
     def _draw_chrome(self, surface: pygame.Surface, state: dict) -> None:
-        self._label(surface, f"Layout {self._layout}: {LAYOUT_NAMES[self._layout]}", 60, 42, 38, COLORS["text"], bold=True)
-        self._label(surface, f"{OPTION_STYLES[self._layout]['name']} | central spine family", 60, 88, 24, COLORS["cyan"], bold=True)
+        ui_proc = self._process_from_heartbeat("gamemaster_ui")
+        ui_fps_min, _ = self._process_status_limits(ui_proc.proc_key)
+        ui_fps_color = COLORS["warning"] if ui_fps_min is not None and ui_proc.hz < ui_fps_min else COLORS["success"]
+        self._label(surface, LAYOUT_NAME, 60, 42, 38, COLORS["text"], bold=True)
+        self._label(surface, f"{LAYOUT_STYLE['name']} | central spine family", 60, 88, 24, COLORS["cyan"], bold=True)
         self._label(surface, "Logical canvas 3840x2160, scaled to current window", 60, 118, 22, COLORS["muted"])
         self._label(surface, "Keys: P play/resume | Space soft e-stop | E end game | F fullscreen | Esc quit", 60, 148, 20, COLORS["muted"])
+        self._label(surface, f"UI {ui_proc.hz:4.1f} Hz", LOGICAL_SIZE[0] - 60, 44, 28, ui_fps_color, bold=True, align="right")
+        if ui_fps_min is None:
+            detail = f"target {self._target_fps:.0f}"
+        else:
+            detail = f"target {self._target_fps:.0f} | warn < {ui_fps_min:.0f}"
+        self._label(surface, detail, LOGICAL_SIZE[0] - 60, 84, 20, COLORS["muted"], align="right")
 
     def _draw_central_spine(self, surface: pygame.Surface, state: dict) -> None:
         style = self._current_style()
@@ -938,7 +1027,7 @@ class DashboardMockup:
             pygame.draw.line(surface, color, origin, vert, width)
 
     def _current_style(self) -> dict:
-        return OPTION_STYLES[self._layout]
+        return LAYOUT_STYLE
 
     def _process_status_limits(self, proc_key: str) -> tuple[float | None, float]:
         base_proc = _subsystem_name_from_proc(proc_key)
@@ -1067,7 +1156,21 @@ def _team_conclusion_outcome(team_key: str, conclusion_winner: str | None) -> tu
     return "LOSE", COLORS["warning"]
 
 
+def _control_action_label(action: Any) -> str:
+    if not isinstance(action, str):
+        return "COMMAND"
+    return CONTROL_ACTION_LABELS.get(action, action.replace("_", " ").upper())
+
+
 def _control_status_text(state: dict[str, Any]) -> tuple[str, tuple[int, int, int]]:
+    pending_action = state.get("control_pending_action")
+    if isinstance(pending_action, str) and pending_action:
+        return f"WAITING ACK | {_control_action_label(pending_action)}", COLORS["warning"]
+
+    control_error = state.get("control_error")
+    if isinstance(control_error, str) and control_error:
+        return control_error.upper(), COLORS["danger"]
+
     if bool(state.get("soft_estop", False)) or state.get("pause_reason") == "soft_estop":
         return "SOFT E-STOP ACTIVE", COLORS["danger"]
     if bool(state.get("paused", False)):
@@ -1075,6 +1178,11 @@ def _control_status_text(state: dict[str, Any]) -> tuple[str, tuple[int, int, in
         if isinstance(reason, str) and reason:
             return f"PAUSED | {reason}", COLORS["warning"]
         return "PAUSED", COLORS["warning"]
+
+    last_ack_action = state.get("control_last_ack_action")
+    if isinstance(last_ack_action, str) and last_ack_action:
+        return f"ACKED | {_control_action_label(last_ack_action)}", COLORS["cyan"]
+
     active_stage = str(state.get("active_stage", state.get("stage", "waiting"))).upper()
     return f"ACTIVE STAGE | {active_stage}", COLORS["success"]
 
@@ -1111,6 +1219,16 @@ def _profile_collision_worker_count(profile) -> int:
         return MAX_COLLISION_WORKER_SLOTS
 
 
+def _profile_fps_target(profile, subsystem: str) -> float:
+    target = default_runtime_setting(subsystem, "fps_target", 30.0)
+    if profile is not None:
+        target = profile.subsystem_float(subsystem, "fps_target", target)
+    try:
+        return max(1.0, float(target))
+    except (TypeError, ValueError):
+        return 30.0
+
+
 def _subsystem_name_from_proc(proc_key: str) -> str:
     if proc_key.startswith("collision_worker_"):
         return "collision_workers"
@@ -1119,7 +1237,6 @@ def _subsystem_name_from_proc(proc_key: str) -> str:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="4k-scaled observer dashboard mockup")
-    parser.add_argument("--layout", type=int, default=FIXED_LAYOUT, help="Ignored; dashboard is fixed to the selected broadcast layout")
     parser.add_argument("--profile", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--proc", default="gamemaster_ui", help=argparse.SUPPRESS)
     parser.add_argument("--instance", type=int, default=None, help=argparse.SUPPRESS)
@@ -1139,7 +1256,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    app = DashboardMockup(layout=args.layout, native_4k=args.native_4k, fit=args.fit, profile_path=args.profile)
+    app = DashboardMockup(native_4k=args.native_4k, fit=args.fit, profile_path=args.profile)
     try:
         return app.run()
     finally:

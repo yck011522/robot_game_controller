@@ -128,6 +128,22 @@ def recv(sock: zmq.Socket, *, flags: int = 0) -> tuple[str, dict[str, Any]]:
     return topic, body
 
 
+def send_json(sock: zmq.Socket, body: dict[str, Any]) -> None:
+    """Send one compact JSON body on a request-response socket.
+
+    The UI command plane does not use topic frames, so this helper keeps
+    the wire format explicit and consistent with the main bus helpers.
+    """
+    sock.send(json.dumps(body, separators=(",", ":")).encode("utf-8"))
+
+
+def recv_json(sock: zmq.Socket, *, flags: int = 0) -> dict[str, Any]:
+    """Receive one JSON body from a request-response socket."""
+    raw = sock.recv(flags=flags)
+    body = json.loads(raw.decode("utf-8")) if raw else {}
+    return body if isinstance(body, dict) else {}
+
+
 # ---- socket factories ---------------------------------------------------
 
 def make_pub(ctx: zmq.Context, *, endpoint: str = BUS_XSUB_ENDPOINT) -> zmq.Socket:
@@ -141,6 +157,27 @@ def make_pub(ctx: zmq.Context, *, endpoint: str = BUS_XSUB_ENDPOINT) -> zmq.Sock
     """
     sock = ctx.socket(zmq.PUB)
     sock.connect(endpoint)
+    return sock
+
+
+def make_req(ctx: zmq.Context, *, endpoint: str = UI_REP_ENDPOINT) -> zmq.Socket:
+    """Create a REQ socket for acknowledged UI -> GC commands.
+
+    Callers are expected to recreate the socket after a timeout, because
+    a REQ socket cannot issue another request until the pending reply
+    arrives or the socket is discarded.
+    """
+    sock = ctx.socket(zmq.REQ)
+    sock.setsockopt(zmq.LINGER, 0)
+    sock.connect(endpoint)
+    return sock
+
+
+def make_rep(ctx: zmq.Context, *, endpoint: str = UI_REP_ENDPOINT) -> zmq.Socket:
+    """Create the bind-side REP socket for acknowledged UI commands."""
+    sock = ctx.socket(zmq.REP)
+    sock.setsockopt(zmq.LINGER, 0)
+    sock.bind(endpoint)
     return sock
 
 

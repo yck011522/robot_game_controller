@@ -240,6 +240,6 @@ machines and notice the bus going quiet on their own.
 - Whether the UI gets a "process panel" with manual respawn buttons,
   or whether respawn stays CLI-only. Defer to gamemaster UI design.
 - Whether to expose supervisor state on the bus as a regular
-  `state.supervisor` topic (vs only via `process_health` inside
-  `state.full`). Defer until the dashboard is built and we know what
-  it needs.
+  `state.supervisor` topic instead of relying only on raw
+  `heartbeat.*` consumers. Defer until the dashboard is built and we
+  know what it needs.
