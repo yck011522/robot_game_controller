@@ -6,7 +6,9 @@ canvas down to fit the actual monitor. This lets us design against a
 
 Controls
 --------
-E   : export current frame as native 4k PNG
+P   : play / resume
+Space: soft e-stop
+E   : end game
 F   : toggle fullscreen fit-to-monitor
 Esc : quit
 """
@@ -45,6 +47,7 @@ DEFAULT_Q_MAX_RAD = [math.pi] * 6
 FIXED_LAYOUT = 4
 MAX_COLLISION_WORKER_SLOTS = 16
 DEFAULT_HEARTBEAT_AGE_MAX_MS = 1100.0
+UI_GAME_CONTROL_TOPIC = "cmd.ui.game_control"
 
 COLORS = {
     "bg": (11, 16, 24),
@@ -208,7 +211,7 @@ class DashboardMockup:
         self._heartbeat_recv_mono_ns: dict[str, int] = {}
         self._heartbeat_window_by_proc: dict[str, deque[int]] = {}
         self._next_heartbeat_t = time.perf_counter() + (1.0 / HEARTBEAT_HZ)
-        pygame.display.set_caption("Observer dashboard mockup | central spine options | E export 4k")
+        pygame.display.set_caption("Observer dashboard | P play/resume | Space soft e-stop | E end game")
 
     def run(self) -> int:
         try:
@@ -223,8 +226,18 @@ class DashboardMockup:
                         if event.key == pygame.K_f:
                             self._fullscreen = not self._fullscreen
                             self._screen = self._create_screen()
+                        elif event.key == pygame.K_p:
+                            self._publish_control_action("play_resume", source="keyboard")
+                        elif event.key == pygame.K_SPACE:
+                            self._publish_control_action("soft_estop", source="keyboard")
                         elif event.key == pygame.K_e:
-                            self._export_frame()
+                            self._publish_control_action("end_game", source="keyboard")
+                    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                        logical_pos = self._screen_to_logical(event.pos)
+                        if logical_pos is not None:
+                            action = self._control_action_at(logical_pos, self._render_state())
+                            if action is not None:
+                                self._publish_control_action(action, source="mouse")
                     if event.type == pygame.VIDEORESIZE and not self._fullscreen and not self._native_4k:
                         self._screen = pygame.display.set_mode(event.size, pygame.RESIZABLE)
 
@@ -278,6 +291,27 @@ class DashboardMockup:
         pygame.image.save(self._logical, str(path))
         print(f"[gamemaster_ui] exported {path}", flush=True)
 
+    def _publish_control_action(self, action: str, *, source: str) -> None:
+        env = bus.make_envelope("gamemaster_ui", with_wall=True)
+        env.update({
+            "action": action,
+            "source": source,
+        })
+        bus.publish(self._heartbeat_pub, UI_GAME_CONTROL_TOPIC, env)
+
+    def _screen_to_logical(self, screen_pos: tuple[int, int]) -> tuple[int, int] | None:
+        if self._native_4k:
+            return int(screen_pos[0]), int(screen_pos[1])
+        screen_w, screen_h = self._screen.get_size()
+        target_w, target_h = _fit_size(LOGICAL_SIZE[0], LOGICAL_SIZE[1], screen_w, screen_h)
+        offset_x = (screen_w - target_w) // 2
+        offset_y = (screen_h - target_h) // 2
+        if not (offset_x <= screen_pos[0] < offset_x + target_w and offset_y <= screen_pos[1] < offset_y + target_h):
+            return None
+        logical_x = int((screen_pos[0] - offset_x) * LOGICAL_SIZE[0] / target_w)
+        logical_y = int((screen_pos[1] - offset_y) * LOGICAL_SIZE[1] / target_h)
+        return logical_x, logical_y
+
     def _poll_bus(self) -> None:
         while True:
             try:
@@ -325,14 +359,17 @@ class DashboardMockup:
         team_b = self._team_from_state(TEAM_B, teams.get(TEAM_B))
         team_a = self._team_from_state(TEAM_A, teams.get(TEAM_A))
         stage = str(body.get("stage", "waiting"))
+        active_stage = str(body.get("active_stage", stage))
         return {
             "stage": stage,
+            "active_stage": active_stage,
             "paused": bool(body.get("paused", False)),
             "pause_reason": body.get("pause_reason"),
+            "soft_estop": bool(body.get("soft_estop", False)),
             "timer_label": _format_timer_label(body.get("countdown_s")),
             "team_b": team_b,
             "team_a": team_a,
-            "conclusion_winner": _local_conclusion_winner(stage, teams),
+            "conclusion_winner": _local_conclusion_winner(active_stage, teams),
             "core_processes": self._core_processes_from_heartbeats(),
             "collision_workers": self._collision_workers_from_heartbeats(),
             "waiting_reason": None,
@@ -341,11 +378,14 @@ class DashboardMockup:
     def _placeholder_state(self, reason: str) -> dict[str, Any]:
         return {
             "stage": "waiting",
+            "active_stage": "waiting",
             "paused": False,
             "pause_reason": None,
+            "soft_estop": False,
             "timer_label": "--:--",
             "team_b": self._placeholder_team(TEAM_B),
             "team_a": self._placeholder_team(TEAM_A),
+            "conclusion_winner": None,
             "core_processes": self._core_processes_from_heartbeats(),
             "collision_workers": self._collision_workers_from_heartbeats(),
             "waiting_reason": reason,
@@ -534,15 +574,15 @@ class DashboardMockup:
         self._label(surface, f"Layout {self._layout}: {LAYOUT_NAMES[self._layout]}", 60, 42, 38, COLORS["text"], bold=True)
         self._label(surface, f"{OPTION_STYLES[self._layout]['name']} | central spine family", 60, 88, 24, COLORS["cyan"], bold=True)
         self._label(surface, "Logical canvas 3840x2160, scaled to current window", 60, 118, 22, COLORS["muted"])
-        self._label(surface, "Keys: E export 4k PNG | F fullscreen fit | Esc quit", 60, 148, 20, COLORS["muted"])
+        self._label(surface, "Keys: P play/resume | Space soft e-stop | E end game | F fullscreen | Esc quit", 60, 148, 20, COLORS["muted"])
 
     def _draw_central_spine(self, surface: pygame.Surface, state: dict) -> None:
         style = self._current_style()
         left = pygame.Rect(70, 210, 1430, 1780)
         spine = pygame.Rect(1510, 210, 820, 1780)
         right = pygame.Rect(2340, 210, 1430, 1780)
-        self._team_panel_compact(surface, left, state["team_b"], align="left", style=style, stage=state["stage"], conclusion_winner=state.get("conclusion_winner"))
-        self._team_panel_compact(surface, right, state["team_a"], align="right", style=style, stage=state["stage"], conclusion_winner=state.get("conclusion_winner"))
+        self._team_panel_compact(surface, left, state["team_b"], align="left", style=style, stage=state["active_stage"], conclusion_winner=state.get("conclusion_winner"))
+        self._team_panel_compact(surface, right, state["team_a"], align="right", style=style, stage=state["active_stage"], conclusion_winner=state.get("conclusion_winner"))
         self._central_spine(surface, spine, state, style)
 
     def _panel(self, surface: pygame.Surface, rect: pygame.Rect, alt: bool = False) -> None:
@@ -684,7 +724,75 @@ class DashboardMockup:
         self._match_core_widget(surface, pygame.Rect(rect.x + match_inset, rect.y + 28, rect.w - match_inset * 2, 270), state)
         self._core_process_table(surface, pygame.Rect(rect.x + inset, rect.y + 330, rect.w - inset * 2, 320), state["core_processes"], style)
         self._collision_worker_grid(surface, pygame.Rect(rect.x + inset, rect.y + 680, rect.w - inset * 2, 650), state["collision_workers"], style)
-        self._lane_legend(surface, pygame.Rect(rect.x + inset, rect.y + 1360, rect.w - inset * 2, 380), style)
+        self._control_widget(surface, self._control_widget_rect(), state)
+
+    def _control_widget_rect(self) -> pygame.Rect:
+        inset = int(self._current_style()["spine_inset"])
+        return pygame.Rect(1510 + inset, 1570, 820 - inset * 2, 380)
+
+    def _control_widget(self, surface: pygame.Surface, rect: pygame.Rect, state: dict) -> None:
+        self._panel(surface, rect, alt=True)
+        self._label(surface, "MATCH CONTROL", rect.x + 22, rect.y + 16, 28, COLORS["text"], bold=True)
+        status_text, status_color = _control_status_text(state)
+        self._label(surface, status_text, rect.right - 22, rect.y + 18, 20, status_color, bold=True, align="right")
+        self._label(surface, "Click a button or use the keyboard shortcuts shown inside each button.", rect.x + 22, rect.y + 56, 20, COLORS["muted"])
+
+        for spec in self._control_button_specs(rect, state):
+            button_rect = spec["rect"]
+            fill_color = spec["fill"]
+            outline_color = spec["outline"]
+            pygame.draw.rect(surface, fill_color, button_rect, border_radius=18)
+            pygame.draw.rect(surface, outline_color, button_rect, 3, border_radius=18)
+            self._label(surface, spec["label"], button_rect.centerx, button_rect.y + 26, 30, COLORS["text"], bold=True, align="center")
+            self._label(surface, spec["detail"], button_rect.centerx, button_rect.y + 72, 18, COLORS["muted"], align="center")
+            shortcut_rect = pygame.Rect(button_rect.x + 18, button_rect.bottom - 42, 88, 24)
+            pygame.draw.rect(surface, COLORS["panel_soft"], shortcut_rect, border_radius=10)
+            self._label(surface, spec["shortcut"], shortcut_rect.centerx, shortcut_rect.y + 2, 16, COLORS["text"], bold=True, align="center")
+
+    def _control_button_specs(self, rect: pygame.Rect, state: dict) -> list[dict[str, Any]]:
+        gap = 18
+        button_w = (rect.w - 44 - gap * 2) // 3
+        button_h = 214
+        top = rect.y + 110
+        left = rect.x + 22
+        paused = bool(state.get("paused", False))
+        soft_estop = bool(state.get("soft_estop", False)) or state.get("pause_reason") == "soft_estop"
+        return [
+            {
+                "action": "play_resume",
+                "label": "PLAY / RESUME",
+                "detail": "Continue the current stage after a pause.",
+                "shortcut": "P",
+                "rect": pygame.Rect(left, top, button_w, button_h),
+                "fill": (28, 66, 52) if paused else COLORS["panel_soft"],
+                "outline": COLORS["success"],
+            },
+            {
+                "action": "end_game",
+                "label": "END GAME",
+                "detail": "Jump immediately to conclusion scoring.",
+                "shortcut": "E",
+                "rect": pygame.Rect(left + button_w + gap, top, button_w, button_h),
+                "fill": COLORS["panel_soft"],
+                "outline": COLORS["warning"],
+            },
+            {
+                "action": "soft_estop",
+                "label": "E-STOP",
+                "detail": "Pause robot response and freeze the timer.",
+                "shortcut": "SPACE",
+                "rect": pygame.Rect(left + (button_w + gap) * 2, top, button_w, button_h),
+                "fill": (88, 34, 34) if soft_estop else COLORS["panel_soft"],
+                "outline": COLORS["danger"],
+            },
+        ]
+
+    def _control_action_at(self, logical_pos: tuple[int, int], state: dict[str, Any]) -> str | None:
+        rect = self._control_widget_rect()
+        for spec in self._control_button_specs(rect, state):
+            if spec["rect"].collidepoint(logical_pos):
+                return str(spec["action"])
+        return None
 
     def _team_spine_header(self, surface: pygame.Surface, rect: pygame.Rect, team: TeamMock, align: str) -> None:
         self._panel(surface, rect, alt=True)
@@ -957,6 +1065,18 @@ def _team_conclusion_outcome(team_key: str, conclusion_winner: str | None) -> tu
     if conclusion_winner == team_key:
         return "WINNER", COLORS["success"]
     return "LOSE", COLORS["warning"]
+
+
+def _control_status_text(state: dict[str, Any]) -> tuple[str, tuple[int, int, int]]:
+    if bool(state.get("soft_estop", False)) or state.get("pause_reason") == "soft_estop":
+        return "SOFT E-STOP ACTIVE", COLORS["danger"]
+    if bool(state.get("paused", False)):
+        reason = state.get("pause_reason")
+        if isinstance(reason, str) and reason:
+            return f"PAUSED | {reason}", COLORS["warning"]
+        return "PAUSED", COLORS["warning"]
+    active_stage = str(state.get("active_stage", state.get("stage", "waiting"))).upper()
+    return f"ACTIVE STAGE | {active_stage}", COLORS["success"]
 
 
 def _load_profile_if_available(profile_path: str | None):

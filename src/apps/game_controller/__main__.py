@@ -35,6 +35,7 @@ DEFAULT_LOOK_POSE_DEG = [0.0, -90.0, 90.0, 0.0, 0.0, 0.0]
 CONCLUSION_INITIAL_PAUSE_S = 1.0
 CONCLUSION_BUCKET_EMPTY_PAUSE_S = 0.5
 CONCLUSION_ANNOUNCEMENT_PAUSE_S = 1.0
+UI_GAME_CONTROL_TOPIC = "cmd.ui.game_control"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -44,6 +45,7 @@ def main(argv: list[str] | None = None) -> int:
     game_cfg = _game_config(proc.profile.tuning.get("game"))
     robot_show_poses = _load_robot_show_poses_deg()
     pub = bus.make_pub(proc.ctx)
+    control_sub = bus.make_sub(proc.ctx, topics=[UI_GAME_CONTROL_TOPIC])
     proc.use_heartbeat_pub(pub)
 
     # P2 ships team-A only; team-B wiring is symmetric and lands when
@@ -114,10 +116,20 @@ def main(argv: list[str] | None = None) -> int:
         "pause_started_mono_ns": None,
         "paused_total_ns": 0,
     }
+    control_state = {
+        "soft_pause": False,
+        "last_action": None,
+        "last_action_ts_mono_ns": None,
+    }
 
     def tick(p: Proc) -> None:
         nonlocal state_seq
         now_ns = time.perf_counter_ns()
+        _drain_ui_game_controls(
+            control_sub,
+            on_msg=lambda body: _apply_ui_game_control(control_state, stage_state, teams, body, time.perf_counter_ns()),
+        )
+        soft_paused = bool(control_state.get("soft_pause", False))
         for team, st in teams.items():
             _drain_latest(st["sub_haptic"], on_msg=lambda b, s=st: _update_haptic_state(s, b))
             _drain_latest(st["sub_actual"], on_msg=lambda b, s=st: _update_actual_state(s, b))
@@ -151,7 +163,7 @@ def main(argv: list[str] | None = None) -> int:
 
             robot_status = st.get("robot_status", {})
             robot_fault_active = bool(robot_status.get("fault_active", False))
-            if robot_fault_active:
+            if robot_fault_active or soft_paused:
                 st["last_target"] = list(st["last_q"])
                 st["last_collision"] = False
                 st["last_first_hit"] = None
@@ -247,18 +259,24 @@ def main(argv: list[str] | None = None) -> int:
             if isinstance(reason, str) and reason:
                 pause_reason = f"{team}:{reason}"
                 break
+        if pause_reason is None and soft_paused:
+            pause_reason = "soft_estop"
 
-        _update_stage_pause_tracking(stage_state, bool(paused_teams), now_ns)
-        if not paused_teams:
+        paused = bool(paused_teams) or soft_paused
+
+        _update_stage_pause_tracking(stage_state, paused, now_ns)
+        if not paused:
             _tick_stage_state(stage_state, teams, game_cfg, now_ns)
 
         countdown_s = _stage_countdown_s(stage_state, game_cfg, now_ns)
 
         env = bus.make_envelope(p.proc, with_wall=True, seq=state_seq)
         env.update({
-            "stage": "paused" if paused_teams else stage_state["stage"],
-            "paused": bool(paused_teams),
+            "stage": "paused" if paused else stage_state["stage"],
+            "active_stage": stage_state["stage"],
+            "paused": paused,
             "pause_reason": pause_reason,
+            "soft_estop": soft_paused,
             "countdown_s": countdown_s,
             "game_duration_s": game_cfg["duration_s"],
             "sum_score_rate_unit_per_s": game_cfg["sum_score_rate_unit_per_s"],
@@ -308,6 +326,7 @@ def main(argv: list[str] | None = None) -> int:
             st["planner"].close()
             st["sub_haptic"].close(0)
             st["sub_actual"].close(0)
+        control_sub.close(0)
 
     return proc.run(tick, teardown=teardown)
 
@@ -323,6 +342,15 @@ def _drain_latest(sub: zmq.Socket, *, on_msg) -> None:
             break
     if last is not None:
         on_msg(last)
+
+
+def _drain_ui_game_controls(sub: zmq.Socket, *, on_msg) -> None:
+    while True:
+        try:
+            _, body = bus.recv(sub, flags=zmq.NOBLOCK)
+        except zmq.Again:
+            break
+        on_msg(body)
 
 
 def _update_actual_state(state: dict, body: dict) -> None:
@@ -357,11 +385,7 @@ def _tick_stage_state(stage_state: dict[str, Any], teams: dict[str, dict], game_
     if stage_state["stage"] == "play":
         elapsed_s = _stage_elapsed_s(stage_state, now_ns)
         if elapsed_s >= game_cfg["duration_s"]:
-            stage_state["stage"] = "conclusion"
-            stage_state["stage_entered_mono_ns"] = now_ns
-            stage_state["winner_team"] = None
-            for st in teams.values():
-                _enter_conclusion(st, now_ns)
+            _force_conclusion(stage_state, teams, now_ns)
         return
 
     if stage_state["stage"] != "conclusion":
@@ -422,6 +446,39 @@ def _enter_conclusion(state: dict[str, Any], now_ns: int) -> None:
     state["summed_score"] = 0
     state["score"] = int(sum(state["bucket_values"]))
     state["conclusion_sum_remainder_units"] = 0.0
+
+
+def _force_conclusion(stage_state: dict[str, Any], teams: dict[str, dict], now_ns: int) -> None:
+    if stage_state["stage"] == "conclusion":
+        return
+    stage_state["stage"] = "conclusion"
+    stage_state["stage_entered_mono_ns"] = now_ns
+    stage_state["winner_team"] = None
+    for st in teams.values():
+        _enter_conclusion(st, now_ns)
+
+
+def _apply_ui_game_control(
+    control_state: dict[str, Any],
+    stage_state: dict[str, Any],
+    teams: dict[str, dict],
+    body: dict[str, Any],
+    now_ns: int,
+) -> None:
+    action = body.get("action") if isinstance(body, dict) else None
+    if not isinstance(action, str):
+        return
+    if action == "play_resume":
+        control_state["soft_pause"] = False
+    elif action == "soft_estop":
+        control_state["soft_pause"] = True
+    elif action == "end_game":
+        control_state["soft_pause"] = False
+        _force_conclusion(stage_state, teams, now_ns)
+    else:
+        return
+    control_state["last_action"] = action
+    control_state["last_action_ts_mono_ns"] = now_ns
 
 
 def _tick_conclusion_team(
