@@ -65,6 +65,14 @@ class KeyboardHaptic:
             (K.K_6, K.K_y, K.K_h, K.K_n),
         ]
 
+    def set_current_position(self, q_rad: list[float]) -> None:
+        if len(q_rad) < 6:
+            return
+        seeded = [float(v) for v in q_rad[:6]]
+        self._pos = list(seeded)
+        self._last_pos = list(seeded)
+        self._last_t = time.perf_counter()
+
     def sample(self) -> dict:
         # Drain the pygame event queue so the window stays responsive.
         for _ in self._pygame.event.get():

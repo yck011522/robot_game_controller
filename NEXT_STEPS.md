@@ -3,9 +3,10 @@
 **Purpose:** Temporary working file to (1) capture feature inventory decisions and
 (2) hand off context to a future Copilot session if this conversation ends.
 
-**Status:** P0-P2 are complete. P2 was revalidated on 2026-06-05
-(headless regression, local `dev_keyboard` smoke, and benchmark sweep).
-Next active phase: P3 real-robot bring-up on team B.
+**Status:** P0-P3 are complete. P2 was revalidated on 2026-06-05
+(headless regression, local `dev_keyboard` smoke, and benchmark sweep), and P3
+was closed the same day after the real-robot team-B bring-up path was validated.
+Next active phase: P4 dashboard bring-up.
 
 **Created:** 2026-06-02
 **Last updated:** 2026-06-05
@@ -303,15 +304,18 @@ moving in pybullet, Play-state only. That milestone is now complete.
 
 Current rollout snapshot:
 
-- **P0-P2 are complete.** P2 is fully closed: the headless regression
+- **P0-P3 are complete.** P2 is fully closed: the headless regression
   passes, the collision benchmark sweep has been run and archived under
-  `tools/`, and the local `dev_keyboard` smoke was rerun on 2026-06-05.
-- **P3 is next.** Real RTDE bring-up now starts on **team B** because
-  that is how the available hardware is wired. The key work items are
-  startup position sync, a team-B `dev_one_robot_keyboard` profile, and a viewer
-  path that mirrors `telem.robot.actual.b` instead of commanding the sim.
-- **After P3:** P4 dashboard, P5 real haptics on team B, P6 remaining
-  hardware on team B, P7 full game cycle, then P8 adds team A as the
+  `tools/`, and the local `dev_keyboard` smoke was rerun on 2026-06-05. P3 is
+  also closed: the team-B `dev_one_robot_keyboard` profile, RTDE robot path,
+  passive viewer path, and startup pose sync are all in place.
+- **P4 is next.** Dashboard bring-up now starts from the already-working
+  team-B real-robot stack.
+- **Deferred to P6:** safety-barrier hardware enforcement and physical
+  admin buttons no longer block P3/P4; dev profiles keep those subsystems
+  `null` until the later hardware-subsystems phase.
+- **After P4:** P5 real haptics on team B, P6 remaining hardware on team B,
+  P7 full game cycle, then P8 adds team A as the
   second real team.
 - The authoritative detailed phase plan lives in
   [docs/MIGRATION_PLAN.md](docs/MIGRATION_PLAN.md). Keep this file as a

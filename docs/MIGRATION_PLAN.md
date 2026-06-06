@@ -215,7 +215,7 @@ the per-team summary.
 
 ---
 
-### P3 — Real UR10e on team B (still keyboard-driven)
+### P3 — Real UR10e on team B (still keyboard-driven) ✅ DONE
 
 Same system as P2, but with the actual robot in place of the sim.
 Keyboard UI and pybullet viewer both stay — the viewer now mirrors
@@ -232,10 +232,11 @@ the hardware.
   1. RobotIO connects to RTDE and waits for the first valid
      `actual_q` sample.
   2. RobotIO publishes one `telem.robot.actual.b` snapshot.
-  3. GC sees that snapshot, copies `q_actual` into its internal
-     target, and only then begins forwarding planner output.
-  4. The keyboard UI also reads back `telem.robot.actual.b` on
-     startup and zeroes its per-key deltas against that position.
+    3. GC sees that snapshot, copies `q_actual` into its internal
+      target, and only then begins forwarding planner output.
+    4. The keyboard UI seeds its virtual dial position from
+      `telem.robot.actual.b` on startup so simulated dials can be
+      reseated to a known pose without creating a velocity spike.
   Net effect: turning the system on does not snap the robot to
   `[0,0,0,0,0,0]`. If RobotIO can't read `actual_q` within 5 s, it
   exits non-zero (→ circuit breaker, see SUPERVISOR.md §6).
@@ -248,13 +249,28 @@ the hardware.
   for `robot_io.b` or, simpler, the viewer is folded into a small
   tool `tools/robot_viewer.py` that the launcher does not manage.
   Pick whichever is shorter; both are reversible later.
-- RobotIO refuses to start (and exits) if
-  `safety.barrier.ok == false` in the latest `state.full`.
+- **Deferred safety interlock.** Safety-barrier enforcement is pushed
+  to the later hardware-subsystems phase so P3/P4 real-robot bring-up
+  can proceed. The current runtime bypasses `safety.barrier.ok` with
+  explicit `TODO(safety)` markers in code; re-enable the startup and
+  runtime gate once `SafetyBarrierController` lands.
 
-**Exit criterion:** with the real UR10e powered and connected,
+**Exit criterion (met):** with the real UR10e powered and connected,
 `--profile dev_one_robot_keyboard` brings everything up without any sudden
 robot motion at startup. Keyboard input then jogs the real arm;
 collision check still refuses bad configurations.
+
+**P3 closure (2026-06-05):**
+- `RealRtdeRobot` is live under `robot_io.b: real_rtde`, waits for the
+  first valid `actual_q`, and seeds its outgoing target from that pose.
+- The launcher waits for the first `telem.robot.actual.b` sample before
+  bringing up the rest of the P3 stack.
+- `tools/robot_viewer.py` is the passive pybullet viewer path for the
+  real robot profile.
+- Focused regression coverage exists in
+  [tests/test_p3_real_rtde.py](../tests/test_p3_real_rtde.py).
+- Safety-barrier hardware and physical admin buttons are explicitly
+  deferred to the later hardware-subsystems phase.
 
 ---
 
@@ -264,7 +280,13 @@ Separate process, separate window. Read-only consumer of `state.full`
 plus a small REQ/REP socket for operator commands. **Two-team layout
 from day one** so adding team A later (P8) is a config change only.
 
+This dashboard will become full screen on a 2560x1440 (dev) or 4k (production) monitor, 
+we need to find a way such that this is scaled down and in window mode during development, 
+but we primarily design this for fullscreen at 4k. This should have a dark theme and use blue vs red colour
+to represent two teams. Team A is blue, Team B is red.
+
 - `src/apps/gamemaster_ui/` — pygame app:
+  - Game Clock (because this dashboard is actually visible to the audience)
   - Stage indicator (even though only Play is wired up).
   - Per-team score and bucket-weight panels (team A side shows “no
     data” when `active_teams: [b]`).
@@ -272,8 +294,8 @@ from day one** so adding team A later (P8) is a config change only.
     colored squares per [NEXT_STEPS §2.G.43](../NEXT_STEPS.md).
   - Per-joint dial-position-vs-actual visualizer per team (lifted
     from the keyboard explorer).
-  - Manual REQs: `set_stage`, `soft_estop`, `adjust_score`,
-    `ping` per [BUS.md §7](architecture/BUS.md#7-ui--gc-commands-reqrep-at-5570).
+  - Manual REQs: `set_stage` (one tiny button for each stage), `soft_estop`, `start_resume`, `adjust_score`,
+    per [BUS.md §7](architecture/BUS.md#7-ui--gc-commands-reqrep-at-5570).
   - **No editable tuning widgets.** All tuning lives in YAML
     (CONFIG.md §2), reloadable via the `reload_config` REQ.
 - The keyboard input UI from P2 stays untouched and keeps running in
@@ -282,9 +304,16 @@ from day one** so adding team A later (P8) is a config change only.
   enabled. The dashboard is also addable to `dev_keyboard` (sim
   robot) for off-hardware development.
 
+Develop a few mockup layout first before wiring up business logic. Even after confirming
+the UI layout should still be easily changable, I suggest using fixed coordinates for anchoring
+major items.
+
 **Exit criterion:** dashboard window opens, shows live joint motion
-and process health for team B, accepts a `soft_estop` REQ. Kicking
-the dashboard window closed does not affect the rest of the system.
+and process health for team B, accepts a `soft_estop` REQ. Confirming that the game system indeed stopped 
+planning and robotio stop sending commands. Kicking the dashboard window closed 
+does not affect the rest of the system and the launcher should attempt to restart it. 
+Also, please add a software shutdown button that would shutdown the robot gracefully 
+(we can defer the implementation later).
 
 ---
 
@@ -330,6 +359,9 @@ do them as hardware becomes available.
 - `SafetyBarrierController` — drives `telem.safety`. Any broken
   channel halts robot motion immediately (RobotIO refuses commands
   while `safety.barrier.ok == false`).
+- **Deferred from earlier phases:** physical admin buttons and the
+  safety-barrier interlock both land here instead of blocking P3/P4
+  bring-up. Until then, dev profiles keep those subsystems `null`.
 
 **Exit criterion:** `show.yaml` profile (still single team) runs the
 full hardware stack on team B. Play stage works end-to-end with

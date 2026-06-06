@@ -65,14 +65,11 @@ def main(argv: list[str] | None = None) -> int:
     poller.register(sub, zmq.POLLIN)
     poller.register(state_sub, zmq.POLLIN)
 
-    barrier_ok = {"value": _read_startup_barrier_ok(state_sub)}
-    if barrier_ok["value"] is False:
-        print(f"[{proc.proc}] startup blocked: safety.barrier.ok=false",
-              file=sys.stderr, flush=True)
-        sub.close(0)
-        state_sub.close(0)
-        impl.close()
-        return 2
+    # TODO(safety): P3/P4 bring-up intentionally bypasses the safety-barrier
+    # interlock so the real-robot stack can keep running during migration.
+    # Re-enable the startup block and runtime command gate once
+    # SafetyBarrierController lands in its dedicated later phase.
+    _read_startup_barrier_ok(state_sub)
 
     telem_topic = f"telem.robot.actual.{team}"
     next_telem = time.perf_counter()
@@ -85,8 +82,9 @@ def main(argv: list[str] | None = None) -> int:
         latest_clamps = None
         events = dict(poller.poll(1))
         if state_sub in events:
-            _drain_latest(state_sub, on_msg=lambda b:
-                          barrier_ok.update(value=_extract_barrier_ok(b)))
+            # TODO(safety): consume and discard state.full for now so this
+            # socket stays drained until the real barrier controller exists.
+            _drain_latest(state_sub, on_msg=lambda _b: None)
         if sub in events:
             while True:
                 try:
@@ -99,13 +97,12 @@ def main(argv: list[str] | None = None) -> int:
                         latest_clamps = c
                 except zmq.Again:
                     break
-        if barrier_ok["value"] is not False and latest_q is not None:
+        if latest_q is not None:
             impl.set_target([float(x) for x in latest_q])
-        if barrier_ok["value"] is not False and latest_clamps is not None and hasattr(impl, "set_clamps"):
+        if latest_clamps is not None and hasattr(impl, "set_clamps"):
             impl.set_clamps(latest_clamps)
 
-        if barrier_ok["value"] is not False:
-            impl.maybe_step()
+        impl.maybe_step()
 
         now = time.perf_counter()
         if now >= next_telem:

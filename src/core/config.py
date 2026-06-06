@@ -22,7 +22,11 @@ GLOBAL_SUBSYSTEMS = (
     "light_column_1_3", "light_column_4_5", "light_column_6_8",
     "display_broadcaster", "scoreboard_broadcaster",
     "bucket_controller", "button_controller",
+    # TODO(buttons): physical admin buttons are deferred until the later
+    # hardware bring-up phase; keep the config slot reserved.
     "safety_barrier_controller",
+    # TODO(safety): safety barrier hardware is deferred until the later
+    # hardware bring-up phase; keep the config slot reserved.
     "event_recorder", "gamemaster_ui", "bus_broker",
 )
 

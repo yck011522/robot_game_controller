@@ -9,6 +9,8 @@ _SRC = Path(__file__).resolve().parents[2]
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
+import zmq
+
 from core import bus  # noqa: E402
 from core.proc import Proc, banner  # noqa: E402
 
@@ -25,6 +27,8 @@ def main(argv: list[str] | None = None) -> int:
 
     impl = _make_impl(impl_name)
     pub = bus.make_pub(proc.ctx)
+    actual_sub = bus.make_sub(proc.ctx, topics=[f"telem.robot.actual.{team}"])
+    seed_ref = {"done": False}
     # The Proc scaffold also creates a PUB for heartbeats; reusing this
     # one keeps us to a single PUB per process.
     proc.use_heartbeat_pub(pub)
@@ -32,12 +36,15 @@ def main(argv: list[str] | None = None) -> int:
     topic = f"telem.haptic.{team}"
 
     def tick(p: Proc) -> None:
+        if not seed_ref["done"]:
+            _drain_latest(actual_sub, on_msg=lambda b: _seed_from_robot_actual(impl, b, seed_ref))
         sample = impl.sample()
         env = bus.make_envelope(p.proc)
         env.update({"team": team, **sample})
         bus.publish(pub, topic, env)
 
     def teardown(_: Proc) -> None:
+        actual_sub.close(0)
         close = getattr(impl, "close", None)
         if callable(close):
             close()
@@ -53,6 +60,31 @@ def _make_impl(name: str):
         from subsystems.haptic.sim_keyboard import KeyboardHaptic
         return KeyboardHaptic()
     raise NotImplementedError(f"haptic_io impl {name!r} not available yet")
+
+
+def _drain_latest(sub, *, on_msg) -> None:
+    last = None
+    while True:
+        try:
+            _, body = bus.recv(sub, flags=zmq.NOBLOCK)
+            last = body
+        except zmq.Again:
+            break
+    if last is not None:
+        on_msg(last)
+
+
+def _seed_from_robot_actual(impl, body: dict, seed_ref: dict) -> None:
+    q = body.get("q_rad")
+    if not isinstance(q, list) or len(q) < 6:
+        return
+    seed = getattr(impl, "set_current_position", None)
+    if callable(seed):
+        seed([float(v) for v in q[:6]])
+    # TODO(haptic): the future real ESP32 impl should expose the same
+    # set_current_position hook so simulated and physical dials can both be
+    # reseated to a known pose without causing motion.
+    seed_ref["done"] = True
 
 
 if __name__ == "__main__":
