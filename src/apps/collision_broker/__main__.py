@@ -34,11 +34,11 @@ if str(_SRC) not in sys.path:
 import zmq  # noqa: E402
 
 from core import bus  # noqa: E402
-from core.config import load as load_profile  # noqa: E402
+from core.config import default_runtime_setting, load as load_profile  # noqa: E402
 from core.proc import banner, install_signal_handlers, parse_proc_args  # noqa: E402
 
 
-HEARTBEAT_HZ = 1.0
+DEFAULT_HEARTBEAT_HZ = 1.0
 
 
 def _run_proxy(ctx: zmq.Context) -> None:
@@ -64,7 +64,7 @@ def _run_proxy(ctx: zmq.Context) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args, _ = parse_proc_args(argv, default_proc="collision_broker")
-    load_profile(args.profile_path)
+    profile = load_profile(args.profile_path)
 
     ctx = zmq.Context.instance()
     stop = threading.Event()
@@ -80,7 +80,8 @@ def main(argv: list[str] | None = None) -> int:
            f"ready: ROUTER {bus.COLLISION_ROUTER_ENDPOINT} <-> "
            f"DEALER {bus.COLLISION_DEALER_ENDPOINT}")
 
-    period = 1.0 / HEARTBEAT_HZ
+    heartbeat_hz = profile.subsystem_float("collision_broker", "fps_target", default_runtime_setting("collision_broker", "fps_target", DEFAULT_HEARTBEAT_HZ))
+    period = 1.0 / max(1e-6, heartbeat_hz)
     next_tick = time.perf_counter()
     last_mono_ns = time.perf_counter_ns()
     seq = 0

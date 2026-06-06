@@ -67,12 +67,16 @@ tests, and benchmarks is
 
 ## Running
 
-The new multi-process launcher is live through
-[docs/MIGRATION_PLAN.md §P2](docs/MIGRATION_PLAN.md). The current
-working slice is the full P2 demo path: keyboard input → game
-controller → collision worker pool → pybullet robot viewer.
+The new multi-process launcher is live through the current P4 observer
+baseline. The validated runtime slices are:
 
-Manual P2 smoke:
+- `dev_keyboard` — full sim path: keyboard input → game controller →
+  collision worker pool → pybullet robot viewer, with the spectator
+  dashboard auto-started by the launcher.
+- `dev_one_robot_keyboard` — real UR10e bring-up on team B, still
+  keyboard-driven, with the same spectator dashboard window.
+
+Manual sim smoke:
 
 ```powershell
 conda activate game
@@ -87,6 +91,13 @@ interpreter directly:
 ```powershell
 $env:PYTHONPATH = "src"
 & C:\Users\yck01\miniconda3\envs\game\python.exe -m apps.launcher --profile config\profiles\dev_keyboard.yaml
+```
+
+Manual real-robot bring-up:
+
+```powershell
+$env:PYTHONPATH = "src"
+& C:\Users\yck01\miniconda3\envs\game\python.exe -m apps.launcher --profile config\profiles\dev_one_robot_keyboard.yaml
 ```
 
 Automated P2 regression:

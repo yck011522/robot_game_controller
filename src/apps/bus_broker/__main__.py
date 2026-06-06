@@ -26,10 +26,10 @@ if str(_SRC) not in sys.path:
 import zmq  # noqa: E402
 
 from core import bus  # noqa: E402
-from core.config import load as load_profile  # noqa: E402
+from core.config import default_runtime_setting, load as load_profile  # noqa: E402
 
 
-HEARTBEAT_HZ = 1.0  # BUS.md 禮5.5: every long-lived process emits 1 Hz.
+DEFAULT_HEARTBEAT_HZ = 1.0  # BUS.md 禮5.5: every long-lived process emits 1 Hz.
 
 
 def _run_proxy(ctx: zmq.Context, stop: threading.Event, bound: threading.Event) -> None:
@@ -91,7 +91,7 @@ def main(argv: list[str] | None = None) -> int:
     # from it ourselves, but every child does this on startup so a
     # broken YAML fails loud at spawn time instead of silently producing
     # heartbeats with the rest of the system misbehaving.
-    load_profile(args.profile)
+    profile = load_profile(args.profile)
 
     # One ZMQ context per process. `Context.instance()` returns the
     # process-global singleton so other code in this process (the
@@ -141,7 +141,8 @@ def main(argv: list[str] | None = None) -> int:
     # behind (debugger pause, GC stall) we just reset the cadence rather
     # than burn cycles trying to catch up ??heartbeats are a liveness
     # signal, not a rate target.
-    period = 1.0 / HEARTBEAT_HZ
+    heartbeat_hz = profile.subsystem_float("bus_broker", "fps_target", default_runtime_setting("bus_broker", "fps_target", DEFAULT_HEARTBEAT_HZ))
+    period = 1.0 / max(1e-6, heartbeat_hz)
     next_tick = time.perf_counter()
     last_tick_mono_ns = time.perf_counter_ns()
     seq = 0

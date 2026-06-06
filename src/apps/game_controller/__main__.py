@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import math
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 _SRC = Path(__file__).resolve().parents[2]
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
+import yaml  # noqa: E402
 import zmq  # noqa: E402
 
 from core import bus  # noqa: E402
@@ -23,12 +26,23 @@ from subsystems.jogging.in_process import InProcessPlanner  # noqa: E402
 # 60 Hz gives ~16 ms per tick, which is comfortably above the
 # forward_timeout_ms budget and keeps state.full at a recordable rate.
 TICK_HZ = 60.0
+TEAM_BUCKET_IDS = {
+    "a": [11, 12, 13],
+    "b": [21, 22, 23],
+}
+DEFAULT_BUCKET_VALUES = [0.0, 0.0, 0.0]
+DEFAULT_LOOK_POSE_DEG = [0.0, -90.0, 90.0, 0.0, 0.0, 0.0]
+CONCLUSION_INITIAL_PAUSE_S = 1.0
+CONCLUSION_BUCKET_EMPTY_PAUSE_S = 0.5
+CONCLUSION_ANNOUNCEMENT_PAUSE_S = 1.0
 
 
 def main(argv: list[str] | None = None) -> int:
     proc, _ = Proc.from_argv(target_hz=TICK_HZ, default_proc="game_controller")
 
     active_teams = list(proc.profile.active_teams)
+    game_cfg = _game_config(proc.profile.tuning.get("game"))
+    robot_show_poses = _load_robot_show_poses_deg()
     pub = bus.make_pub(proc.ctx)
     proc.use_heartbeat_pub(pub)
 
@@ -52,6 +66,7 @@ def main(argv: list[str] | None = None) -> int:
         actual_sub = bus.make_sub(proc.ctx, topics=[f"telem.robot.actual.{team}"])
         teams[team] = {
             "planner": planner,
+            "team": team,
             "sub_haptic": sub,
             "sub_actual": actual_sub,
             "last_dial": [0.0] * 6,
@@ -73,15 +88,36 @@ def main(argv: list[str] | None = None) -> int:
             "last_prox_hits": [[False] * 20 for _ in range(6)],
             "last_prox_age_ticks": [9999] * 6,
             "robot_status": {},
+            "bucket_ids": list(TEAM_BUCKET_IDS.get(team, [])),
+            "bucket_values": list(game_cfg["sim_bucket_values"].get(team, DEFAULT_BUCKET_VALUES)),
+            "score": int(sum(game_cfg["sim_bucket_values"].get(team, DEFAULT_BUCKET_VALUES))),
+            "summed_score": 0,
+            "conclusion_phase": None,
+            "conclusion_active_bucket_index": None,
+            "conclusion_target_pose_name": None,
+            "conclusion_target_pose_deg": None,
+            "conclusion_bucket_open_triggered": False,
+            "conclusion_phase_started_mono_ns": None,
+            "conclusion_done": False,
+            "conclusion_sum_remainder_units": 0.0,
             "last_tick_t": time.perf_counter(),
         }
     banner(proc.proc, f"teams={active_teams} collision_check={collision_enabled}")
 
     state_seq = 0
-    started_mono_ns = time.perf_counter_ns()
+    # TODO(state-machine): once Idle/Tutorial are wired, start there instead
+    # of jumping straight into Play on boot.
+    stage_state = {
+        "stage": "play",
+        "stage_entered_mono_ns": time.perf_counter_ns(),
+        "winner_team": None,
+        "pause_started_mono_ns": None,
+        "paused_total_ns": 0,
+    }
 
     def tick(p: Proc) -> None:
         nonlocal state_seq
+        now_ns = time.perf_counter_ns()
         for team, st in teams.items():
             _drain_latest(st["sub_haptic"], on_msg=lambda b, s=st: _update_haptic_state(s, b))
             _drain_latest(st["sub_actual"], on_msg=lambda b, s=st: _update_actual_state(s, b))
@@ -110,11 +146,39 @@ def main(argv: list[str] | None = None) -> int:
                 st["last_prox_probe_offsets_deg"] = []
                 st["last_prox_hits"] = [[False] * 20 for _ in range(6)]
                 st["last_prox_age_ticks"] = [9999] * 6
+                st["score"] = int(sum(st["bucket_values"]))
                 continue
 
             robot_status = st.get("robot_status", {})
             robot_fault_active = bool(robot_status.get("fault_active", False))
             if robot_fault_active:
+                st["last_target"] = list(st["last_q"])
+                st["last_collision"] = False
+                st["last_first_hit"] = None
+                st["last_path_scalar"] = 1.0
+                st["last_prox_scalar"] = 1.0
+                st["last_final_scalar"] = 1.0
+                st["last_prox_probe_offsets_deg"] = []
+                st["last_prox_hits"] = [[False] * 20 for _ in range(6)]
+                st["last_prox_age_ticks"] = [9999] * 6
+
+                env = bus.make_envelope(p.proc)
+                env.update({
+                    "team": team,
+                    "q_target_rad": list(st["last_q"]),
+                    "clamps": {
+                        "path": 1.0,
+                        "prox": 1.0,
+                        "final": 1.0,
+                    },
+                })
+                bus.publish(pub, f"cmd.robot.target.{team}", env)
+                continue
+
+            if stage_state["stage"] == "play":
+                st["score"] = int(sum(st["bucket_values"]))
+            else:
+                _tick_conclusion_team(st, dt, game_cfg, robot_show_poses.get(team, {}), stage_state)
                 st["last_target"] = list(st["last_q"])
                 st["last_collision"] = False
                 st["last_first_hit"] = None
@@ -184,12 +248,21 @@ def main(argv: list[str] | None = None) -> int:
                 pause_reason = f"{team}:{reason}"
                 break
 
+        _update_stage_pause_tracking(stage_state, bool(paused_teams), now_ns)
+        if not paused_teams:
+            _tick_stage_state(stage_state, teams, game_cfg, now_ns)
+
+        countdown_s = _stage_countdown_s(stage_state, game_cfg, now_ns)
+
         env = bus.make_envelope(p.proc, with_wall=True, seq=state_seq)
         env.update({
-            "stage": "paused" if paused_teams else "play",
+            "stage": "paused" if paused_teams else stage_state["stage"],
             "paused": bool(paused_teams),
             "pause_reason": pause_reason,
-            "stage_entered_mono_ns": started_mono_ns,
+            "countdown_s": countdown_s,
+            "game_duration_s": game_cfg["duration_s"],
+            "sum_score_rate_unit_per_s": game_cfg["sum_score_rate_unit_per_s"],
+            "stage_entered_mono_ns": stage_state["stage_entered_mono_ns"],
             "tutorial_entered_wall_ns": None,
             "teams": {
                 team: {
@@ -212,6 +285,17 @@ def main(argv: list[str] | None = None) -> int:
                         "prox_probe_offsets_deg": st["last_prox_probe_offsets_deg"],
                         "prox_hits": st["last_prox_hits"],
                         "prox_age_ticks": st["last_prox_age_ticks"],
+                    },
+                    "score": st["score"],
+                    "summed_score": st["summed_score"],
+                    "buckets": list(st["bucket_values"]),
+                    "conclusion": {
+                        "phase": st["conclusion_phase"],
+                        "active_bucket_index": st["conclusion_active_bucket_index"],
+                        "target_pose_name": st["conclusion_target_pose_name"],
+                        "target_pose_deg": st["conclusion_target_pose_deg"],
+                        "bucket_open_triggered": st["conclusion_bucket_open_triggered"],
+                        "done": st["conclusion_done"],
                     },
                 } for team, st in teams.items()
             },
@@ -258,6 +342,276 @@ def _update_haptic_state(state: dict, body: dict) -> None:
     if isinstance(loop_hz, list):
         state["last_haptic_loop_hz"] = [float(v) for v in loop_hz[:6]] + [0.0] * max(0, 6 - len(loop_hz[:6]))
         state["last_haptic_loop_hz"] = state["last_haptic_loop_hz"][:6]
+
+
+def _game_config(node: Any) -> dict[str, float]:
+    data = node if isinstance(node, dict) else {}
+    return {
+        "duration_s": _coerce_positive_float(data.get("duration_s"), 240.0),
+        "sum_score_rate_unit_per_s": _coerce_positive_float(data.get("sum_score_rate_unit_per_s"), 100.0),
+        "sim_bucket_values": _coerce_team_bucket_values(data.get("sim_bucket_values")),
+    }
+
+
+def _tick_stage_state(stage_state: dict[str, Any], teams: dict[str, dict], game_cfg: dict[str, float], now_ns: int) -> None:
+    if stage_state["stage"] == "play":
+        elapsed_s = _stage_elapsed_s(stage_state, now_ns)
+        if elapsed_s >= game_cfg["duration_s"]:
+            stage_state["stage"] = "conclusion"
+            stage_state["stage_entered_mono_ns"] = now_ns
+            stage_state["winner_team"] = None
+            for st in teams.values():
+                _enter_conclusion(st, now_ns)
+        return
+
+    if stage_state["stage"] != "conclusion":
+        return
+
+    announcement_ready = {"announcement_pose", "winner_pose"}
+    if stage_state["winner_team"] is None and all(
+        bool(st.get("conclusion_done", False))
+        or str(st.get("conclusion_phase")) in announcement_ready
+        for st in teams.values()
+    ):
+        stage_state["winner_team"] = _winner_team(teams)
+
+    if all(bool(st.get("conclusion_done", False)) for st in teams.values()):
+        stage_state["winner_team"] = _winner_team(teams)
+
+
+def _stage_countdown_s(stage_state: dict[str, Any], game_cfg: dict[str, float], now_ns: int) -> int:
+    if stage_state["stage"] != "play":
+        return 0
+    remaining_s = game_cfg["duration_s"] - _stage_elapsed_s(stage_state, now_ns)
+    return max(0, int(math.ceil(remaining_s)))
+
+
+def _stage_elapsed_s(stage_state: dict[str, Any], now_ns: int) -> float:
+    pause_started_ns = stage_state.get("pause_started_mono_ns")
+    paused_total_ns = int(stage_state.get("paused_total_ns") or 0)
+    active_pause_ns = 0
+    if pause_started_ns is not None:
+        active_pause_ns = max(0, now_ns - int(pause_started_ns))
+    return max(
+        0.0,
+        (now_ns - int(stage_state["stage_entered_mono_ns"]) - paused_total_ns - active_pause_ns) / 1e9,
+    )
+
+
+def _update_stage_pause_tracking(stage_state: dict[str, Any], paused: bool, now_ns: int) -> None:
+    pause_started_ns = stage_state.get("pause_started_mono_ns")
+    if paused:
+        if pause_started_ns is None:
+            stage_state["pause_started_mono_ns"] = now_ns
+        return
+    if pause_started_ns is None:
+        return
+    stage_state["paused_total_ns"] = int(stage_state.get("paused_total_ns") or 0) + (now_ns - int(pause_started_ns))
+    stage_state["pause_started_mono_ns"] = None
+
+
+def _enter_conclusion(state: dict[str, Any], now_ns: int) -> None:
+    state["bucket_values"] = [max(0, int(round(v))) for v in state["bucket_values"]]
+    state["conclusion_phase"] = "pause_before_sum"
+    state["conclusion_active_bucket_index"] = 0
+    state["conclusion_target_pose_name"] = None
+    state["conclusion_target_pose_deg"] = None
+    state["conclusion_bucket_open_triggered"] = False
+    state["conclusion_phase_started_mono_ns"] = now_ns
+    state["conclusion_done"] = False
+    state["summed_score"] = 0
+    state["score"] = int(sum(state["bucket_values"]))
+    state["conclusion_sum_remainder_units"] = 0.0
+
+
+def _tick_conclusion_team(
+    state: dict[str, Any],
+    dt: float,
+    game_cfg: dict[str, float],
+    pose_cfg: dict[str, list[float]],
+    stage_state: dict[str, Any],
+) -> None:
+    phase = state.get("conclusion_phase")
+    if phase is None:
+        return
+
+    now_ns = time.perf_counter_ns()
+    phase_started_ns = int(state.get("conclusion_phase_started_mono_ns") or now_ns)
+    phase_elapsed_s = (now_ns - phase_started_ns) / 1e9
+
+    if phase == "pause_before_sum":
+        if phase_elapsed_s >= CONCLUSION_INITIAL_PAUSE_S:
+            _set_bucket_pose_phase(state, now_ns, pose_cfg)
+        return
+
+    if phase == "sum_bucket":
+        bucket_index = int(state.get("conclusion_active_bucket_index") or 0)
+        if bucket_index >= len(state["bucket_values"]):
+            _set_announcement_phase(state, now_ns, pose_cfg)
+            return
+
+        remaining = int(state["bucket_values"][bucket_index])
+        accumulated_units = float(state.get("conclusion_sum_remainder_units", 0.0)) + (game_cfg["sum_score_rate_unit_per_s"] * dt)
+        delta = min(remaining, int(accumulated_units))
+        state["conclusion_sum_remainder_units"] = accumulated_units - delta
+        state["bucket_values"][bucket_index] = max(0, remaining - delta)
+        state["summed_score"] = int(state.get("summed_score", 0)) + delta
+        state["score"] = int(sum(state["bucket_values"]))
+        if state["bucket_values"][bucket_index] <= 0:
+            state["bucket_values"][bucket_index] = 0
+            state["conclusion_phase"] = "empty_bucket"
+            state["conclusion_bucket_open_triggered"] = True
+            state["conclusion_phase_started_mono_ns"] = now_ns
+            state["conclusion_sum_remainder_units"] = 0.0
+            # TODO(bucket-controller): send the real bucket-open command
+            # once BucketController exists on the new runtime path.
+        return
+
+    if phase == "empty_bucket":
+        if phase_elapsed_s >= CONCLUSION_BUCKET_EMPTY_PAUSE_S:
+            next_bucket_index = int(state.get("conclusion_active_bucket_index") or 0) + 1
+            state["conclusion_active_bucket_index"] = next_bucket_index
+            state["conclusion_bucket_open_triggered"] = False
+            if next_bucket_index >= len(state["bucket_values"]):
+                _set_announcement_phase(state, now_ns, pose_cfg)
+            else:
+                _set_bucket_pose_phase(state, now_ns, pose_cfg)
+        return
+
+    if phase == "announcement_pose":
+        if phase_elapsed_s >= CONCLUSION_ANNOUNCEMENT_PAUSE_S:
+            winner_team = stage_state.get("winner_team")
+            if winner_team is None:
+                return
+            state["conclusion_phase"] = "winner_pose"
+            if winner_team == "tie":
+                state["conclusion_target_pose_name"] = "robot_win_pose"
+            else:
+                state["conclusion_target_pose_name"] = "robot_win_pose" if state["team"] == winner_team else "robot_lose_pose"
+            state["conclusion_target_pose_deg"] = pose_cfg.get(state["conclusion_target_pose_name"], list(DEFAULT_LOOK_POSE_DEG))
+            state["conclusion_phase_started_mono_ns"] = now_ns
+            # TODO(conclusion-motion): replace this pose bookkeeping with a
+            # collision-free motion plan once the dedicated planner lands.
+        return
+
+    if phase == "winner_pose":
+        state["conclusion_done"] = True
+
+
+def _set_bucket_pose_phase(state: dict[str, Any], now_ns: int, pose_cfg: dict[str, list[float]]) -> None:
+    bucket_index = int(state.get("conclusion_active_bucket_index") or 0)
+    pose_names = ["robot_lookb1_pose", "robot_lookb2_pose", "robot_lookb3_pose"]
+    pose_name = pose_names[min(bucket_index, len(pose_names) - 1)]
+    state["conclusion_phase"] = "sum_bucket"
+    state["conclusion_target_pose_name"] = pose_name
+    state["conclusion_target_pose_deg"] = pose_cfg.get(pose_name, list(DEFAULT_LOOK_POSE_DEG))
+    state["conclusion_phase_started_mono_ns"] = now_ns
+    # TODO(conclusion-motion): insert the collision-free move to the
+    # bucket-look pose here. Until that planner exists, the robot stays
+    # frozen and the controller advances directly into score summation.
+
+
+def _set_announcement_phase(state: dict[str, Any], now_ns: int, pose_cfg: dict[str, list[float]]) -> None:
+    state["conclusion_phase"] = "announcement_pose"
+    state["conclusion_target_pose_name"] = "robot_announcement_pose"
+    state["conclusion_target_pose_deg"] = pose_cfg.get("robot_announcement_pose", list(DEFAULT_LOOK_POSE_DEG))
+    state["conclusion_phase_started_mono_ns"] = now_ns
+
+
+def _winner_team(teams: dict[str, dict]) -> str | None:
+    if not teams:
+        return None
+    ordered = sorted(
+        ((team, int(st.get("summed_score", 0) or 0)) for team, st in teams.items()),
+        key=lambda item: item[1],
+        reverse=True,
+    )
+    if len(ordered) >= 2 and ordered[0][1] == ordered[1][1]:
+        return "tie"
+    return ordered[0][0]
+
+
+def _coerce_team_bucket_values(value: Any) -> dict[str, list[int]]:
+    if not isinstance(value, dict):
+        return {}
+    out: dict[str, list[int]] = {}
+    for team, buckets in value.items():
+        if not isinstance(team, str):
+            continue
+        out[team] = _coerce_bucket_value_list(buckets)
+    return out
+
+
+def _coerce_bucket_value_list(value: Any) -> list[int]:
+    if not isinstance(value, list):
+        return [0, 0, 0]
+    out: list[int] = []
+    for item in value[:3]:
+        try:
+            out.append(max(0, int(round(float(item)))))
+        except (TypeError, ValueError):
+            out.append(0)
+    if len(out) < 3:
+        out.extend([0] * (3 - len(out)))
+    return out[:3]
+
+
+def _load_robot_show_poses_deg() -> dict[str, dict[str, list[float]]]:
+    default = {team: _default_pose_map() for team in TEAM_BUCKET_IDS}
+    path = _SRC.parent / "config" / "robot_show_poses.yaml"
+    if not path.exists():
+        return default
+    try:
+        body = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return default
+    teams = body.get("teams") if isinstance(body, dict) else None
+    if not isinstance(teams, dict):
+        return default
+    out: dict[str, dict[str, list[float]]] = {}
+    for team, fallback in default.items():
+        node = teams.get(team)
+        if not isinstance(node, dict):
+            out[team] = fallback
+            continue
+        out[team] = {
+            name: _coerce_deg_pose(node.get(name), fallback[name])
+            for name in fallback
+        }
+    return out
+
+
+def _default_pose_map() -> dict[str, list[float]]:
+    return {
+        "robot_lookb1_pose": list(DEFAULT_LOOK_POSE_DEG),
+        "robot_lookb2_pose": list(DEFAULT_LOOK_POSE_DEG),
+        "robot_lookb3_pose": list(DEFAULT_LOOK_POSE_DEG),
+        "robot_announcement_pose": list(DEFAULT_LOOK_POSE_DEG),
+        "robot_win_pose": list(DEFAULT_LOOK_POSE_DEG),
+        "robot_lose_pose": list(DEFAULT_LOOK_POSE_DEG),
+    }
+
+
+def _coerce_deg_pose(value: Any, fallback: list[float]) -> list[float]:
+    if not isinstance(value, list):
+        return list(fallback)
+    out: list[float] = []
+    for item in value[:6]:
+        try:
+            out.append(float(item))
+        except (TypeError, ValueError):
+            out.append(0.0)
+    if len(out) < 6:
+        out.extend(fallback[len(out):6])
+    return out[:6]
+
+
+def _coerce_positive_float(value: Any, default: float) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    return number if number > 0.0 else default
 
 
 if __name__ == "__main__":

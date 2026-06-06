@@ -27,10 +27,48 @@ GLOBAL_SUBSYSTEMS = (
     "safety_barrier_controller",
     # TODO(safety): safety barrier hardware is deferred until the later
     # hardware bring-up phase; keep the config slot reserved.
-    "event_recorder", "gamemaster_ui", "bus_broker",
+    "event_recorder", "gamemaster_ui", "bus_broker", "collision_broker",
 )
 
 POOLED_SUBSYSTEMS = ("collision_workers",)
+
+DEFAULT_SUBSYSTEM_RUNTIME: dict[str, dict[str, float]] = {
+    "bus_broker": {
+        "fps_target": 1.0,
+        "fps_min": 0.8,
+        "heartbeat_age_max": 1100.0,
+    },
+    "collision_broker": {
+        "fps_target": 1.0,
+        "fps_min": 0.8,
+        "heartbeat_age_max": 1100.0,
+    },
+    "collision_workers": {
+        "fps_target": 1000.0,
+        "fps_min": 800.0,
+        "heartbeat_age_max": 1100.0,
+    },
+    "robot_io": {
+        "fps_target": 200.0,
+        "fps_min": 180.0,
+        "heartbeat_age_max": 1100.0,
+    },
+    "haptic_io": {
+        "fps_target": 50.0,
+        "fps_min": 45.0,
+        "heartbeat_age_max": 1100.0,
+    },
+    "game_controller": {
+        "fps_target": 60.0,
+        "fps_min": 45.0,
+        "heartbeat_age_max": 1100.0,
+    },
+    "gamemaster_ui": {
+        "fps_target": 30.0,
+        "fps_min": 20.0,
+        "heartbeat_age_max": 1100.0,
+    },
+}
 
 
 class ConfigError(ValueError):
@@ -57,14 +95,36 @@ class Profile:
 
     def is_enabled(self, subsystem: str, team: str | None = None) -> bool:
         """Return True iff this subsystem is configured to spawn."""
+        if subsystem in PER_TEAM_SUBSYSTEMS:
+            return self.subsystem_impl(subsystem, team=team) is not None
+        if subsystem in POOLED_SUBSYSTEMS:
+            node = self.subsystems.get(subsystem)
+            return isinstance(node, dict) and int(node.get("count", 0)) > 0
+        return self.subsystem_impl(subsystem) is not None
+
+    def subsystem_impl(self, subsystem: str, team: str | None = None) -> str | None:
         node = self.subsystems.get(subsystem)
         if subsystem in PER_TEAM_SUBSYSTEMS:
             if team is None:
                 raise ValueError(f"{subsystem} is per-team; pass team='a' or 'b'")
-            return node is not None and node.get(team) is not None
-        if subsystem in POOLED_SUBSYSTEMS:
-            return isinstance(node, dict) and int(node.get("count", 0)) > 0
-        return node is not None and node != "null"
+            if not isinstance(node, dict):
+                return None
+            return _normalize_impl_value(node.get(team))
+        if isinstance(node, dict):
+            return _normalize_impl_value(node.get("impl"))
+        return _normalize_impl_value(node)
+
+    def subsystem_float(self, subsystem: str, key: str, default: float | None = None) -> float | None:
+        node = self.subsystems.get(subsystem)
+        if not isinstance(node, dict):
+            return default_runtime_setting(subsystem, key, default)
+        raw = node.get(key, default_runtime_setting(subsystem, key, default))
+        if raw is None:
+            return None
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return default_runtime_setting(subsystem, key, default)
 
 
 def load(path: str | Path) -> Profile:
@@ -137,7 +197,7 @@ def _validate(data: dict[str, Any], errors: list[str]) -> None:
                 errors.append("subsystems.collision_workers.count must be an integer")
 
     # bus_broker is always required at runtime (CONFIG.md §3.2).
-    if subs.get("bus_broker") != "real":
+    if _global_impl(subs.get("bus_broker")) != "real":
         errors.append("subsystems.bus_broker must be 'real' (no other impl exists)")
 
     hardware = data.get("hardware") or {}
@@ -195,3 +255,29 @@ def _validate_robot_limit_array(value: Any, field: str, errors: list[str]) -> No
             float(item)
         except (TypeError, ValueError):
             errors.append(f"{field}[{idx}] must be numeric")
+
+
+def default_runtime_setting(subsystem: str, key: str, default: float | None = None) -> float | None:
+    node = DEFAULT_SUBSYSTEM_RUNTIME.get(subsystem, {})
+    raw = node.get(key, default)
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+def _normalize_impl_value(value: Any) -> str | None:
+    if value is None or value == "null":
+        return None
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped or None
+    return None
+
+
+def _global_impl(node: Any) -> str | None:
+    if isinstance(node, dict):
+        return _normalize_impl_value(node.get("impl"))
+    return _normalize_impl_value(node)

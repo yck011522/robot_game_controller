@@ -16,6 +16,9 @@ subsystems:
     b: null
 
   robot_io:
+    fps_target: 200.0
+    fps_min: 80.0
+    heartbeat_age_max: 1100
     a: sim_pybullet
     b: null
 
@@ -35,10 +38,22 @@ subsystems:
 
   collision_workers:
     count: 14
+    fps_target: 1000.0
+    fps_min: 40.0
+    heartbeat_age_max: 1100
+
+  collision_broker:
+    fps_target: 1.0
+    fps_min: 0.8
+    heartbeat_age_max: 1100
 
   event_recorder: null
   gamemaster_ui: null
-  bus_broker: real
+  bus_broker:
+    impl: real
+    fps_target: 1.0
+    fps_min: 0.8
+    heartbeat_age_max: 1100
 
 tuning:
   haptic:
@@ -87,6 +102,10 @@ tuning:
     # Fallback if tuning.collision.timeout_ms is absent.
     forward_timeout_ms:  40
   game:
+    duration_s: 10
+    sum_score_rate_unit_per_s: 100
+    sim_bucket_values:
+      a: [320, 240, 160]
     force_stage: play
 
 hardware: {}

@@ -31,7 +31,7 @@ if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 from core import bus
-from core.config import ConfigError, load as load_profile
+from core.config import ConfigError, default_runtime_setting, load as load_profile
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -128,8 +128,10 @@ class TeamMock:
     name: str
     color: tuple[int, int, int]
     color_soft: tuple[int, int, int]
-    score: int
-    buckets: list[int]
+    active: bool
+    score: float
+    buckets: list[float]
+    summed_score: int
     actual: list[float]
     target: list[float]
     actual_deg: list[float]
@@ -320,13 +322,17 @@ class DashboardMockup:
         if not isinstance(teams, dict):
             teams = {}
 
+        team_b = self._team_from_state(TEAM_B, teams.get(TEAM_B))
+        team_a = self._team_from_state(TEAM_A, teams.get(TEAM_A))
+        stage = str(body.get("stage", "waiting"))
         return {
-            "stage": str(body.get("stage", "waiting")),
+            "stage": stage,
             "paused": bool(body.get("paused", False)),
             "pause_reason": body.get("pause_reason"),
-            "timer_label": "--:--",
-            "team_b": self._team_from_state(TEAM_B, teams.get(TEAM_B)),
-            "team_a": self._team_from_state(TEAM_A, teams.get(TEAM_A)),
+            "timer_label": _format_timer_label(body.get("countdown_s")),
+            "team_b": team_b,
+            "team_a": team_a,
+            "conclusion_winner": _local_conclusion_winner(stage, teams),
             "core_processes": self._core_processes_from_heartbeats(),
             "collision_workers": self._collision_workers_from_heartbeats(),
             "waiting_reason": None,
@@ -350,8 +356,10 @@ class DashboardMockup:
             name=team.upper(),
             color=COLORS["blue"] if team == TEAM_A else COLORS["red"],
             color_soft=COLORS["blue_soft"] if team == TEAM_A else COLORS["red_soft"],
+            active=False,
             score=0,
             buckets=[0, 0, 0],
+            summed_score=0,
             actual=[0.0] * 6,
             target=[0.0] * 6,
             actual_deg=[0.0] * 6,
@@ -388,12 +396,15 @@ class DashboardMockup:
         while len(prox_hits) < 6:
             prox_hits.append([])
         prox_age_ticks = [int(v) for v in _coerce_float_list(collision.get("prox_age_ticks"), 6, 9999.0)]
+        buckets = _coerce_float_list(team_body.get("buckets"), 3, 0.0)
         return TeamMock(
             name=team.upper(),
             color=COLORS["blue"] if team == TEAM_A else COLORS["red"],
             color_soft=COLORS["blue_soft"] if team == TEAM_A else COLORS["red_soft"],
-            score=0,
-            buckets=[0, 0, 0],
+            active=True,
+            score=float(team_body.get("score", sum(buckets)) or 0.0),
+            buckets=buckets,
+            summed_score=_coerce_int(team_body.get("summed_score"), 0),
             actual=[self._normalize_joint(v, axis) for axis, v in enumerate(q_actual)],
             target=[self._normalize_joint(v, axis) for axis, v in enumerate(q_target)],
             actual_deg=q_actual_deg,
@@ -530,8 +541,8 @@ class DashboardMockup:
         left = pygame.Rect(70, 210, 1430, 1780)
         spine = pygame.Rect(1510, 210, 820, 1780)
         right = pygame.Rect(2340, 210, 1430, 1780)
-        self._team_panel_compact(surface, left, state["team_b"], align="left", style=style)
-        self._team_panel_compact(surface, right, state["team_a"], align="right", style=style)
+        self._team_panel_compact(surface, left, state["team_b"], align="left", style=style, stage=state["stage"], conclusion_winner=state.get("conclusion_winner"))
+        self._team_panel_compact(surface, right, state["team_a"], align="right", style=style, stage=state["stage"], conclusion_winner=state.get("conclusion_winner"))
         self._central_spine(surface, spine, state, style)
 
     def _panel(self, surface: pygame.Surface, rect: pygame.Rect, alt: bool = False) -> None:
@@ -601,10 +612,13 @@ class DashboardMockup:
             pygame.draw.rect(surface, COLORS["panel_soft"], box, border_radius=16)
             pygame.draw.rect(surface, team.color, box, 2, border_radius=16)
             self._label(surface, label, box.centerx, box.y + 18, 20, COLORS["muted"], align="center")
-            self._label(surface, str(team.buckets[i]), box.centerx, box.y + 46, 44, COLORS["text"], bold=True, align="center")
+            self._label(surface, _format_bucket_value(team.buckets[i]), box.centerx, box.y + 46, 44, COLORS["text"], bold=True, align="center")
 
-    def _team_summary_strip(self, surface: pygame.Surface, rect: pygame.Rect, team: TeamMock, align: str) -> None:
+    def _team_summary_strip(self, surface: pygame.Surface, rect: pygame.Rect, team: TeamMock, align: str, stage: str, conclusion_winner: str | None) -> None:
         self._panel(surface, rect, alt=True)
+        if stage == "conclusion" and team.active:
+            self._draw_conclusion_summary(surface, rect, team, align=align, conclusion_winner=conclusion_winner)
+            return
         badge = "COLLISION" if team.in_collision else "FREE"
         badge_color = COLORS["danger"] if team.in_collision else COLORS["success"]
         left_x = rect.x + 26
@@ -622,6 +636,28 @@ class DashboardMockup:
         pygame.draw.rect(surface, COLORS["text"], fill_rect, border_radius=14)
         self._label(surface, f"Speed scaler {team.final_scalar * 100:.0f}% | Path {team.path_scalar * 100:.0f}%", bar_rect.centerx, rect.y + 98, 22, COLORS["muted"], align="center")
 
+    def _draw_conclusion_summary(self, surface: pygame.Surface, rect: pygame.Rect, team: TeamMock, align: str, conclusion_winner: str | None) -> None:
+        left_x = rect.x + 26
+        right_x = rect.right - 26
+        anchor_x = left_x if align == "left" else right_x
+        outcome_label, outcome_color = _team_conclusion_outcome(team.name.lower(), conclusion_winner)
+        self._label(surface, "TOTAL SCORE", anchor_x, rect.y + 18, 28, team.color, bold=True, align=align)
+        self._label(surface, str(team.summed_score), anchor_x, rect.y + 54, 56, COLORS["text"], bold=True, align=align)
+        subtitle = "Summing live bucket values" if conclusion_winner is None else "All buckets empty"
+        self._label(surface, subtitle, anchor_x, rect.y + 112, 22, COLORS["muted"], align=align)
+
+        if outcome_label is not None:
+            self._label(surface, outcome_label, right_x if align == "left" else left_x, rect.y + 18, 28, outcome_color, bold=True, align="right" if align == "left" else "left")
+
+        bar_rect = pygame.Rect(rect.x + 320, rect.y + 38, rect.w - 640, 38)
+        pygame.draw.rect(surface, COLORS["panel_soft"], bar_rect, border_radius=14)
+        total_remaining = max(0, sum(int(round(max(0.0, value))) for value in team.buckets))
+        total_capacity = max(1, team.summed_score + total_remaining)
+        fill_w = int(bar_rect.w * max(0.0, min(1.0, team.summed_score / total_capacity)))
+        fill_rect = pygame.Rect(bar_rect.x, bar_rect.y, fill_w, bar_rect.h)
+        pygame.draw.rect(surface, team.color, fill_rect, border_radius=14)
+        self._label(surface, f"Remaining {total_remaining} | Summed {team.summed_score}", bar_rect.centerx, rect.y + 98, 22, COLORS["muted"], align="center")
+
     def _match_core_widget(self, surface: pygame.Surface, rect: pygame.Rect, state: dict) -> None:
         self._panel(surface, rect, alt=True)
         self._label(surface, str(state.get("timer_label", "--:--")), rect.centerx, rect.y + 28, 104, COLORS["text"], bold=True, align="center")
@@ -634,11 +670,11 @@ class DashboardMockup:
             self._label(surface, "Total score stays hidden until play ends", rect.centerx, rect.y + 202, 28, COLORS["text"], align="center")
             self._label(surface, "Post-play sum-up animation will total the three bucket values.", rect.centerx, rect.y + 244, 22, COLORS["muted"], align="center")
 
-    def _team_panel_compact(self, surface: pygame.Surface, rect: pygame.Rect, team: TeamMock, align: str, style: dict) -> None:
+    def _team_panel_compact(self, surface: pygame.Surface, rect: pygame.Rect, team: TeamMock, align: str, style: dict, stage: str, conclusion_winner: str | None) -> None:
         self._panel(surface, rect)
         self._team_spine_header(surface, pygame.Rect(rect.x + 28, rect.y + 28, rect.w - 56, 145), team, align=align)
         self._bucket_strip(surface, pygame.Rect(rect.x + 28, rect.y + 195, rect.w - 56, 128), team)
-        self._team_summary_strip(surface, pygame.Rect(rect.x + 28, rect.y + 345, rect.w - 56, 142), team, align=align)
+        self._team_summary_strip(surface, pygame.Rect(rect.x + 28, rect.y + 345, rect.w - 56, 142), team, align=align, stage=stage, conclusion_winner=conclusion_winner)
         self._lane_bank(surface, pygame.Rect(rect.x + 28, rect.y + 515, rect.w - 56, rect.h - 545), team, title=f"TEAM {team.name}")
 
     def _central_spine(self, surface: pygame.Surface, rect: pygame.Rect, state: dict, style: dict) -> None:
@@ -750,8 +786,8 @@ class DashboardMockup:
             if worker.active:
                 pygame.draw.rect(surface, COLORS["panel_soft"], tile, border_radius=int(style["worker_tile_radius"]))
                 pygame.draw.rect(surface, COLORS["outline"], tile, 1 if not style["heavy_dividers"] else 2, border_radius=int(style["worker_tile_radius"]))
-                _, heartbeat_age_max_ms = self._process_status_limits(worker.proc_key)
-                hz_color = COLORS["warning"] if worker.hz < 35.0 else COLORS["text"]
+                fps_min, heartbeat_age_max_ms = self._process_status_limits(worker.proc_key)
+                hz_color = COLORS["warning"] if fps_min is not None and worker.hz < fps_min else COLORS["text"]
                 age_color = COLORS["warning"] if worker.age_ms > heartbeat_age_max_ms else COLORS["muted"]
                 self._label(surface, worker.name, tile.x + 14, tile.y + 12, 20, COLORS["muted"])
                 self._label(surface, f"{(worker.checks_per_sec or 0.0):.0f}/s", tile.x + 14, tile.y + 46, 36, hz_color, bold=True)
@@ -798,10 +834,11 @@ class DashboardMockup:
 
     def _process_status_limits(self, proc_key: str) -> tuple[float | None, float]:
         base_proc = _subsystem_name_from_proc(proc_key)
-        fps_min = _profile_subsystem_float(self._profile, base_proc, "fps_min", None)
-        if fps_min is None and not proc_key.startswith("robot_io") and base_proc != "bus_broker":
-            fps_min = 45.0
-        heartbeat_age_max_ms = _profile_subsystem_float(self._profile, base_proc, "heartbeat_age_max", DEFAULT_HEARTBEAT_AGE_MAX_MS)
+        fps_min = default_runtime_setting(base_proc, "fps_min", None)
+        heartbeat_age_max_ms = default_runtime_setting(base_proc, "heartbeat_age_max", DEFAULT_HEARTBEAT_AGE_MAX_MS)
+        if self._profile is not None:
+            fps_min = self._profile.subsystem_float(base_proc, "fps_min", fps_min)
+            heartbeat_age_max_ms = self._profile.subsystem_float(base_proc, "heartbeat_age_max", heartbeat_age_max_ms)
         return fps_min, heartbeat_age_max_ms
 
     def _label(
@@ -862,6 +899,66 @@ def _coerce_bool_list(value: Any, length: int, default: bool) -> list[bool]:
     return out
 
 
+def _format_timer_label(value: Any) -> str:
+    try:
+        total_s = max(0, int(math.ceil(float(value))))
+    except (TypeError, ValueError):
+        return "--:--"
+    minutes, seconds = divmod(total_s, 60)
+    return f"{minutes:02d}:{seconds:02d}"
+
+
+def _format_bucket_value(value: float) -> str:
+    rounded = int(round(value))
+    return str(rounded)
+
+
+def _coerce_int(value: Any, default: int) -> int:
+    try:
+        return int(round(float(value)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _local_conclusion_winner(stage: str, teams: dict[str, Any]) -> str | None:
+    if stage != "conclusion" or not isinstance(teams, dict):
+        return None
+    active = [
+        (team, body)
+        for team, body in teams.items()
+        if isinstance(team, str) and isinstance(body, dict)
+    ]
+    if not active:
+        return None
+    if not all(_team_buckets_empty(body) for _, body in active):
+        return None
+    scores = sorted(
+        ((team, _coerce_int(body.get("summed_score"), 0)) for team, body in active),
+        key=lambda item: item[1],
+        reverse=True,
+    )
+    if len(scores) >= 2 and scores[0][1] == scores[1][1]:
+        return "tie"
+    return scores[0][0]
+
+
+def _team_buckets_empty(team_body: dict[str, Any]) -> bool:
+    buckets = team_body.get("buckets")
+    if not isinstance(buckets, list):
+        return False
+    return all(abs(float(value)) < 1e-6 for value in buckets[:3])
+
+
+def _team_conclusion_outcome(team_key: str, conclusion_winner: str | None) -> tuple[str | None, tuple[int, int, int]]:
+    if conclusion_winner is None:
+        return None, COLORS["muted"]
+    if conclusion_winner == "tie":
+        return "TIE", COLORS["cyan"]
+    if conclusion_winner == team_key:
+        return "WINNER", COLORS["success"]
+    return "LOSE", COLORS["warning"]
+
+
 def _load_profile_if_available(profile_path: str | None):
     if not profile_path:
         return None
@@ -898,21 +995,6 @@ def _subsystem_name_from_proc(proc_key: str) -> str:
     if proc_key.startswith("collision_worker_"):
         return "collision_workers"
     return proc_key.split(".", 1)[0]
-
-
-def _profile_subsystem_float(profile, subsystem: str, key: str, default: float | None) -> float | None:
-    if profile is None:
-        return default
-    node = profile.subsystems.get(subsystem) if isinstance(profile.subsystems, dict) else None
-    if not isinstance(node, dict):
-        return default
-    value = node.get(key, default)
-    if value is None:
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

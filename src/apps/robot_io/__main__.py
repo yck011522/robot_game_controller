@@ -13,19 +13,23 @@ if str(_SRC) not in sys.path:
 import zmq  # noqa: E402
 
 from core import bus  # noqa: E402
-from core.proc import Proc, banner  # noqa: E402
+from core.config import default_runtime_setting, load as load_profile  # noqa: E402
+from core.proc import Proc, banner, parse_proc_args  # noqa: E402
 from subsystems.robot.joint_limits import clamp_joint_target_rad, resolve_joint_limits_rad  # noqa: E402
 
 
 # Internal tick rate. We poll the cmd sub at this rate and step
 # pybullet at its own STEP_HZ inside the impl; telemetry is rate-limited
 # below.
-TICK_HZ = 200.0
+DEFAULT_TICK_HZ = 200.0
 TELEM_PERIOD_S = 1.0 / 100.0  # 100 Hz per BUS.md 禮5.3
 
 
 def main(argv: list[str] | None = None) -> int:
-    proc, _ = Proc.from_argv(target_hz=TICK_HZ, default_proc="robot_io.a")
+    args, _ = parse_proc_args(argv, default_proc="robot_io.a")
+    profile = load_profile(args.profile_path)
+    target_hz = profile.subsystem_float("robot_io", "fps_target", default_runtime_setting("robot_io", "fps_target", DEFAULT_TICK_HZ))
+    proc = Proc(args, profile, target_hz=target_hz)
     team = proc.proc.split(".")[-1]
     impl_name = proc.profile.subsystems.get("robot_io", {}).get(team)
     if impl_name is None:
@@ -52,6 +56,7 @@ def main(argv: list[str] | None = None) -> int:
         headless=headless,
         initial_pose_rad=initial_pose_rad,
         robot_cfg=robot_cfg,
+        servo_hz=target_hz,
     )
     banner(proc.proc, f"impl={impl_name} headless={headless}")
 
@@ -137,7 +142,8 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _make_impl(name: str, *, team: str, headless: bool,
-               initial_pose_rad=None, robot_cfg: dict | None = None):
+               initial_pose_rad=None, robot_cfg: dict | None = None,
+               servo_hz: float = DEFAULT_TICK_HZ):
     if name == "sim_pybullet":
         from subsystems.robot.robot_sim_pybullet import SimPybulletRobot
         return SimPybulletRobot(headless=headless, initial_pose_rad=initial_pose_rad)
@@ -148,7 +154,7 @@ def _make_impl(name: str, *, team: str, headless: bool,
         if not isinstance(host, str) or not host:
             raise ValueError(f"robot_io.{team} real_rtde requires hardware.robot.{team}.host")
         port = robot_cfg.get("port")
-        return RealRtdeRobot(host=host, port=port, servo_hz=TICK_HZ)
+        return RealRtdeRobot(host=host, port=port, servo_hz=servo_hz)
     raise NotImplementedError(f"robot_io impl {name!r} not available yet")
 
 

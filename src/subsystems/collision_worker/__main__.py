@@ -65,10 +65,10 @@ import zmq  # noqa: E402
 
 from core import bus  # noqa: E402
 from core.proc import Proc, banner, parse_proc_args  # noqa: E402
-from core.config import load as load_profile  # noqa: E402
+from core.config import default_runtime_setting, load as load_profile  # noqa: E402
 
 
-TICK_HZ = 1000.0
+DEFAULT_TICK_HZ = 1000.0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -170,7 +170,8 @@ def main(argv: list[str] | None = None) -> int:
             })
         bus.publish(rep, reply_topic, reply)
 
-    proc = Proc(args, profile, target_hz=TICK_HZ,
+    target_hz = profile.subsystem_float("collision_workers", "fps_target", default_runtime_setting("collision_workers", "fps_target", DEFAULT_TICK_HZ))
+    proc = Proc(args, profile, target_hz=target_hz,
                 heartbeat_extra_fields=heartbeat_extras)
 
     return proc.run(tick, setup=setup, teardown=teardown)

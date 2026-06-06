@@ -5,8 +5,8 @@ are active, which subsystems use Real vs Sim impls, and all tuning
 parameters**. There is no separate base / system file — every profile is
 self-contained so a deployment is one file.
 
-Status: **CONFIRMED for P1-P2; revise again when P3 real hardware lands.**
-Last reviewed: 2026-06-05.
+Status: **CONFIRMED for the current P1-P4 runtime slice; revise again when the deferred hardware broadcasters/controllers land.**
+Last reviewed: 2026-06-06.
 
 ---
 
@@ -71,12 +71,18 @@ active_teams: [a]
 # ============================================================
 # Subsystem selection
 # Each entry resolves to one of:
-#   null            — subsystem not spawned at all (its bus topics
-#                     simply will not exist; consumers must handle this)
-#   "<impl name>"   — launcher instantiates this impl from
-#                     src/core/subsystem_registry.py (see §3.2)
-#   {count: N}      — spawn a pool of N processes (collision_workers only)
-# Per-team subsystems take a mapping {a: ..., b: ...}.
+#   null                 — subsystem not spawned at all (its bus topics
+#                          simply will not exist; consumers must handle this)
+#   "<impl name>"        — direct impl selection for simple/global entries
+#   {impl: <name>, ...}  — global subsystem with optional runtime settings
+#   {count: N, ...}      — spawn a pool of N processes (collision_workers)
+# Per-team subsystems take a mapping {a: ..., b: ...} and may also carry
+# optional runtime settings alongside the team keys.
+#
+# Optional runtime settings currently used by the live dashboard/runtime:
+#   fps_target         — actual loop target used by that process (or broker heartbeat cadence)
+#   fps_min            — dashboard warning threshold for loop_hz
+#   heartbeat_age_max  — dashboard warning threshold for last-seen heartbeat age (ms)
 # ============================================================
 subsystems:
 
@@ -85,6 +91,9 @@ subsystems:
   # sim_replay   — replays a recorded telem.haptic.<team> stream
   # real         — actual ESP32 boards
   haptic_io:
+    fps_target: 55.0
+    fps_min: 50.0
+    heartbeat_age_max: 1100
     a: sim_keyboard
     b: null
 
@@ -93,6 +102,9 @@ subsystems:
   #                incoming_code/ur10e_robot/. No real robot needed.
   # real_rtde    — actual UR10e over RTDE TCP (uses hardware.robot.<team>).
   robot_io:
+    fps_target: 200.0
+    fps_min: 180.0
+    heartbeat_age_max: 1100
     a: sim_pybullet
     b: null
 
@@ -146,17 +158,31 @@ subsystems:
   # without checking).
   collision_workers:
     count: 4
+    fps_target: 1000.0
+    fps_min: 800.0
+    heartbeat_age_max: 1100
+
+  # ROUTER/DEALER broker for the shared collision worker pool.
+  collision_broker:
+    fps_target: 1.0
+    fps_min: 0.8
+    heartbeat_age_max: 1100
 
   # Per-game folder writer. null disables recording (useful for some tests).
   event_recorder: real            # real | null
 
-  # The single pygame app (gamemaster controls + dashboard).
-  # null disables it — only useful for headless integration tests.
+  # Reserved dashboard config slot. Current launcher policy auto-starts
+  # the dashboard for all runtime profiles; this field is kept so the
+  # eventual explicit enable/disable semantics still have a home.
   gamemaster_ui: real             # real | null
 
   # The XSUB/XPUB proxy from BUS.md §1. Required at runtime by any other
   # process. null is only valid in unit tests that mock the bus.
-  bus_broker: real                # real | null (tests only)
+  bus_broker:
+    impl: real
+    fps_target: 1.0
+    fps_min: 0.8
+    heartbeat_age_max: 1100
 
 # ============================================================
 # Static tuning
@@ -203,15 +229,14 @@ tuning:
     retries:     2        # bundle retries before giving up (and refusing motion)
     bundle_size: 8        # configs per req.collision_check bundle (BUS.md §8); tuned by P10-bench
 
-  # Stage durations. 0 means "no automatic advance" (manual only, useful
-  # for dev profiles). force_stage pins GC to a stage at startup and
-  # disables the state machine (dev/test escape hatch).
+  # Game flow tuning consumed by the new runtime GameController. The
+  # controller currently boots straight into Play for bring-up, but the
+  # long-term intent is still Idle -> Tutorial -> Play -> Conclusion.
   game:
-    tutorial_max_seconds: 60
-    play_max_seconds:     180
-    conclusion_seconds:   30
-    reset_seconds:        10
-    # force_stage: play   # uncomment to pin GC; remove for normal operation
+    duration_s: 240
+    sum_score_rate_unit_per_s: 100
+    # sim_bucket_values: {a: [320, 240, 160]}  # optional dev-only seed
+    # force_stage: play   # dev escape hatch; current profiles still pin Play
 
 # ============================================================
 # Hardware addressing
@@ -263,15 +288,19 @@ recorder:
 ## 3. Subsystem selection rules
 
 For each entry under `subsystems:` the launcher resolves a value to one
-of three outcomes:
+of four outcomes:
 
 1. **`null`** — the subsystem is not spawned at all. The bus topics it
    would have produced simply do not exist. Consumers must treat
    missing topics as "no data" (e.g. UI greys out the team).
-2. **String value matching a known impl** — the launcher instantiates
-   the matching Python class (registry in `src/core/subsystem_registry.py`).
-3. **Object with `count: N`** — pool of N processes (only
-   `collision_workers` for now).
+2. **String value matching a known impl** — the subsystem is enabled
+  with its default runtime thresholds.
+3. **Object with `impl: ...` plus optional runtime-health fields** —
+  same impl selection as above, but with explicit `fps_target`,
+  `fps_min`, and `heartbeat_age_max` values for the runtime/dashboard.
+4. **Object with `count: N`** — pool of N processes (only
+  `collision_workers` for now), again with optional runtime-health
+  fields.
 
 ### 3.1 Per-team subsystems
 
@@ -296,13 +325,13 @@ silent skip — fail loud at startup).
 | `bucket_controller` | `sim`, `real` |
 | `button_controller` | `sim_keyboard`, `real` |
 | `safety_barrier_controller` | `sim_open`, `sim_random`, `real` |
-| `collision_workers` | `{count: N}` |
+| `collision_workers` | `{count: N}` plus optional runtime settings |
+| `collision_broker` | `real` with optional runtime settings |
 | `event_recorder` | `real`, `null` |
 | `gamemaster_ui` | `real`, `null` |
-| `bus_broker` | `real` (always required at runtime) |
+| `bus_broker` | `real` or `{impl: real, ...}` (always required at runtime) |
 
-New impls are added by registering a class in
-`src/core/subsystem_registry.py` and listing it here.
+New impls should be listed here when their runtime process lands.
 
 ---
 
@@ -372,8 +401,8 @@ description: "P2 milestone: keyboard → sim robot, single team A"
 active_teams: [a]
 
 subsystems:
-  haptic_io: {a: sim_keyboard, b: null}
-  robot_io:  {a: sim_pybullet, b: null}
+  haptic_io: {fps_target: 55.0, fps_min: 50.0, heartbeat_age_max: 1100, a: sim_keyboard, b: null}
+  robot_io:  {fps_target: 200.0, fps_min: 180.0, heartbeat_age_max: 1100, a: sim_pybullet, b: null}
   jogging_planner: {a: in_process, b: null}
   weight_sensor_io: null
   light_column_1_3:       null
@@ -384,10 +413,11 @@ subsystems:
   bucket_controller:      null
   button_controller:      null
   safety_barrier_controller: null
-  collision_workers: {count: 14}
+  collision_workers: {count: 14, fps_target: 1000.0, fps_min: 800.0, heartbeat_age_max: 1100}
+  collision_broker: {fps_target: 1.0, fps_min: 0.8, heartbeat_age_max: 1100}
   event_recorder: null
   gamemaster_ui:  null
-  bus_broker:     real
+  bus_broker:     {impl: real, fps_target: 1.0, fps_min: 0.8, heartbeat_age_max: 1100}
 
 tuning:
   haptic:
@@ -407,6 +437,9 @@ tuning:
     prox_floor: 0.6
     forward_timeout_ms: 40
   game:
+    duration_s: 10
+    sum_score_rate_unit_per_s: 100
+    sim_bucket_values: {a: [320, 240, 160]}
     force_stage: play
 
 hardware: {}
@@ -427,35 +460,48 @@ description: "Real UR10e on team B, everything else sim."
 active_teams: [b]
 
 subsystems:
-  haptic_io: {a: null, b: sim_keyboard}
-  robot_io:  {a: null, b: real_rtde}
+  haptic_io: {fps_target: 55.0, fps_min: 50.0, heartbeat_age_max: 1100, a: null, b: sim_keyboard}
+  robot_io:  {fps_target: 200.0, fps_min: 180.0, heartbeat_age_max: 1100, a: null, b: real_rtde}
   jogging_planner: {a: null, b: in_process}
-  weight_sensor_io: sim
+  weight_sensor_io: null
   light_column_1_3:       null
   light_column_4_5:       null
   light_column_6_8:       null
   display_broadcaster:    null
   scoreboard_broadcaster: null
   bucket_controller:      null
-  button_controller:      sim_keyboard
-  safety_barrier_controller: sim_open
-  collision_workers: {count: 4}
-  event_recorder: real
-  gamemaster_ui:  real
-  bus_broker:     real
+  button_controller:      null
+  safety_barrier_controller: null
+  collision_workers: {count: 6, fps_target: 1000.0, fps_min: 800.0, heartbeat_age_max: 1100}
+  collision_broker: {fps_target: 1.0, fps_min: 0.8, heartbeat_age_max: 1100}
+  event_recorder: null
+  gamemaster_ui:  null
+  bus_broker:     {impl: real, fps_target: 1.0, fps_min: 0.8, heartbeat_age_max: 1100}
 
 tuning:
   # Reduced limits for first real-robot bring-up.
+  haptic:
+    gear_ratio: [10.0, 10.0, 10.0, 5.0, 5.0, 5.0]
   robot:
+    q_limits_min_deg: [-180, -180, -180, -180, -180, -180]
+    q_limits_max_deg: [ 180,  180,  180,  180,  180,  180]
     max_velocity_deg_s:      [30, 30, 30, 30, 30, 30]
     max_acceleration_deg_s2: [115, 115, 115, 115, 115, 115]
-  collision: { check_self: true, check_world: true, timeout_ms: 80, retries: 2, bundle_size: 8 }
-  game:     { tutorial_max_seconds: 60, play_max_seconds: 120,
-              conclusion_seconds: 20, reset_seconds: 10 }
+    headless: false
+    initial_pose_deg: [0.0, -90.0, 90.0, 0.0, 0.0, 0.0]
+  collision: { check_self: true, check_world: true, timeout_ms: 40, retries: 2, bundle_size: 1 }
+  jogging:
+    n_forward_steps: 12
+    forward_step_deg: 1.0
+    path_cutoff_deg: 3.0
+    forward_bundle_size: 1
+    probe_half_deg: 10
+    prox_floor: 0.6
+    forward_timeout_ms: 40
+  game: { duration_s: 240, sum_score_rate_unit_per_s: 100, force_stage: play }
 
 hardware:
-  robot: { b: {host: "192.168.1.102", port: 30004} }
-  serial_ports: {}
+  robot: { b: {host: "192.168.0.2", port: 30004} }
 ```
 
 ### 4.4 `show.yaml`
@@ -489,10 +535,11 @@ tuning:
   robot:     { ... full defaults ... }
   collision: { check_self: true, check_world: true, timeout_ms: 80, retries: 2, bundle_size: 8 }
   game:
-    tutorial_max_seconds: 60
-    play_max_seconds:     180
-    conclusion_seconds:   30
-    reset_seconds:        10
+    duration_s: 240
+    sum_score_rate_unit_per_s: 100
+
+The installation-wide conclusion pose placeholders live outside the
+profiles in [config/robot_show_poses.yaml](c:/Users/yck01/GitHub/robot_game_controller/config/robot_show_poses.yaml). This keeps show choreography separate from per-profile runtime wiring.
 
 hardware:
   robot:

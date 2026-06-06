@@ -4,7 +4,7 @@ Phased path from the current single-process threaded codebase to the
 target multi-process architecture. Each phase ends with a working
 system the user can stop at and still demo or test.
 
-Status: **DRAFT.** Last reviewed: 2026-06-05.
+Status: **DRAFT.** Last reviewed: 2026-06-06.
 
 References:
 [OVERVIEW.md](architecture/OVERVIEW.md),
@@ -274,54 +274,63 @@ collision check still refuses bad configurations.
 
 ---
 
-### P4 — Gamemaster dashboard (pygame, separate from keyboard UI)
+### P4 — Gamemaster dashboard (pygame, separate from keyboard UI) ◐ IN PROGRESS
 
-Separate process, separate window. Read-only consumer of `state.full`
-plus a small REQ/REP socket for operator commands. **Two-team layout
-from day one** so adding team A later (P8) is a config change only.
+Separate process, separate window. The current implementation is a
+read-only consumer of `state.full` plus `heartbeat.*`; the UI → GC
+REQ/REP control path is still open work. **Two-team layout from day
+one** remains the target so adding team A later (P8) is a config
+change only.
 
-This dashboard will become full screen on a 2560x1440 (dev) or 4k (production) monitor, 
-we need to find a way such that this is scaled down and in window mode during development, 
-but we primarily design this for fullscreen at 4k. This should have a dark theme.
-Team A is always rendered on the right and Team B on the left. Their colour assignment must be
-configurable per profile; the current default is Team A = blue and Team B = red.
-Legacy `src/gamemaster_ui.py` is not the visual baseline for P4; only reusable data plumbing, if any,
-should be carried forward.
+This dashboard is designed against a fullscreen 4k target while still
+running scaled-down in a resizable dev window. It uses a dark theme.
+Team A is always rendered on the right and Team B on the left. Their
+colour assignment must be configurable per profile; the current
+default is Team A = blue and Team B = red. Legacy
+`src/gamemaster_ui.py` is not the visual baseline for P4; only
+reusable data plumbing, if any, should be carried forward.
 
-- `src/apps/gamemaster_ui/` — pygame app:
-  - Game Clock (because this dashboard is actually visible to the audience)
-  - Stage indicator (even though only Play is wired up).
-  - Per-team score and bucket-weight panels (team A side shows “no
-    data” when `active_teams: [b]`).
-  - Per-process Hz boxes driven by `state.full.process_health`. Tiny
-    colored squares per [NEXT_STEPS §2.G.43](../NEXT_STEPS.md).
-  - Per-joint dial-position-vs-actual visualizer per team (lifted
-    from the keyboard explorer). These vertical lanes use the robot's
-    fixed joint hard limits as their range. Haptic dial min/max is a
-    runtime soft-bound signal, not the lane extent; those bounds may
-    change during play as collision logic tightens or relaxes motion.
-    RobotIO should remain the final hard-limit check before commands
-    leave the controller PC.
-  - Manual REQs: `set_stage` (one tiny button for each stage), `soft_estop`, `start_resume`, `adjust_score`,
-    per [BUS.md §7](architecture/BUS.md#7-ui--gc-commands-reqrep-at-5570).
-  - **No editable tuning widgets.** All tuning lives in YAML
-    (CONFIG.md §2), reloadable via the `reload_config` REQ.
-- The keyboard input UI from P2 stays untouched and keeps running in
-  its own window alongside the dashboard.
-- Add profile `dev_dashboard.yaml` = `dev_one_robot_keyboard` + dashboard
-  enabled. The dashboard is also addable to `dev_keyboard` (sim
-  robot) for off-hardware development.
+**Delivered so far:**
 
-Develop a few mockup layout first before wiring up business logic. Even after confirming
-the UI layout should still be easily changable, I suggest using fixed coordinates for anchoring
-major items.
+- `src/apps/gamemaster_ui/` is a separate pygame process with a
+  logical `3840x2160` canvas, scaled presentation for development,
+  fullscreen toggle, and 4k frame export.
+- The dashboard subscribes to live `state.full` and `heartbeat.*`,
+  publishes `heartbeat.gamemaster_ui`, and is auto-started by the
+  launcher on the current runtime profiles.
+- Team A is rendered on the right and Team B on the left, with the
+  chosen broadcast layout, per-joint actual-vs-target lanes, and live
+  proximity rails driven by planner probe samples.
+- Core-process and collision-worker health are shown live from
+  `heartbeat.*`, with profile-driven `fps_target`, `fps_min`, and
+  `heartbeat_age_max` thresholds.
+- The current runnable slice is validated on both `dev_keyboard`
+  (sim) and `dev_one_robot_keyboard` (real UR10e bring-up).
 
-**Exit criterion:** dashboard window opens, shows live joint motion
-and process health for team B, accepts a `soft_estop` REQ. Confirming that the game system indeed stopped 
-planning and robotio stop sending commands. Kicking the dashboard window closed 
-does not affect the rest of the system and the launcher should attempt to restart it. 
-Also, please add a software shutdown button that would shutdown the robot gracefully 
-(we can defer the implementation later).
+**Remaining before P4 can close:**
+
+- The audience clock is still a placeholder (`--:--`); GameController
+  does not yet publish a proper countdown / timer field for the
+  dashboard.
+- Score and bucket panels are still placeholder-only; current
+  `state.full` does not carry the needed live score / bucket-weight
+  data and the dashboard does not consume them yet.
+- Manual operator REQs (`set_stage`, `soft_estop`, `start_resume`,
+  `adjust_score`, `reload_config`) on the UI socket at `:5570` are not
+  implemented yet.
+- Process health is not yet sourced from `state.full.process_health`;
+  the dashboard derives it directly from `heartbeat.*` for now.
+- Closing the dashboard window does not meet the original restart
+  requirement; `gamemaster_ui` is still treated as a non-respawned
+  process.
+
+**Current runnable criterion reached:** dashboard window opens, shows
+live joint motion and heartbeat-derived process health, and runs
+alongside the keyboard UI.
+
+**P4 closure criterion:** close this phase only after the live timer,
+score / bucket data, and at least the `soft_estop` UI → GC path are
+implemented and validated end-to-end.
 
 ---
 
