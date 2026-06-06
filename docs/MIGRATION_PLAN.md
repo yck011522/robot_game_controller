@@ -341,26 +341,55 @@ end-to-end on the current runtime profiles.
 ### P5 — HapticIO, real
 
 Real ESP32 haptic dials replace the keyboard producer on team B.
+See [HAPTIC_FIRMWARE_P5.md](HAPTIC_FIRMWARE_P5.md) for the firmware-facing
+single-dial protocol, expected behavior, and acceptance criteria.
 
-- `src/subsystems/haptic_io/` with `real`, `sim_keyboard`,
-  `sim_replay` impls.
-- The keyboard input UI from P2 becomes the `sim_keyboard` impl
-  behind the same interface (it already publishes
-  `telem.haptic.a`; this phase just registers it in
-  `core/subsystem_registry.py` under that name).
-- Bring `src/haptic_serial.py`, `src/enumerate_usb.py`,
-  `src/port_registry.py` over as `real` impl internals.
-- First two-way I/O subsystem: consumes `cmd.haptic.<team>` and
-  produces `telem.haptic.<team>` with the bounds / tracking torque
-  payload from [BUS.md §6.3](architecture/BUS.md#63-cmdhapticteam).
-- Same startup-sync discipline as RobotIO: the dials read back the
-  robot's `actual_q` from the bus on startup and seed their
-  tracking target there, so the first command doesn't yank the
-  dials to zero.
+- Extend the existing `src/apps/haptic_io/` + `src/subsystems/haptic/`
+  path with `real`, `sim_keyboard`, and `sim_replay` impls.
+- `sim_keyboard` already exists and already publishes
+  `telem.haptic.<team>` in the shape GC consumes today:
+  absolute `dial_pos_rad`, derived `dial_vel_rad_s`, and per-dial
+  connection / loop-rate arrays. The planner derives intent from
+  dial-position deltas, so the real hardware path mainly needs to
+  publish accurate absolute encoder position plus connection health.
+- Same startup-sync discipline as RobotIO: `haptic_io` already seeds
+  `sim_keyboard` once from `telem.robot.actual.<team>`. The real ESP32
+  impl should expose function to set_current_pos so the first hardware command
+  does not yank a dial to zero.
+- P5 must add the missing outbound half of the runtime contract:
+  today GC consumes `telem.haptic.<team>` but does not yet publish
+  `cmd.haptic.<team>`. Before the real boards are useful, GC needs to
+  emit one latest-wins haptic command per tick.
+- That high-rate `cmd.haptic.<team>` path should carry the measured
+  robot joint position from `telem.robot.actual.<team>.q_rad` as the
+  tracking target during every stage except Tutorial.
+- That same `cmd.haptic.<team>` path should also carry the live
+  per-dial soft bounds min/max that define the OOB kick wall for the
+  current reachable envelope.
+- Infrequent settings such as gains, torque limits, detent spacing,
+  vibration, and telemetry interval should remain out-of-band profile /
+  connect-time writes, not part of the per-tick command stream.
+- `src/haptic_serial.py`, `src/enumerate_usb.py`, and
+  `src/port_registry.py` are useful starting points, but the current
+  serial stack is not directly compatible with the planned hardware
+  split because it assumes two motors per board.
+- P5 should therefore rev the firmware protocol instead of carrying the
+  old dual-motor shape forward.
+- Required protocol change: one persistent dial ID per board, not
+  `(motor_id_0, motor_id_1)`.
+- Required protocol change: single-dial control frames carrying one
+  target position plus optional min/max bounds.
+- Required protocol change: single-dial telemetry frames carrying one
+  dial ID, angle, speed, torque, and loop rate.
+- Required protocol change: per-dial parameter names without `_0` /
+  `_1` suffixes.
+- Required protocol change: host discovery / mapping keyed by
+  `{dial_id -> COM port}` rather than board-pair identity tuples.
 
 **Exit criterion:** running with `haptic_io.b: real` drives the real
-ESP32 dials against the real UR10e; switching to `sim_keyboard` is
-a one-line YAML change.
+ESP32 dials against the real UR10e, with the dials tracking measured
+robot pose outside Tutorial and enforcing live bounds from GC;
+switching back to `sim_keyboard` remains a one-line YAML change.
 
 ---
 

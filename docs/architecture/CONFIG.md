@@ -193,11 +193,12 @@ tuning:
     gear_ratio:          [10, 10, 10, 5, 5, 5]    # dial → joint multiplier (unitless)
     # Power-on / reset defaults for the soft bounds the dial firmware
     # enforces. NOTE: while a game is running, GameController
-    # continuously overrides `state.full.haptic.<team>.bounds_min/max`
-    # (and the matching cmd.haptic.<team>.bounds_*_deg fields) based
-    # on live collision-check feedback so the dial's hand-feel matches
-    # the robot's reachable envelope. These YAML values only apply at
-    # power-on / Reset stage before any collision data has arrived.
+    # continuously overrides the matching `cmd.haptic.<team>`
+    # `bounds_min_rad` / `bounds_max_rad` fields, after converting the
+    # YAML degrees here to runtime radians, so the dial's hand-feel
+    # matches the robot's reachable envelope. These YAML values only
+    # apply at power-on / Reset stage before any collision data has
+    # arrived.
     bounds_deg_min:      [-180, -180, -180, -180, -180, -180]
     bounds_deg_max:      [ 180,  180,  180,  180,  180,  180]
     bounds_kp:           60.0       # stiffness (Nm/rad) of the wall the dial hits at a bound

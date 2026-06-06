@@ -310,7 +310,7 @@ Subscribers that care about stage edges detect them by comparing
   // bounds_min / bounds_max are the artificial software limits that
   // GameController is currently telling the haptic dial firmware to
   // enforce (via cmd.haptic.<team>). They can change at runtime
-  // (e.g. Tutorial widens them, Conclusion narrows to home position),
+  // (e.g. Tutorial widens them, potential collision narrows them),
   // so they live in state.full rather than in the static YAML config.
   "haptic": {
     "a": {
