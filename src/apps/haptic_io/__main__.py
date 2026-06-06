@@ -12,11 +12,18 @@ if str(_SRC) not in sys.path:
 import zmq
 
 from core import bus  # noqa: E402
-from core.proc import Proc, banner  # noqa: E402
+from core.config import load as load_profile  # noqa: E402
+from core.proc import Proc, banner, parse_proc_args  # noqa: E402
+
+
+DEFAULT_HAPTIC_FPS_TARGET = 50.0
 
 
 def main(argv: list[str] | None = None) -> int:
-    proc, _ = Proc.from_argv(target_hz=50.0, default_proc="haptic_io.a")
+    args, _ = parse_proc_args(argv, default_proc="haptic_io.a")
+    profile = load_profile(args.profile_path)
+    target_hz = _subsystem_float(profile.subsystems.get("haptic_io"), "fps_target", DEFAULT_HAPTIC_FPS_TARGET)
+    proc = Proc(args, profile, target_hz=target_hz)
     # team = last char of `haptic_io.a` / `haptic_io.b`.
     team = proc.proc.split(".")[-1]
     impl_name = proc.profile.subsystems.get("haptic_io", {}).get(team)
@@ -85,6 +92,15 @@ def _seed_from_robot_actual(impl, body: dict, seed_ref: dict) -> None:
     # set_current_position hook so simulated and physical dials can both be
     # reseated to a known pose without causing motion.
     seed_ref["done"] = True
+
+
+def _subsystem_float(node, key: str, default: float) -> float:
+    if not isinstance(node, dict):
+        return default
+    try:
+        return float(node.get(key, default))
+    except (TypeError, ValueError):
+        return default
 
 
 if __name__ == "__main__":

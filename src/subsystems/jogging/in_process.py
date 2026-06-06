@@ -280,6 +280,9 @@ class InProcessPlanner:
                 {"distance_deg": first_hit_step * self._fwd_step_deg}
                 if first_hit_step is not None else None
             ),
+            "prox_probe_offsets_deg": list(self._probe_offsets_deg),
+            "prox_hits": [list(axis_hits) for axis_hits in self._prox_hits],
+            "prox_age_ticks": list(self._prox_age_ticks),
         }
         return q_target, info
 

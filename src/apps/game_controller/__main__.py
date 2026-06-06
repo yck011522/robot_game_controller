@@ -69,6 +69,9 @@ def main(argv: list[str] | None = None) -> int:
             "last_path_scalar": 1.0,
             "last_prox_scalar": 1.0,
             "last_final_scalar": 1.0,
+            "last_prox_probe_offsets_deg": [],
+            "last_prox_hits": [[False] * 20 for _ in range(6)],
+            "last_prox_age_ticks": [9999] * 6,
             "robot_status": {},
             "last_tick_t": time.perf_counter(),
         }
@@ -104,6 +107,9 @@ def main(argv: list[str] | None = None) -> int:
                 st["last_path_scalar"] = 1.0
                 st["last_prox_scalar"] = 1.0
                 st["last_final_scalar"] = 1.0
+                st["last_prox_probe_offsets_deg"] = []
+                st["last_prox_hits"] = [[False] * 20 for _ in range(6)]
+                st["last_prox_age_ticks"] = [9999] * 6
                 continue
 
             robot_status = st.get("robot_status", {})
@@ -115,6 +121,9 @@ def main(argv: list[str] | None = None) -> int:
                 st["last_path_scalar"] = 1.0
                 st["last_prox_scalar"] = 1.0
                 st["last_final_scalar"] = 1.0
+                st["last_prox_probe_offsets_deg"] = []
+                st["last_prox_hits"] = [[False] * 20 for _ in range(6)]
+                st["last_prox_age_ticks"] = [9999] * 6
 
                 env = bus.make_envelope(p.proc)
                 env.update({
@@ -139,6 +148,17 @@ def main(argv: list[str] | None = None) -> int:
             st["last_path_scalar"] = float(info.get("path_scalar", 1.0))
             st["last_prox_scalar"] = float(info.get("prox_scalar", 1.0))
             st["last_final_scalar"] = float(info.get("final_scalar", 1.0))
+            st["last_prox_probe_offsets_deg"] = list(info.get("prox_probe_offsets_deg") or [])
+            raw_hits = info.get("prox_hits") if isinstance(info.get("prox_hits"), list) else []
+            st["last_prox_hits"] = [
+                [bool(v) for v in axis_hits] if isinstance(axis_hits, list) else []
+                for axis_hits in raw_hits[:6]
+            ]
+            while len(st["last_prox_hits"]) < 6:
+                st["last_prox_hits"].append([])
+            raw_ages = info.get("prox_age_ticks") if isinstance(info.get("prox_age_ticks"), list) else []
+            st["last_prox_age_ticks"] = [int(v) for v in raw_ages[:6]] + [9999] * max(0, 6 - len(raw_ages[:6]))
+            st["last_prox_age_ticks"] = st["last_prox_age_ticks"][:6]
 
             env = bus.make_envelope(p.proc)
             env.update({
@@ -189,6 +209,9 @@ def main(argv: list[str] | None = None) -> int:
                         "path_scalar": st["last_path_scalar"],
                         "prox_scalar": st["last_prox_scalar"],
                         "final_scalar": st["last_final_scalar"],
+                        "prox_probe_offsets_deg": st["last_prox_probe_offsets_deg"],
+                        "prox_hits": st["last_prox_hits"],
+                        "prox_age_ticks": st["last_prox_age_ticks"],
                     },
                 } for team, st in teams.items()
             },

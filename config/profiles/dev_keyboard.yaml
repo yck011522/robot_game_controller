@@ -9,6 +9,9 @@ active_teams: [a]
 
 subsystems:
   haptic_io:
+    fps_target: 55.0
+    fps_min: 50.0
+    heartbeat_age_max: 1100
     a: sim_keyboard
     b: null
 

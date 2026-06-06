@@ -452,6 +452,19 @@ def main(argv: list[str] | None = None) -> int:
                         exit_code = 1
                         return exit_code
 
+        # ---- tier 6: spectator dashboard -------------------------------
+        # Launch by default for every profile so the observer UI is always
+        # present when the runtime comes up, even if the profile's legacy
+        # `subsystems.gamemaster_ui` entry is null.
+        children["gamemaster_ui"] = _spawn("gamemaster_ui", profile_path,
+                                             module_registry=module_registry)
+        if not _wait_for_first_heartbeat(sub, poller, "gamemaster_ui",
+                                          STARTUP_HEARTBEAT_TIMEOUT_S,
+                                          children, seen_first,
+                                          last_recv_mono_ns, last_loop_hz, recv_window):
+            exit_code = 1
+            return exit_code
+
         print(f"[launcher] all children up: {list(children.keys())}", flush=True)
 
         # ---- main watchdog loop ----------------------------------------

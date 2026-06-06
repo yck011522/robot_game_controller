@@ -1,0 +1,1 @@
+"""Observer dashboard mockup app."""
