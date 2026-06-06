@@ -163,6 +163,9 @@ class DashboardMockup:
         self._screenshot_index = 0
         self._screen = self._create_screen()
         self._logical = pygame.Surface(LOGICAL_SIZE, pygame.SRCALPHA).convert_alpha()
+        self._background = self._build_background_surface()
+        self._scaled_surface: pygame.Surface | None = None
+        self._scaled_size: tuple[int, int] | None = None
         self._ctx = zmq.Context.instance()
         self._state_sub = bus.make_sub(self._ctx, topics=["state.full"])
         self._heartbeat_sub = bus.make_sub(self._ctx, topics=["heartbeat."])
@@ -261,11 +264,15 @@ class DashboardMockup:
 
         screen_w, screen_h = self._screen.get_size()
         target_w, target_h = _fit_size(LOGICAL_SIZE[0], LOGICAL_SIZE[1], screen_w, screen_h)
-        scaled = pygame.transform.smoothscale(self._logical, (target_w, target_h))
+        target_size = (target_w, target_h)
+        if self._scaled_surface is None or self._scaled_size != target_size:
+            self._scaled_surface = pygame.Surface(target_size).convert()
+            self._scaled_size = target_size
+        pygame.transform.smoothscale(self._logical, target_size, self._scaled_surface)
         x = (screen_w - target_w) // 2
         y = (screen_h - target_h) // 2
         self._screen.fill(COLORS["black"])
-        self._screen.blit(scaled, (x, y))
+        self._screen.blit(self._scaled_surface, (x, y))
         pygame.display.flip()
 
     def _export_frame(self) -> None:
@@ -623,12 +630,12 @@ class DashboardMockup:
 
     def _draw(self, state: dict) -> None:
         surface = self._logical
-        surface.fill(COLORS["bg"])
         self._draw_background(surface)
         self._draw_chrome(surface, state)
         self._draw_central_spine(surface, state)
 
-    def _draw_background(self, surface: pygame.Surface) -> None:
+    def _build_background_surface(self) -> pygame.Surface:
+        surface = pygame.Surface(LOGICAL_SIZE, pygame.SRCALPHA).convert_alpha()
         top = COLORS["bg_2"]
         bottom = COLORS["bg"]
         for y in range(LOGICAL_SIZE[1]):
@@ -649,6 +656,10 @@ class DashboardMockup:
 
         pygame.draw.circle(surface, (34, 57, 80), (620, 430), 340, width=2)
         pygame.draw.circle(surface, (45, 64, 85), (3240, 1680), 420, width=2)
+        return surface
+
+    def _draw_background(self, surface: pygame.Surface) -> None:
+        surface.blit(self._background, (0, 0))
 
     def _draw_chrome(self, surface: pygame.Surface, state: dict) -> None:
         ui_proc = self._process_from_heartbeat("gamemaster_ui")
