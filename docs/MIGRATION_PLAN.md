@@ -362,7 +362,7 @@ single-dial protocol, expected behavior, and acceptance criteria.
   emit one latest-wins haptic command per tick.
 - That high-rate `cmd.haptic.<team>` path should carry the measured
   robot joint position from `telem.robot.actual.<team>.q_rad` as the
-  tracking target during every stage except Tutorial.
+  tracking target during normal robot-following operation.
 - That same `cmd.haptic.<team>` path should also carry the live
   per-dial soft bounds min/max that define the OOB kick wall for the
   current reachable envelope.

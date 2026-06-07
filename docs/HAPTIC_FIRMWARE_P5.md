@@ -1,4 +1,4 @@
-# Haptic Firmware Update Spec for P5
+# Haptic Firmware Update Spec for Phase 5 Integration (P5)
 
 Firmware-facing specification for the haptic controller update needed by
 P5 of the migration plan.
@@ -19,7 +19,7 @@ P5 changes the haptic hardware and host contract in three important ways:
 
 1. One ESP32 board now manages exactly one dial, not two.
 2. The dial must support a high-rate tracking target equal to the live
-   measured robot joint position outside Tutorial.
+  measured robot joint position at the host control rate.
 3. The dial must support a high-rate min/max soft bound so the firmware can
    generate the out-of-bounds wall and kick feel locally.
 
@@ -43,8 +43,8 @@ following behavior.
   one angle, one speed, one torque, and one loop-rate measurement.
 - Replace per-motor parameter names using `_0` and `_1` suffixes with plain
   per-dial parameter names.
-- Add a reseat command that changes the controller's current dial position
-  estimate digitally without causing a physical yank.
+- Add a `Set Current Position` command that changes the controller's current
+  dial position readout digitally without causing a physical yank.
 
 ---
 
@@ -58,6 +58,7 @@ Each ESP32 board controls one dial only.
 - One board exposes one encoder angle, one dial velocity, one torque output,
   and one local control loop rate.
 - The host will still use six logical dial IDs per team.
+- The firmware does not need to know anything about game stages or phase names.
 
 Recommended logical IDs for compatibility with the existing host naming:
 
@@ -72,15 +73,15 @@ for the new firmware they are semantically `dial_id`.
 The firmware must accept the following high-rate inputs from the host.
 
 - `tracking_target`: the dial position the tracking controller should follow.
-  Outside Tutorial, this is the measured robot joint position, not the planned
-  robot target.
+  In normal robot-following operation, this is the measured robot joint
+  position, not the planned robot target.
 - `bounds_min` and `bounds_max`: the current reachable envelope for the dial.
   When the dial exceeds these bounds, the local bounds restoration and OOB kick
   logic should act immediately without waiting for additional host decisions.
 
 These values are expected to arrive continuously at approximately 50 Hz.
 
-### 3.3 Reseat / Set Current Position
+### 3.3 Set Current Position
 
 The firmware must support a command that digitally changes the controller's
 current dial position estimate.
@@ -89,19 +90,19 @@ This command is required for:
 
 - startup sync, so the dial can be aligned to the robot's actual pose before
   tracking is enabled
-- transitions into Tutorial, when the dial may need a fresh local zero or a
-  new reference pose
-- transitions out of Tutorial, so tracking can resume from the current real
-  dial pose without an impulse toward an old target
+- temporary host-controlled modes where the host wants to redefine the dial's
+  current reference without physical motion
+- return from those temporary modes, so tracking can resume from the current
+  real dial pose without an impulse toward an old target
 
-Critical behavior of reseat:
+Critical behavior of `Set Current Position`:
 
 - It must change the reported dial angle immediately.
 - It must not cause a physical jerk toward the old target.
 - It must reset any internal velocity estimate used by the tracking loop.
 - It must reset OOB kick timing state so an old out-of-bounds pulse does not
-  fire immediately after reseat.
-- It should set the internal tracking target to the reseated angle unless a
+  fire immediately after the coordinate change.
+- It should set the internal tracking target to the new current angle unless a
   newer control frame has already arrived.
 
 ---
@@ -116,26 +117,30 @@ The firmware should be designed around the following host behavior.
 2. Board begins streaming telemetry automatically.
 3. Host queries version and identity.
 4. Host sends infrequent parameter updates if needed.
-5. Host sends a reseat command using the robot's measured actual position.
+5. Host sends a `Set Current Position` command using the robot's measured
+   actual position.
 6. Host begins the steady 50 Hz control stream.
 
-### 4.2 Normal Play / Idle / Conclusion
+### 4.2 Normal Robot-Following Operation
 
-During all game states except Tutorial:
+During normal robot-following operation:
 
 - host streams the measured robot position as the tracking target
 - host streams the current min/max dial bounds
 - firmware locally computes tracking torque, bounds restoration, and OOB kick
 
-### 4.3 Tutorial
+### 4.3 Host-Controlled Special Modes
 
-During Tutorial, host behavior may differ.
+In some host-controlled modes, host behavior may differ.
 
 - Host may disable tracking using an infrequent parameter write.
 - Host may disable bounds restoration and OOB kick, or send very wide bounds.
-- Host may send a reseat command at Tutorial entry or exit.
+- Host may send a `Set Current Position` command before resuming normal
+  robot-following operation.
 
-The firmware should not assume the same runtime mode is always active.
+The firmware should not assume any knowledge of game stage names. It only
+reacts to the latest target, bounds, and mode-related settings sent by the
+host.
 
 ---
 
@@ -209,7 +214,7 @@ Rationale:
 - OOB kick enable, gains, torque limits, and related tuning remain infrequent
   parameter writes.
 
-### 6.2 `R` - Reseat Current Position
+### 6.2 `R` - Set Current Position
 
 Digitally sets the dial's current position estimate without requiring the user
 to physically move the dial and without producing a yank.
@@ -230,7 +235,7 @@ Required behavior:
 - Clear any internally estimated velocity to zero.
 - Clear any integrator, derivative memory, or pulse timer state that would
   otherwise create an impulse.
-- Make the next telemetry frame report the reseated angle.
+- Make the next telemetry frame report the new current angle.
 - Update the internal tracking target to `current_pos` unless a newer `C`
   command has already been processed.
 
@@ -378,7 +383,8 @@ does not change later.
 ### 8.1 Tracking
 
 - Tracking follows the most recently received `target` from `C`.
-- Outside Tutorial, host will send the measured robot position as this target.
+- In normal robot-following operation, host will send the measured robot
+  position as this target.
 - Tracking should remain stable even when the target updates at only 50 Hz,
   while the local FOC loop runs much faster.
 
@@ -391,14 +397,14 @@ does not change later.
   stream one explicit kick command per pulse.
 - When the dial is back inside bounds, kick pulses must stop.
 
-### 8.3 Reseat Behavior
+### 8.3 Set Current Position Behavior
 
-Reseat is the most critical new behavior for P5.
+`Set Current Position` is the most critical new behavior for P5.
 
 After a valid `R` command:
 
 - the next telemetry frame must reflect the new angle
-- the dial must not try to travel toward a stale pre-reseat target
+- the dial must not try to travel toward a stale pre-update target
 - the dial must remain calm if the shaft is physically stationary
 - any old OOB pulse timer state must be cleared
 
@@ -434,7 +440,8 @@ These are the expected performance targets for an acceptable P5 firmware.
   (`telemetry_interval = 10 ms`).
 - A processed `C` sequence number should appear in telemetry within `100 ms`
   worst case.
-- A reseat command should be reflected in telemetry within one telemetry period.
+- A `Set Current Position` command should be reflected in telemetry within one
+  telemetry period.
 
 ### 9.2 Recommended
 
@@ -460,11 +467,11 @@ The following behaviors are critical for firmware acceptance.
 
 ### 10.2 Steady Control Loop
 
-- With the host sending `C` at `50 Hz` for at least five minutes, the board
+- With the host sending `C` at `150 Hz` for at least five minutes, the board
   maintains stable operation without serial overflow or missed telemetry.
 - Telemetry reports a healthy `foc_rate` throughout the test.
 
-### 10.3 Reseat Without Yank
+### 10.3 Set Current Position Without Yank
 
 Test setup:
 
@@ -493,12 +500,12 @@ Acceptance:
 - OOB kick pulses only while outside the range
 - pulses stop promptly once the dial re-enters bounds
 
-### 10.5 Tutorial Transition
+### 10.5 Host-Controlled Mode Transition
 
 Test setup:
 
 - Enter a mode where tracking is disabled.
-- Reseat the dial.
+- Send `Set Current Position`.
 - Re-enable tracking.
 - Resume normal `C` updates.
 
