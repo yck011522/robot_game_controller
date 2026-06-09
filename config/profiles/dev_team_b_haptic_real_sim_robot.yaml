@@ -1,0 +1,78 @@
+# P5 bring-up profile: real haptic dials on team B driving sim robot.
+# Use this first to validate COM discovery + protocol before real RTDE.
+
+profile_name: dev_team_b_haptic_real_sim_robot
+description: "P5 bring-up: team B real haptic -> sim robot"
+
+active_teams: [b]
+
+subsystems:
+  haptic_io:
+    a: null
+    b: real
+
+  robot_io:
+    a: null
+    b: sim_pybullet
+
+  jogging_planner:
+    a: null
+    b: in_process
+
+  weight_sensor_io: null
+  light_column_1_3: null
+  light_column_4_5: null
+  light_column_6_8: null
+  display_broadcaster: null
+  scoreboard_broadcaster: null
+  bucket_controller: null
+  button_controller: null
+  safety_barrier_controller: null
+
+  collision_workers:
+    count: 6
+
+  collision_broker: null
+
+  event_recorder: null
+  gamemaster_ui: null
+  bus_broker:
+    impl: real
+
+tuning:
+  haptic:
+    gear_ratio: [10.0, 10.0, 10.0, 5.0, 5.0, 5.0]
+    bounds_deg_min: [-180, -180, -180, -180, -180, -180]
+    bounds_deg_max: [180, 180, 180, 180, 180, 180]
+    telemetry_interval_ms: 10
+  robot:
+    q_limits_min_deg: [-180, -180, -180, -180, -180, -180]
+    q_limits_max_deg: [180, 180, 180, 180, 180, 180]
+    max_velocity_deg_s: [30, 30, 30, 30, 30, 30]
+    max_acceleration_deg_s2: [115, 115, 115, 115, 115, 115]
+    headless: false
+    initial_pose_deg: [0.0, -90.0, 90.0, 0.0, 0.0, 0.0]
+  collision:
+    check_self: true
+    check_world: true
+    timeout_ms: 40
+    retries: 2
+    bundle_size: 1
+  jogging:
+    n_forward_steps: 12
+    forward_step_deg: 1.0
+    path_cutoff_deg: 3.0
+    forward_bundle_size: 1
+    probe_half_deg: 10
+    prox_floor: 0.6
+    forward_timeout_ms: 40
+  game:
+    duration_s: 240
+    sum_score_rate_unit_per_s: 100
+    force_stage: play
+
+hardware:
+  serial_ports:
+    # Team B dial IDs expected by runtime: 21,22,23,24,25,26.
+    # Runtime discovers dial_id per port and maps automatically.
+    haptic_b: ["COM5", "COM6", "COM7", "COM8", "COM9", "COM10"]
