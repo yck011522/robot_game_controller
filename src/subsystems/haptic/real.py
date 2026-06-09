@@ -24,7 +24,7 @@ import port_registry
 
 
 _CH340_VID_PIDS = {(0x1A86, 0x7522), (0x1A86, 0x7523)}
-_BAUDRATE = 230400
+_BAUDRATE = 115200
 _DISCOVERY_INTERVAL_S = 3.0
 _WATCHDOG_TIMEOUT_S = 0.5
 _PROBE_TIMEOUT_S = 1.5
@@ -58,6 +58,8 @@ class _SingleDialBoard:
         self.port = port
         self.dial_id: int | None = None
         self.telemetry = _DialTelemetry()
+        # True after host sends an R command to align dial coordinates with
+        # the latest robot pose for this connection lifecycle.
         self.startup_synced = False
 
         self._owner = owner
@@ -68,6 +70,11 @@ class _SingleDialBoard:
         self._buffer = bytearray()
         self._seq = 0
         self._claimed_port = False
+        # Tracks telemetry's last processed-C seq so reconnect/reboot can be
+        # inferred from backward jumps.
+        self._last_seen_control_seq: int | None = None
+        # Modes are intentionally armed only after digital reseat completes.
+        self.control_armed = False
 
     @property
     def connected(self) -> bool:
@@ -78,6 +85,7 @@ class _SingleDialBoard:
         return (self._now() - self.telemetry.last_telem_mono_s) <= _WATCHDOG_TIMEOUT_S
 
     def connect(self, *, expected_ids: set[int]) -> bool:
+        """Open serial, probe dial identity, and push connect-time params."""
         if not port_registry.acquire_port(self.port, owner=self._owner):
             return False
         self._claimed_port = True
@@ -115,6 +123,7 @@ class _SingleDialBoard:
             return False
 
     def close(self) -> None:
+        """Close serial and release shared port claim."""
         ser = self._serial
         self._serial = None
         if ser is not None:
@@ -124,11 +133,14 @@ class _SingleDialBoard:
             except Exception:
                 pass
         self._buffer.clear()
+        self._last_seen_control_seq = None
+        self.control_armed = False
         if self._claimed_port:
             port_registry.release_port(self.port)
             self._claimed_port = False
 
     def poll(self, *, block: bool = False) -> None:
+        """Read and parse serial lines into telemetry fields."""
         ser = self._serial
         if ser is None or not getattr(ser, "is_open", False):
             return
@@ -153,6 +165,7 @@ class _SingleDialBoard:
             break
 
     def send_control(self, *, target_rad: float, bounds_min_rad: float, bounds_max_rad: float) -> None:
+        """Send C command (dial-space target and bounds)."""
         if self._serial is None or self.dial_id is None:
             return
         self._send_line(
@@ -160,9 +173,16 @@ class _SingleDialBoard:
         )
 
     def send_set_current_position(self, current_rad: float) -> None:
+        """Send R command to rebase logical dial angle without physical jump."""
         if self._serial is None or self.dial_id is None:
             return
         self._send_line(f"R,{self._next_seq()},{_rad_to_decideg(current_rad)}")
+
+    def send_param(self, name: str, value: int) -> None:
+        """Send one S command write."""
+        if self._serial is None or self.dial_id is None:
+            return
+        self._send_line(f"S,{self._next_seq()},{name},{int(value)}")
 
     def _next_seq(self) -> int:
         self._seq += 1
@@ -222,6 +242,7 @@ class RealHaptic:
         list_ports_fn: Callable[[], list[Any]] | None = None,
         now_fn: Callable[[], float] | None = None,
     ) -> None:
+        # Profile selects one six-dial team; ids are fixed per team namespace.
         self._team = team
         self._profile = profile
         self._serial_factory = serial_factory or serial.Serial
@@ -230,22 +251,28 @@ class RealHaptic:
         self._expected_dial_ids = _team_dial_ids(team)
         self._connections: dict[int, _SingleDialBoard] = {}
         self._last_discovery_s = 0.0
+        # True after first cmd.haptic.* arrives; before that, tracking target
+        # is derived from robot actual so startup remains coherent.
         self._has_runtime_command = False
 
         serial_ports = profile.hardware.get("serial_ports", {}) if isinstance(profile.hardware, dict) else {}
         configured_ports = serial_ports.get(f"haptic_{team}") if isinstance(serial_ports, dict) else None
         self._configured_ports = [str(v).strip() for v in configured_ports] if isinstance(configured_ports, list) else []
         self._param_lines = _build_param_lines(profile.tuning.get("haptic", {}))
+        self._enable_lines = _build_enable_lines(profile.tuning.get("haptic", {}))
 
         haptic_tuning = profile.tuning.get("haptic", {}) if isinstance(profile.tuning, dict) else {}
+        self._gear_ratio = _normalize_gear_ratio(haptic_tuning.get("gear_ratio"))
         self._tracking_target_rad = [0.0] * 6
         self._bounds_min_rad = _default_bounds_rad(haptic_tuning.get("bounds_deg_min"), _DEFAULT_BOUNDS_MIN_RAD)
         self._bounds_max_rad = _default_bounds_rad(haptic_tuning.get("bounds_deg_max"), _DEFAULT_BOUNDS_MAX_RAD)
         self._latest_robot_actual_rad: list[float] | None = None
-        self._pending_reseat_rad: list[float] | None = None
+        # Pending reseat payload in dial space, applied once per connected id.
+        self._pending_reseat_dial_rad: list[float] | None = None
         self._pending_reseat_ids: set[int] = set()
 
     def apply_command(self, body: dict[str, Any]) -> None:
+        """Apply high-rate cmd.haptic payload from game_controller."""
         targets = body.get("tracking_target_rad") if isinstance(body, dict) else None
         if isinstance(targets, list) and len(targets) >= 6:
             self._tracking_target_rad = [float(v) for v in targets[:6]]
@@ -258,19 +285,35 @@ class RealHaptic:
             self._bounds_max_rad = [float(v) for v in upper[:6]]
 
     def update_robot_actual(self, q_rad: list[float]) -> None:
+        """Receive robot actual pose; used for startup fallback tracking."""
         if len(q_rad) < 6:
             return
         self._latest_robot_actual_rad = [float(v) for v in q_rad[:6]]
         if not self._has_runtime_command:
-            self._tracking_target_rad = list(self._latest_robot_actual_rad)
+            self._tracking_target_rad = [
+                self._robot_to_dial(idx, q)
+                for idx, q in enumerate(self._latest_robot_actual_rad)
+            ]
 
     def request_reseat(self, q_rad: list[float]) -> None:
+        """Queue reseat from robot-space radians (legacy path)."""
         if len(q_rad) < 6:
             return
-        self._pending_reseat_rad = [float(v) for v in q_rad[:6]]
+        self._pending_reseat_dial_rad = [
+            self._robot_to_dial(idx, float(v))
+            for idx, v in enumerate(q_rad[:6])
+        ]
+        self._pending_reseat_ids = set(self._connections.keys())
+
+    def request_reseat_dial(self, q_dial_rad: list[float]) -> None:
+        """Queue reseat from dial-space radians (preferred path)."""
+        if len(q_dial_rad) < 6:
+            return
+        self._pending_reseat_dial_rad = [float(v) for v in q_dial_rad[:6]]
         self._pending_reseat_ids = set(self._connections.keys())
 
     def sample(self) -> dict[str, Any]:
+        """Main control/telemetry step called once per haptic_io tick."""
         self._refresh_connections()
         for board in self._connections.values():
             board.poll()
@@ -279,17 +322,29 @@ class RealHaptic:
             board = self._connections.get(dial_id)
             if board is None:
                 continue
+            self._handle_sequence_reset(board)
             if self._latest_robot_actual_rad is not None and not board.startup_synced:
-                board.send_set_current_position(self._latest_robot_actual_rad[idx])
+                seed_dial_rad = self._robot_to_dial(idx, self._latest_robot_actual_rad[idx])
+                board.send_set_current_position(seed_dial_rad)
+                # Keep C target aligned with the digital reseat to avoid a startup yank.
+                self._tracking_target_rad[idx] = seed_dial_rad
                 board.startup_synced = True
-            if self._pending_reseat_rad is not None and dial_id in self._pending_reseat_ids:
-                board.send_set_current_position(self._pending_reseat_rad[idx])
+            if self._pending_reseat_dial_rad is not None and dial_id in self._pending_reseat_ids:
+                reseat_dial_rad = float(self._pending_reseat_dial_rad[idx])
+                board.send_set_current_position(reseat_dial_rad)
+                self._tracking_target_rad[idx] = reseat_dial_rad
                 self._pending_reseat_ids.discard(dial_id)
             board.send_control(
                 target_rad=self._tracking_target_rad[idx],
                 bounds_min_rad=self._bounds_min_rad[idx],
                 bounds_max_rad=self._bounds_max_rad[idx],
             )
+            # Arm force-producing modes only after a reseat + aligned control
+            # command has been sent on this connection lifecycle.
+            if board.startup_synced and not board.control_armed:
+                for name, value in self._enable_lines:
+                    board.send_param(name, value)
+                board.control_armed = True
 
         dial_pos_rad: list[float] = []
         dial_vel_rad_s: list[float] = []
@@ -311,11 +366,13 @@ class RealHaptic:
         }
 
     def close(self) -> None:
+        """Close all active board connections."""
         for board in self._connections.values():
             board.close()
         self._connections.clear()
 
     def _refresh_connections(self) -> None:
+        """Drop stale boards and periodically discover/reconnect missing ones."""
         stale = [dial_id for dial_id, board in self._connections.items() if board._serial is None or not board.connected]
         for dial_id in stale:
             board = self._connections.pop(dial_id)
@@ -353,6 +410,7 @@ class RealHaptic:
             known_ports.add(port)
 
     def _candidate_ports(self) -> list[str]:
+        """Return configured ports, else auto-discovered CH340 ports."""
         if self._configured_ports:
             return list(self._configured_ports)
         ports: list[str] = []
@@ -366,6 +424,26 @@ class RealHaptic:
                 continue
             ports.append(device)
         return ports
+
+    def _robot_to_dial(self, idx: int, robot_rad: float) -> float:
+        """Convert robot joint radians to dial radians via per-axis gear ratio."""
+        ratio = float(self._gear_ratio[idx]) if idx < len(self._gear_ratio) else 1.0
+        if abs(ratio) < 1e-9:
+            ratio = 1.0
+        return float(robot_rad) / ratio
+
+    def _handle_sequence_reset(self, board: _SingleDialBoard) -> None:
+        """Detect firmware restart by control-seq rollback and re-arm startup sync."""
+        seq_now = int(board.telemetry.last_control_seq)
+        seq_prev = board._last_seen_control_seq
+        board._last_seen_control_seq = seq_now
+        if seq_prev is None:
+            return
+        # Firmware can restart while USB stays enumerated; if the reported
+        # processed-C sequence jumps backwards, force a fresh digital reseat.
+        if seq_now < seq_prev and (seq_prev - seq_now) > 10:
+            board.startup_synced = False
+            board.control_armed = False
 
 
 def _team_dial_ids(team: str) -> list[int]:
@@ -424,13 +502,43 @@ def _build_param_lines(node: Any) -> list[tuple[str, int]]:
         out.append(("oob_kick_amplitude", int(round(float(oob_kick["amplitude"]) * 1000.0))))
     if "pulse_interval_ms" in oob_kick:
         out.append(("oob_kick_pulse_interval_ms", int(round(float(oob_kick["pulse_interval_ms"])))))
-    out.append(("enable_tracking", 1))
-    out.append(("enable_bounds_restoration", 1))
-    out.append(("enable_oob_kick", 1 if bool(oob_kick.get("enabled", False)) else 0))
+
+    # Safety-first connect behavior: hold force-producing modes disabled
+    # until the host has reseated dial coordinates to robot actual.
+    out.append(("enable_tracking", 0))
+    out.append(("enable_bounds_restoration", 0))
+    out.append(("enable_oob_kick", 0))
 
     if not any(name == "telemetry_interval" for name, _ in out):
         out.append(("telemetry_interval", _DEFAULT_TELEMETRY_INTERVAL_MS))
     return out
+
+
+def _build_enable_lines(node: Any) -> list[tuple[str, int]]:
+    data = node if isinstance(node, dict) else {}
+    oob_kick = data.get("oob_kick") if isinstance(data.get("oob_kick"), dict) else {}
+    return [
+        ("enable_tracking", 1),
+        ("enable_bounds_restoration", 1),
+        ("enable_oob_kick", 1 if bool(oob_kick.get("enabled", False)) else 0),
+    ]
+
+
+def _normalize_gear_ratio(value: Any) -> list[float]:
+    if not isinstance(value, list):
+        return [1.0] * 6
+    out: list[float] = []
+    for item in value[:6]:
+        try:
+            ratio = float(item)
+        except (TypeError, ValueError):
+            ratio = 1.0
+        if abs(ratio) < 1e-9:
+            ratio = 1.0
+        out.append(ratio)
+    while len(out) < 6:
+        out.append(1.0)
+    return out[:6]
 
 
 def _rad_to_decideg(value: float) -> int:

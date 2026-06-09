@@ -34,6 +34,8 @@ def main(argv: list[str] | None = None) -> int:
     actual_sub = bus.make_sub(proc.ctx, topics=[f"telem.robot.actual.{team}"])
     cmd_sub = bus.make_sub(proc.ctx, topics=[f"cmd.haptic.{team}"])
     reseat_sub = bus.make_sub(proc.ctx, topics=[f"cmd.haptic.reseat.{team}"])
+    # For sim-only impls that do one-time seeding, this guards against
+    # repeatedly overwriting their internal dial position.
     seed_ref = {"done": False}
     # The Proc scaffold also creates a PUB for heartbeats; reusing this
     # one keeps us to a single PUB per process.
@@ -42,6 +44,8 @@ def main(argv: list[str] | None = None) -> int:
     topic = f"telem.haptic.{team}"
 
     def tick(p: Proc) -> None:
+        # latest-wins per topic: if multiple messages arrive between ticks,
+        # process only the newest sample/command.
         _drain_latest(actual_sub, on_msg=lambda b: _handle_robot_actual(impl, b, seed_ref))
         _drain_latest(cmd_sub, on_msg=lambda b: _apply_command(impl, b))
         _drain_latest(reseat_sub, on_msg=lambda b: _apply_reseat_request(impl, b))
@@ -62,6 +66,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _make_impl(name: str, *, team: str, profile):
+    """Resolve profile impl name to the concrete haptic runtime."""
     if name == "sim_scripted":
         from subsystems.haptic.sim_scripted import ScriptedHaptic
         return ScriptedHaptic()
@@ -75,6 +80,7 @@ def _make_impl(name: str, *, team: str, profile):
 
 
 def _drain_latest(sub, *, on_msg) -> None:
+    """Drain a SUB socket and dispatch only the newest body."""
     last = None
     while True:
         try:
@@ -87,6 +93,11 @@ def _drain_latest(sub, *, on_msg) -> None:
 
 
 def _handle_robot_actual(impl, body: dict, seed_ref: dict) -> None:
+    """Forward robot actual pose to impl-specific hooks.
+
+    RealHaptic uses update_robot_actual every tick. Sim impls may instead
+    expose set_current_position and only need one startup seed.
+    """
     q = body.get("q_rad")
     if not isinstance(q, list) or len(q) < 6:
         return
@@ -103,12 +114,26 @@ def _handle_robot_actual(impl, body: dict, seed_ref: dict) -> None:
 
 
 def _apply_command(impl, body: dict) -> None:
+    """Apply cmd.haptic payload if the impl supports runtime commands."""
     apply = getattr(impl, "apply_command", None)
     if callable(apply):
         apply(body)
 
 
 def _apply_reseat_request(impl, body: dict) -> None:
+    """Handle explicit reseat requests from game_controller.
+
+    current_pos_dial_rad is preferred because it is already gear-scaled in
+    game_controller. current_pos_rad remains as backward-compatible fallback.
+    """
+    # Prefer dial-space reseat when provided so game_controller can send
+    # pre-scaled values and avoid ambiguity about gear conversion.
+    q_dial = body.get("current_pos_dial_rad") if isinstance(body, dict) else None
+    if isinstance(q_dial, list) and len(q_dial) >= 6:
+        reseat_dial = getattr(impl, "request_reseat_dial", None)
+        if callable(reseat_dial):
+            reseat_dial([float(v) for v in q_dial[:6]])
+            return
     q = body.get("current_pos_rad") if isinstance(body, dict) else None
     if not isinstance(q, list) or len(q) < 6:
         return

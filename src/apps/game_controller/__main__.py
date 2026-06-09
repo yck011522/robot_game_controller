@@ -107,6 +107,16 @@ def main(argv: list[str] | None = None) -> int:
             "conclusion_done": False,
             "conclusion_sum_remainder_units": 0.0,
             "last_tick_t": time.perf_counter(),
+            "startup_align": {
+                "enabled": (
+                    proc.profile.subsystems.get("haptic_io", {}).get(team) == "real"
+                    if isinstance(proc.profile.subsystems.get("haptic_io"), dict) else False
+                ),
+                "done": False,
+                "attempts": 0,
+                "last_reseat_mono_s": 0.0,
+                "settled_streak": 0,
+            },
         }
     banner(proc.proc, f"teams={active_teams} collision_check={collision_enabled}")
 
@@ -173,6 +183,36 @@ def main(argv: list[str] | None = None) -> int:
                 st["last_prox_hits"] = [[False] * 20 for _ in range(6)]
                 st["last_prox_age_ticks"] = [9999] * 6
                 st["score"] = int(sum(st["bucket_values"]))
+                continue
+
+            if _startup_alignment_active(st):
+                # Keep publishing tracking during alignment so boards have
+                # a coherent target immediately after digital reseat.
+                _publish_haptic_command(pub, p.proc, team, st, haptic_cfg)
+                _tick_startup_alignment(pub, p.proc, team, st, haptic_cfg, now=time.perf_counter())
+
+                # Hold robot at measured pose until haptic settles to avoid startup jerk.
+                st["last_target"] = list(st["last_q"])
+                st["last_collision"] = False
+                st["last_first_hit"] = None
+                st["last_path_scalar"] = 1.0
+                st["last_prox_scalar"] = 1.0
+                st["last_final_scalar"] = 1.0
+                st["last_prox_probe_offsets_deg"] = []
+                st["last_prox_hits"] = [[False] * 20 for _ in range(6)]
+                st["last_prox_age_ticks"] = [9999] * 6
+
+                env = bus.make_envelope(p.proc)
+                env.update({
+                    "team": team,
+                    "q_target_rad": list(st["last_q"]),
+                    "clamps": {
+                        "path": 1.0,
+                        "prox": 1.0,
+                        "final": 1.0,
+                    },
+                })
+                bus.publish(pub, f"cmd.robot.target.{team}", env)
                 continue
 
             _publish_haptic_command(pub, p.proc, team, st, haptic_cfg)
@@ -411,25 +451,141 @@ def _game_config(node: Any) -> dict[str, float]:
 
 def _haptic_config(node: Any) -> dict[str, Any]:
     data = node if isinstance(node, dict) else {}
+    gear_ratio = _coerce_float_list(data.get("gear_ratio"), [1.0] * 6)
     return {
+        "gear_ratio": [
+            (v if abs(v) > 1e-9 else 1.0) for v in gear_ratio
+        ],
         "bounds_min_rad": [
             math.radians(v) for v in _coerce_float_list(data.get("bounds_deg_min"), DEFAULT_HAPTIC_BOUNDS_DEG_MIN)
         ],
         "bounds_max_rad": [
             math.radians(v) for v in _coerce_float_list(data.get("bounds_deg_max"), DEFAULT_HAPTIC_BOUNDS_DEG_MAX)
         ],
+        "startup_settle_tol_rad": math.radians(_coerce_positive_float(data.get("startup_settle_tolerance_deg"), 10.0)),
+        "startup_reseat_timeout_s": _coerce_positive_float(data.get("startup_reseat_timeout_s"), 1.0),
+        "startup_settle_streak_ticks": max(1, int(_coerce_positive_float(data.get("startup_settle_streak_ticks"), 3.0))),
     }
 
 
 def _publish_haptic_command(pub: zmq.Socket, producer: str, team: str, state: dict[str, Any], haptic_cfg: dict[str, Any]) -> None:
+    gear = list(haptic_cfg.get("gear_ratio", [1.0] * 6))
+    while len(gear) < 6:
+        gear.append(1.0)
+    tracking_target_dial_rad = [
+        float(state["last_q"][i]) / float(gear[i])
+        for i in range(6)
+    ]
     env = bus.make_envelope(producer)
     env.update({
         "team": team,
-        "tracking_target_rad": list(state["last_q"]),
+        "tracking_target_rad": tracking_target_dial_rad,
         "bounds_min_rad": list(haptic_cfg["bounds_min_rad"]),
         "bounds_max_rad": list(haptic_cfg["bounds_max_rad"]),
     })
     bus.publish(pub, f"cmd.haptic.{team}", env)
+
+
+def _publish_haptic_reseat(
+    pub: zmq.Socket,
+    producer: str,
+    team: str,
+    *,
+    current_pos_robot_rad: list[float],
+    current_pos_dial_rad: list[float],
+) -> None:
+    env = bus.make_envelope(producer)
+    env.update({
+        "team": team,
+        "current_pos_rad": list(current_pos_robot_rad),
+        "current_pos_dial_rad": list(current_pos_dial_rad),
+    })
+    bus.publish(pub, f"cmd.haptic.reseat.{team}", env)
+
+
+def _startup_alignment_active(state: dict[str, Any]) -> bool:
+    align = state.get("startup_align") if isinstance(state, dict) else None
+    if not isinstance(align, dict):
+        return False
+    return bool(align.get("enabled", False)) and not bool(align.get("done", False))
+
+
+def _tick_startup_alignment(
+    pub: zmq.Socket,
+    producer: str,
+    team: str,
+    state: dict[str, Any],
+    haptic_cfg: dict[str, Any],
+    *,
+    now: float,
+) -> None:
+    align = state.get("startup_align") if isinstance(state.get("startup_align"), dict) else {}
+    q_robot = list(state.get("last_q") or [0.0] * 6)[:6]
+    gear = list(haptic_cfg.get("gear_ratio", [1.0] * 6))[:6]
+    while len(gear) < 6:
+        gear.append(1.0)
+    q_dial = [
+        float(q_robot[i]) / (float(gear[i]) if abs(float(gear[i])) > 1e-9 else 1.0)
+        for i in range(6)
+    ]
+
+    settled, max_err = _haptic_settled_to_target(state, q_dial, haptic_cfg)
+    if settled:
+        align["settled_streak"] = int(align.get("settled_streak", 0)) + 1
+    else:
+        align["settled_streak"] = 0
+
+    if int(align.get("settled_streak", 0)) >= int(haptic_cfg.get("startup_settle_streak_ticks", 3)):
+        align["done"] = True
+        print(
+            f"[game_controller] startup-align done team={team} attempts={int(align.get('attempts', 0))} max_err_rad={max_err:.4f}",
+            flush=True,
+        )
+        return
+
+    attempts = int(align.get("attempts", 0))
+    last_send = float(align.get("last_reseat_mono_s", 0.0) or 0.0)
+    timeout_s = float(haptic_cfg.get("startup_reseat_timeout_s", 1.0))
+    should_send = attempts == 0 or ((now - last_send) >= timeout_s)
+    if not should_send:
+        return
+
+    _publish_haptic_reseat(
+        pub,
+        producer,
+        team,
+        current_pos_robot_rad=q_robot,
+        current_pos_dial_rad=q_dial,
+    )
+    align["attempts"] = attempts + 1
+    align["last_reseat_mono_s"] = now
+    align["settled_streak"] = 0
+    print(
+        f"[game_controller] startup-align reseat team={team} attempt={align['attempts']} "
+        f"j6_robot={q_robot[5]:.4f} j6_dial={q_dial[5]:.4f} max_err_rad={max_err:.4f}",
+        flush=True,
+    )
+
+
+def _haptic_settled_to_target(state: dict[str, Any], target_dial_rad: list[float], haptic_cfg: dict[str, Any]) -> tuple[bool, float]:
+    dial = list(state.get("last_dial") or [0.0] * 6)[:6]
+    conn = list(state.get("last_haptic_connected") or [False] * 6)[:6]
+    while len(dial) < 6:
+        dial.append(0.0)
+    while len(conn) < 6:
+        conn.append(False)
+
+    # Require all six dials connected before declaring startup settled.
+    if not all(bool(v) for v in conn[:6]):
+        return False, float("inf")
+
+    tol = float(haptic_cfg.get("startup_settle_tol_rad", math.radians(10.0)))
+    max_err = 0.0
+    for i in range(6):
+        err = abs(float(dial[i]) - float(target_dial_rad[i]))
+        if err > max_err:
+            max_err = err
+    return max_err <= tol, max_err
 
 
 def _tick_stage_state(stage_state: dict[str, Any], teams: dict[str, dict], game_cfg: dict[str, float], now_ns: int) -> None:

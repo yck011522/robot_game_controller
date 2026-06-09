@@ -112,6 +112,8 @@ class InProcessPlanner:
         self._gear = list(haptic.get("gear_ratio", [1.0] * 6))
         while len(self._gear) < 6:
             self._gear.append(1.0)
+        input_mode_raw = str(haptic.get("input_mode", "delta")).strip().lower()
+        self._input_mode = input_mode_raw if input_mode_raw in ("delta", "absolute") else "delta"
 
         robot_tune = profile.tuning.get("robot", {})
         self._q_min, self._q_max = resolve_joint_limits_rad(robot_tune, axes=6)
@@ -201,14 +203,24 @@ class InProcessPlanner:
         if dt <= 0.0:
             dt = 1.0 / 50.0
 
-        # 1. Derive desired joint velocity from haptic position delta.
+        # 1. Build desired joint velocity from haptic input.
+        # delta mode: velocity from per-tick dial position delta (keyboard-like)
+        # absolute mode: dial position is an absolute joint target after gear mapping
         v_des = [0.0] * 6
         cur_pos = [float(v) for v in (list(dial_pos_rad)[:6] + [0.0] * 6)][:6]
-        if self._prev_dial_pos is not None:
+        if self._input_mode == "absolute":
+            q_des = [
+                _clamp(cur_pos[i] * self._gear[i], self._q_min[i], self._q_max[i])
+                for i in range(6)
+            ]
             for i in range(6):
-                d = (cur_pos[i] - self._prev_dial_pos[i]) / dt
-                v_des[i] = self._gear[i] * d
-        self._prev_dial_pos = cur_pos
+                v_des[i] = (q_des[i] - self._q_cur[i]) / dt
+        else:
+            if self._prev_dial_pos is not None:
+                for i in range(6):
+                    d = (cur_pos[i] - self._prev_dial_pos[i]) / dt
+                    v_des[i] = self._gear[i] * d
+            self._prev_dial_pos = cur_pos
 
         # 2. Per-axis acceleration clamp.
         v_cmd = [0.0] * 6
@@ -269,6 +281,7 @@ class InProcessPlanner:
                 break
 
         info = {
+            "input_mode": self._input_mode,
             "path_scalar": path_scalar,
             "prox_scalar": prox_scalar,
             "final_scalar": final_scalar,

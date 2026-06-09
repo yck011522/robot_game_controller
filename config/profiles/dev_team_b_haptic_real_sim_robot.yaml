@@ -13,7 +13,8 @@ subsystems:
 
   robot_io:
     a: null
-    b: sim_pybullet
+    b: real_rtde
+    # b: sim_pybullet
 
   jogging_planner:
     a: null
@@ -30,7 +31,7 @@ subsystems:
   safety_barrier_controller: null
 
   collision_workers:
-    count: 6
+    count: 8
 
   collision_broker: null
 
@@ -41,10 +42,13 @@ subsystems:
 
 tuning:
   haptic:
-    gear_ratio: [10.0, 10.0, 10.0, 5.0, 5.0, 5.0]
+    gear_ratio: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
     bounds_deg_min: [-180, -180, -180, -180, -180, -180]
     bounds_deg_max: [180, 180, 180, 180, 180, 180]
     telemetry_interval_ms: 10
+    # Real dials are absolute-position devices. Map dial angle to absolute
+    # robot joint target (via gear_ratio), not delta-velocity semantics.
+    input_mode: absolute
   robot:
     q_limits_min_deg: [-180, -180, -180, -180, -180, -180]
     q_limits_max_deg: [180, 180, 180, 180, 180, 180]
@@ -76,3 +80,7 @@ hardware:
     # Team B dial IDs expected by runtime: 21,22,23,24,25,26.
     # Runtime discovers dial_id per port and maps automatically.
     haptic_b: ["COM5", "COM6", "COM7", "COM8", "COM9", "COM10"]
+
+  robot:
+    # Matches the archived keyboard explorer's working default.
+    b: {host: "192.168.0.2", port: 30004}
