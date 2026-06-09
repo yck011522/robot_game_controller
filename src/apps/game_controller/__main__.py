@@ -32,6 +32,8 @@ TEAM_BUCKET_IDS = {
 }
 DEFAULT_BUCKET_VALUES = [0.0, 0.0, 0.0]
 DEFAULT_LOOK_POSE_DEG = [0.0, -90.0, 90.0, 0.0, 0.0, 0.0]
+DEFAULT_HAPTIC_BOUNDS_DEG_MIN = [-180.0] * 6
+DEFAULT_HAPTIC_BOUNDS_DEG_MAX = [180.0] * 6
 CONCLUSION_INITIAL_PAUSE_S = 1.0
 CONCLUSION_BUCKET_EMPTY_PAUSE_S = 0.5
 CONCLUSION_ANNOUNCEMENT_PAUSE_S = 1.0
@@ -43,6 +45,7 @@ def main(argv: list[str] | None = None) -> int:
 
     active_teams = list(proc.profile.active_teams)
     game_cfg = _game_config(proc.profile.tuning.get("game"))
+    haptic_cfg = _haptic_config(proc.profile.tuning.get("haptic"))
     robot_show_poses = _load_robot_show_poses_deg()
     pub = bus.make_pub(proc.ctx)
     control_rep = bus.make_rep(proc.ctx)
@@ -72,6 +75,7 @@ def main(argv: list[str] | None = None) -> int:
             "sub_haptic": sub,
             "sub_actual": actual_sub,
             "last_dial": [0.0] * 6,
+            "last_dial_vel": [0.0] * 6,
             "last_haptic_connected": [False] * 6,
             "last_haptic_loop_hz": [0.0] * 6,
             # last_q starts as None; planner only re-seeds once a real
@@ -170,6 +174,8 @@ def main(argv: list[str] | None = None) -> int:
                 st["last_prox_age_ticks"] = [9999] * 6
                 st["score"] = int(sum(st["bucket_values"]))
                 continue
+
+            _publish_haptic_command(pub, p.proc, team, st, haptic_cfg)
 
             robot_status = st.get("robot_status", {})
             robot_fault_active = bool(robot_status.get("fault_active", False))
@@ -301,8 +307,11 @@ def main(argv: list[str] | None = None) -> int:
                     },
                     "haptic": {
                         "dial_pos_rad": st["last_dial"],
+                        "dial_vel_rad_s": st["last_dial_vel"],
                         "connected": st["last_haptic_connected"],
                         "board_loop_hz": st["last_haptic_loop_hz"],
+                        "bounds_min_rad": list(haptic_cfg["bounds_min_rad"]),
+                        "bounds_max_rad": list(haptic_cfg["bounds_max_rad"]),
                     },
                     "collision": {
                         "in_collision": st["last_collision"],
@@ -377,6 +386,10 @@ def _update_actual_state(state: dict, body: dict) -> None:
 
 def _update_haptic_state(state: dict, body: dict) -> None:
     state["last_dial"] = body.get("dial_pos_rad", state["last_dial"])
+    dial_vel = body.get("dial_vel_rad_s")
+    if isinstance(dial_vel, list):
+        state["last_dial_vel"] = [float(v) for v in dial_vel[:6]] + [0.0] * max(0, 6 - len(dial_vel[:6]))
+        state["last_dial_vel"] = state["last_dial_vel"][:6]
     connected = body.get("board_connected")
     if isinstance(connected, list):
         state["last_haptic_connected"] = [bool(v) for v in connected[:6]] + [False] * max(0, 6 - len(connected[:6]))
@@ -394,6 +407,29 @@ def _game_config(node: Any) -> dict[str, float]:
         "sum_score_rate_unit_per_s": _coerce_positive_float(data.get("sum_score_rate_unit_per_s"), 100.0),
         "sim_bucket_values": _coerce_team_bucket_values(data.get("sim_bucket_values")),
     }
+
+
+def _haptic_config(node: Any) -> dict[str, Any]:
+    data = node if isinstance(node, dict) else {}
+    return {
+        "bounds_min_rad": [
+            math.radians(v) for v in _coerce_float_list(data.get("bounds_deg_min"), DEFAULT_HAPTIC_BOUNDS_DEG_MIN)
+        ],
+        "bounds_max_rad": [
+            math.radians(v) for v in _coerce_float_list(data.get("bounds_deg_max"), DEFAULT_HAPTIC_BOUNDS_DEG_MAX)
+        ],
+    }
+
+
+def _publish_haptic_command(pub: zmq.Socket, producer: str, team: str, state: dict[str, Any], haptic_cfg: dict[str, Any]) -> None:
+    env = bus.make_envelope(producer)
+    env.update({
+        "team": team,
+        "tracking_target_rad": list(state["last_q"]),
+        "bounds_min_rad": list(haptic_cfg["bounds_min_rad"]),
+        "bounds_max_rad": list(haptic_cfg["bounds_max_rad"]),
+    })
+    bus.publish(pub, f"cmd.haptic.{team}", env)
 
 
 def _tick_stage_state(stage_state: dict[str, Any], teams: dict[str, dict], game_cfg: dict[str, float], now_ns: int) -> None:
@@ -754,6 +790,20 @@ def _coerce_positive_float(value: Any, default: float) -> float:
     except (TypeError, ValueError):
         return default
     return number if number > 0.0 else default
+
+
+def _coerce_float_list(value: Any, fallback: list[float]) -> list[float]:
+    if not isinstance(value, list):
+        return list(fallback)
+    out: list[float] = []
+    for idx, item in enumerate(value[:6]):
+        try:
+            out.append(float(item))
+        except (TypeError, ValueError):
+            out.append(float(fallback[idx]))
+    if len(out) < 6:
+        out.extend(float(v) for v in fallback[len(out):6])
+    return out[:6]
 
 
 if __name__ == "__main__":

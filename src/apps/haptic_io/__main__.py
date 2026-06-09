@@ -29,9 +29,11 @@ def main(argv: list[str] | None = None) -> int:
               file=sys.stderr, flush=True)
         return 2
 
-    impl = _make_impl(impl_name)
+    impl = _make_impl(impl_name, team=team, profile=profile)
     pub = bus.make_pub(proc.ctx)
     actual_sub = bus.make_sub(proc.ctx, topics=[f"telem.robot.actual.{team}"])
+    cmd_sub = bus.make_sub(proc.ctx, topics=[f"cmd.haptic.{team}"])
+    reseat_sub = bus.make_sub(proc.ctx, topics=[f"cmd.haptic.reseat.{team}"])
     seed_ref = {"done": False}
     # The Proc scaffold also creates a PUB for heartbeats; reusing this
     # one keeps us to a single PUB per process.
@@ -40,8 +42,9 @@ def main(argv: list[str] | None = None) -> int:
     topic = f"telem.haptic.{team}"
 
     def tick(p: Proc) -> None:
-        if not seed_ref["done"]:
-            _drain_latest(actual_sub, on_msg=lambda b: _seed_from_robot_actual(impl, b, seed_ref))
+        _drain_latest(actual_sub, on_msg=lambda b: _handle_robot_actual(impl, b, seed_ref))
+        _drain_latest(cmd_sub, on_msg=lambda b: _apply_command(impl, b))
+        _drain_latest(reseat_sub, on_msg=lambda b: _apply_reseat_request(impl, b))
         sample = impl.sample()
         env = bus.make_envelope(p.proc)
         env.update({"team": team, **sample})
@@ -49,6 +52,8 @@ def main(argv: list[str] | None = None) -> int:
 
     def teardown(_: Proc) -> None:
         actual_sub.close(0)
+        cmd_sub.close(0)
+        reseat_sub.close(0)
         close = getattr(impl, "close", None)
         if callable(close):
             close()
@@ -56,13 +61,16 @@ def main(argv: list[str] | None = None) -> int:
     return proc.run(tick, teardown=teardown)
 
 
-def _make_impl(name: str):
+def _make_impl(name: str, *, team: str, profile):
     if name == "sim_scripted":
         from subsystems.haptic.sim_scripted import ScriptedHaptic
         return ScriptedHaptic()
     if name == "sim_keyboard":
         from subsystems.haptic.sim_keyboard import KeyboardHaptic
         return KeyboardHaptic()
+    if name == "real":
+        from subsystems.haptic.real import RealHaptic
+        return RealHaptic(team=team, profile=profile)
     raise NotImplementedError(f"haptic_io impl {name!r} not available yet")
 
 
@@ -78,17 +86,35 @@ def _drain_latest(sub, *, on_msg) -> None:
         on_msg(last)
 
 
-def _seed_from_robot_actual(impl, body: dict, seed_ref: dict) -> None:
+def _handle_robot_actual(impl, body: dict, seed_ref: dict) -> None:
     q = body.get("q_rad")
     if not isinstance(q, list) or len(q) < 6:
+        return
+    update_actual = getattr(impl, "update_robot_actual", None)
+    if callable(update_actual):
+        update_actual([float(v) for v in q[:6]])
+        return
+    if seed_ref["done"]:
         return
     seed = getattr(impl, "set_current_position", None)
     if callable(seed):
         seed([float(v) for v in q[:6]])
-    # TODO(haptic): the future real ESP32 impl should expose the same
-    # set_current_position hook so simulated and physical dials can both be
-    # reseated to a known pose without causing motion.
     seed_ref["done"] = True
+
+
+def _apply_command(impl, body: dict) -> None:
+    apply = getattr(impl, "apply_command", None)
+    if callable(apply):
+        apply(body)
+
+
+def _apply_reseat_request(impl, body: dict) -> None:
+    q = body.get("current_pos_rad") if isinstance(body, dict) else None
+    if not isinstance(q, list) or len(q) < 6:
+        return
+    reseat = getattr(impl, "request_reseat", None)
+    if callable(reseat):
+        reseat([float(v) for v in q[:6]])
 
 
 if __name__ == "__main__":

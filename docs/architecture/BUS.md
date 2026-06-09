@@ -382,16 +382,33 @@ Latest-wins (CONFLATE).
   "producer": "game_controller",
   "team": "a",
   "tracking_target_rad": [.., .., .., .., .., ..],
+  // High-rate updates only carry the tracking target plus current bounds.
+  // OOB kick enable/amplitude remain infrequent parameter writes on the
+  // haptic board, not part of the per-tick runtime stream.
   // Active soft bounds the dial firmware should enforce this tick.
   // Mirrors state.full.haptic.<team>.bounds_min/max so the dial
   // doesn't need to subscribe to state.full. Per-dial, radians.
   "bounds_min_rad": [-3.14, -3.14, -3.14, -3.14, -3.14, -3.14],
-  "bounds_max_rad": [ 3.14,  3.14,  3.14,  3.14,  3.14,  3.14],
-  "oob_kick": [false, false, true, false, false, false]
+  "bounds_max_rad": [ 3.14,  3.14,  3.14,  3.14,  3.14,  3.14]
 }
 ```
 
-### 6.4 `telem.robot.actual.<team>`
+### 6.4 `cmd.haptic.reseat.<team>`
+
+Sparse, explicit command. Used when GameController wants HapticIO to issue
+the firmware `R` command and digitally reseat the dial positions to a known
+pose. This is separate from the high-rate `cmd.haptic.<team>` stream.
+
+```jsonc
+{
+  "ts_mono_ns": ...,
+  "producer": "game_controller",
+  "team": "a",
+  "current_pos_rad": [.., .., .., .., .., ..]
+}
+```
+
+### 6.5 `telem.robot.actual.<team>`
 
 ```jsonc
 {

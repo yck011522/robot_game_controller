@@ -103,13 +103,14 @@ def main() -> int:
 
     ctx = zmq.Context.instance()
     sub = bus.make_sub(ctx, topics=["heartbeat.", "cmd.robot.target.a",
-                                     "telem.robot.actual.a", "state.full"])
+                                     "cmd.haptic.a", "telem.robot.actual.a", "state.full"])
     poller = zmq.Poller()
     poller.register(sub, zmq.POLLIN)
 
     launcher, drain = _popen_launcher()
     seen_hb: set[str] = set()
     cmd_samples: list[list[float]] = []
+    haptic_cmd_samples: list[dict] = []
     actual_samples: list[list[float]] = []
     state_samples: list[dict] = []
 
@@ -136,6 +137,8 @@ def main() -> int:
                         q = body.get("q_target_rad")
                         if isinstance(q, list):
                             cmd_samples.append(q)
+                    elif topic == "cmd.haptic.a":
+                        haptic_cmd_samples.append(body)
                     elif topic == "telem.robot.actual.a":
                         q = body.get("q_rad")
                         if isinstance(q, list):
@@ -145,13 +148,14 @@ def main() -> int:
 
             if time.perf_counter() - last_status > 3.0:
                 print(f"[test] hb={len(seen_hb)}/{len(expected_heartbeats)}  "
-                      f"cmd={len(cmd_samples)}  actual={len(actual_samples)}  "
+                        f"cmd={len(cmd_samples)}  hcmd={len(haptic_cmd_samples)}  actual={len(actual_samples)}  "
                       f"state={len(state_samples)}", flush=True)
                 last_status = time.perf_counter()
 
             # Bail out early once we have plenty of data.
             if (expected_heartbeats <= seen_hb
                     and len(cmd_samples) >= 50
+                    and len(haptic_cmd_samples) >= 50
                     and len(actual_samples) >= 50
                     and len(state_samples) >= 25):
                 break
@@ -161,8 +165,19 @@ def main() -> int:
         print(f"[test] OK: all {len(expected_heartbeats)} heartbeats received")
 
         assert len(cmd_samples) >= 50, f"only {len(cmd_samples)} cmd.robot.target.a samples"
+        assert len(haptic_cmd_samples) >= 50, f"only {len(haptic_cmd_samples)} cmd.haptic.a samples"
         assert len(actual_samples) >= 50, f"only {len(actual_samples)} telem.robot.actual.a samples"
-        print(f"[test] OK: cmd={len(cmd_samples)} actual={len(actual_samples)} state={len(state_samples)}")
+        print(f"[test] OK: cmd={len(cmd_samples)} hcmd={len(haptic_cmd_samples)} actual={len(actual_samples)} state={len(state_samples)}")
+
+        last_haptic_cmd = haptic_cmd_samples[-1]
+        assert isinstance(last_haptic_cmd.get("tracking_target_rad"), list)
+        assert len(last_haptic_cmd["tracking_target_rad"]) == 6
+        assert isinstance(last_haptic_cmd.get("bounds_min_rad"), list)
+        assert len(last_haptic_cmd["bounds_min_rad"]) == 6
+        assert isinstance(last_haptic_cmd.get("bounds_max_rad"), list)
+        assert len(last_haptic_cmd["bounds_max_rad"]) == 6
+        assert all(lo <= hi for lo, hi in zip(last_haptic_cmd["bounds_min_rad"], last_haptic_cmd["bounds_max_rad"]))
+        print("[test] OK: cmd.haptic.a schema looks right")
 
         # cmd_samples should not be all-zero (the scripted haptic sine
         # must produce motion; gear ratio of 10 ??簣0.5 rad).
@@ -195,8 +210,11 @@ def main() -> int:
         team_a = last_state["teams"]["a"]
         assert "robot" in team_a and "q_target_rad" in team_a["robot"]
         assert "haptic" in team_a and "dial_pos_rad" in team_a["haptic"]
+        assert "dial_vel_rad_s" in team_a["haptic"]
         assert "connected" in team_a["haptic"]
         assert "board_loop_hz" in team_a["haptic"]
+        assert "bounds_min_rad" in team_a["haptic"]
+        assert "bounds_max_rad" in team_a["haptic"]
         print("[test] OK: state.full schema looks right")
 
         print("\n[test] P2 SMOKE TEST PASSED\n")

@@ -1113,6 +1113,8 @@ if __name__ == "__main__":
         print(f"  Cycle {cycle + 1}/{BLINK_CYCLES}: {color_name} ON", flush=True)
         for sid in discovered_strips:
             system.set_strip_color(sid, color)
+            # Pause wait for user input
+            input("    Press Enter to continue...")
         _time.sleep(BLINK_ON_S)
 
         print(f"  Cycle {cycle + 1}/{BLINK_CYCLES}: OFF", flush=True)

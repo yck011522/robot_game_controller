@@ -161,6 +161,11 @@ def _validate(data: dict[str, Any], errors: list[str]) -> None:
     tuning = data.get("tuning") or {}
     robot_tune = tuning.get("robot") if isinstance(tuning, dict) else None
     robot_hw = hardware.get("robot") if isinstance(hardware, dict) else None
+    serial_ports = hardware.get("serial_ports") if isinstance(hardware, dict) else None
+
+    if serial_ports is not None and not isinstance(serial_ports, dict):
+        errors.append("hardware.serial_ports must be a mapping when provided")
+        serial_ports = None
 
     needs_robot_limits = False
     for t in teams:
@@ -198,6 +203,19 @@ def _validate(data: dict[str, Any], errors: list[str]) -> None:
                     errors.append(f"hardware.robot.{t}.port must be > 0 when provided")
             except (TypeError, ValueError):
                 errors.append(f"hardware.robot.{t}.port must be an integer when provided")
+
+    if isinstance(serial_ports, dict):
+        for t in VALID_TEAMS:
+            key = f"haptic_{t}"
+            ports = serial_ports.get(key)
+            if ports is None:
+                continue
+            if not isinstance(ports, list):
+                errors.append(f"hardware.serial_ports.{key} must be a list of COM ports")
+                continue
+            for idx, port_name in enumerate(ports):
+                if not isinstance(port_name, str) or not port_name.strip():
+                    errors.append(f"hardware.serial_ports.{key}[{idx}] must be a non-empty string")
 
 
 def _validate_robot_limit_array(value: Any, field: str, errors: list[str]) -> None:
