@@ -7,6 +7,7 @@ the migration staging area.
 from __future__ import annotations
 
 import socket
+from typing import Any
 
 from rtde_control import RTDEControlInterface
 from rtde_receive import RTDEReceiveInterface
@@ -16,7 +17,75 @@ PORT_DASHBOARD = 29999
 PORT_RTDE = 30004
 
 
+class DashboardClient:
+    """Minimal line-oriented client for the UR Dashboard server."""
+
+    def __init__(self, host: str, timeout_s: float = 1.0) -> None:
+        """Store connection settings for a future dashboard session."""
+        self._host = host
+        self._timeout_s = max(0.1, float(timeout_s))
+        self._sock: socket.socket | None = None
+        self.banner = ""
+
+    def connect(self) -> None:
+        """Open the dashboard socket and read its greeting banner."""
+        self._sock = socket.create_connection((self._host, PORT_DASHBOARD), timeout=self._timeout_s)
+        self._sock.settimeout(self._timeout_s)
+        self.banner = self._recv_line()
+
+    def close(self) -> None:
+        """Close the dashboard socket if it is open."""
+        if self._sock is None:
+            return
+        try:
+            self._sock.close()
+        finally:
+            self._sock = None
+
+    def command(self, cmd: str) -> str:
+        """Send one dashboard command and return its single-line response."""
+        if self._sock is None:
+            raise RuntimeError("dashboard socket is not connected")
+        self._sock.sendall((cmd.strip() + "\n").encode("utf-8"))
+        return self._recv_line()
+
+    def _recv_line(self) -> str:
+        """Read one newline-terminated dashboard response."""
+        if self._sock is None:
+            raise RuntimeError("dashboard socket is not connected")
+        chunks: list[bytes] = []
+        while True:
+            chunk = self._sock.recv(1)
+            if not chunk:
+                break
+            if chunk == b"\n":
+                break
+            chunks.append(chunk)
+        return b"".join(chunks).decode("utf-8", errors="replace").strip()
+
+
+def run_dashboard_sequence(robot_ip: str, commands: list[str], timeout_s: float = 1.0) -> dict[str, Any]:
+    """Run a short dashboard command sequence over one temporary connection."""
+    result: dict[str, Any] = {
+        "connected": False,
+        "responses": {},
+    }
+    dash = DashboardClient(robot_ip, timeout_s=timeout_s)
+    try:
+        dash.connect()
+        result["connected"] = True
+        result["banner"] = dash.banner
+        responses: dict[str, str] = {}
+        for cmd in commands:
+            responses[cmd] = dash.command(cmd)
+        result["responses"] = responses
+    finally:
+        dash.close()
+    return result
+
+
 def is_tcp_open(host: str, port: int, timeout_s: float = 1.0) -> bool:
+    """Return whether a TCP endpoint is reachable within the timeout."""
     try:
         with socket.create_connection((host, port), timeout=timeout_s):
             return True
@@ -25,6 +94,7 @@ def is_tcp_open(host: str, port: int, timeout_s: float = 1.0) -> bool:
 
 
 def preflight_network_checks(robot_ip: str) -> None:
+    """Fail fast when the robot RTDE endpoint is unreachable."""
     if is_tcp_open(robot_ip, PORT_RTDE):
         return
 
@@ -50,6 +120,7 @@ def preflight_network_checks(robot_ip: str) -> None:
 
 
 def preflight_control_checks(robot_ip: str) -> None:
+    """Fail fast when Dashboard control prerequisites are missing."""
     if is_tcp_open(robot_ip, PORT_DASHBOARD):
         return
 
@@ -61,13 +132,22 @@ def preflight_control_checks(robot_ip: str) -> None:
 
 
 def connect_receive(robot_ip: str) -> RTDEReceiveInterface:
+    """Connect the RTDE receive interface after basic network checks."""
     preflight_network_checks(robot_ip)
     return RTDEReceiveInterface(robot_ip)
 
 
 def connect_control(robot_ip: str, frequency_hz: float = -1.0) -> RTDEControlInterface:
+    """Connect the RTDE control interface with script-upload support when available."""
     preflight_control_checks(robot_ip)
     try:
+        flags = 0
+        upload_flag = getattr(RTDEControlInterface, "FLAG_UPLOAD_SCRIPT", 0)
+        if isinstance(upload_flag, int):
+            flags |= upload_flag
+
+        if flags:
+            return RTDEControlInterface(robot_ip, frequency_hz, flags)
         return RTDEControlInterface(robot_ip, frequency_hz)
     except RuntimeError as exc:
         raise RuntimeError(

@@ -23,9 +23,11 @@ from subsystems.robot.joint_limits import clamp_joint_target_rad, resolve_joint_
 # below.
 DEFAULT_TICK_HZ = 200.0
 TELEM_PERIOD_S = 1.0 / 100.0  # 100 Hz per BUS.md 禮5.3
+DEFAULT_RECOVERY_TIMEOUT_S = 4.0
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run one robot I/O process and bridge bus traffic into the selected backend."""
     args, _ = parse_proc_args(argv, default_proc="robot_io.a")
     profile = load_profile(args.profile_path)
     target_hz = profile.subsystem_float("robot_io", "fps_target", default_runtime_setting("robot_io", "fps_target", DEFAULT_TICK_HZ))
@@ -67,9 +69,11 @@ def main(argv: list[str] | None = None) -> int:
     # the last sample, which gets us the same "latest wins" semantics
     # without the trap.
     sub = bus.make_sub(proc.ctx, topics=[f"cmd.robot.target.{team}"])
+    recover_sub = bus.make_sub(proc.ctx, topics=[f"cmd.robot.recover.{team}"])
     state_sub = bus.make_sub(proc.ctx, topics=["state.full"])
     poller = zmq.Poller()
     poller.register(sub, zmq.POLLIN)
+    poller.register(recover_sub, zmq.POLLIN)
     poller.register(state_sub, zmq.POLLIN)
 
     # TODO(safety): P3/P4 bring-up intentionally bypasses the safety-barrier
@@ -87,6 +91,7 @@ def main(argv: list[str] | None = None) -> int:
         # Drain every pending cmd; keep only the last (latest wins).
         latest_q = None
         latest_clamps = None
+        latest_recover_timeout_s = None
         events = dict(poller.poll(1))
         if state_sub in events:
             # TODO(safety): consume and discard state.full for now so this
@@ -104,10 +109,23 @@ def main(argv: list[str] | None = None) -> int:
                         latest_clamps = c
                 except zmq.Again:
                     break
+        if recover_sub in events:
+            while True:
+                try:
+                    _, body = bus.recv(recover_sub, flags=zmq.NOBLOCK)
+                    timeout_s = body.get("timeout_s")
+                    if isinstance(timeout_s, (int, float)):
+                        latest_recover_timeout_s = float(timeout_s)
+                    else:
+                        latest_recover_timeout_s = DEFAULT_RECOVERY_TIMEOUT_S
+                except zmq.Again:
+                    break
         if latest_q is not None:
             impl.set_target(clamp_joint_target_rad(latest_q, q_min, q_max, axes=6))
         if latest_clamps is not None and hasattr(impl, "set_clamps"):
             impl.set_clamps(latest_clamps)
+        if latest_recover_timeout_s is not None and hasattr(impl, "request_recovery"):
+            impl.request_recovery(timeout_s=max(0.1, latest_recover_timeout_s))
 
         impl.maybe_step()
 
@@ -135,6 +153,7 @@ def main(argv: list[str] | None = None) -> int:
 
     def teardown(_: Proc) -> None:
         sub.close(0)
+        recover_sub.close(0)
         state_sub.close(0)
         impl.close()
 
@@ -144,6 +163,7 @@ def main(argv: list[str] | None = None) -> int:
 def _make_impl(name: str, *, team: str, headless: bool,
                initial_pose_rad=None, robot_cfg: dict | None = None,
                servo_hz: float = DEFAULT_TICK_HZ):
+    """Construct the configured robot backend for this process."""
     if name == "sim_pybullet":
         from subsystems.robot.robot_sim_pybullet import SimPybulletRobot
         return SimPybulletRobot(headless=headless, initial_pose_rad=initial_pose_rad)
@@ -159,6 +179,7 @@ def _make_impl(name: str, *, team: str, headless: bool,
 
 
 def _extract_barrier_ok(body: dict) -> bool | None:
+    """Extract the latest safety barrier boolean from a `state.full` payload."""
     safety = body.get("safety")
     if not isinstance(safety, dict):
         return None
@@ -170,6 +191,7 @@ def _extract_barrier_ok(body: dict) -> bool | None:
 
 
 def _read_startup_barrier_ok(sub: zmq.Socket, timeout_s: float = 0.5) -> bool | None:
+    """Read the latest startup barrier state without blocking normal bring-up for long."""
     deadline = time.perf_counter() + timeout_s
     latest = None
     poller = zmq.Poller()
@@ -187,10 +209,12 @@ def _read_startup_barrier_ok(sub: zmq.Socket, timeout_s: float = 0.5) -> bool | 
 
 
 def _startup_barrier_sink(body: dict, latest_ref: dict) -> None:
+    """Store the latest parsed barrier state for the startup wait helper."""
     latest_ref["value"] = _extract_barrier_ok(body)
 
 
 def _drain_latest(sub: zmq.Socket, *, on_msg) -> None:
+    """Drain a SUB socket and hand only the freshest payload to the caller."""
     last = None
     while True:
         try:

@@ -1,0 +1,224 @@
+(game) PS C:\Users\yck01\GitHub\robot_game_controller> & C:\Users\yck01\miniconda3\envs\game\python.exe c:/Users/yck01/GitHub/robot_game_controller/src/apps/launcher/__main__.py
+[launcher] profile: dev_team_b_haptic_real_sim_robot  (C:\Users\yck01\GitHub\robot_game_controller\config\profiles\demo_team_b.yaml)
+[launcher]   active_teams: ['b']
+[launcher]   process_modules overrides: {'collision_worker': 'subsystems.collision_worker'}
+[launcher] spawn bus_broker: C:\Users\yck01\miniconda3\envs\game\python.exe -m apps.bus_broker --profile C:\Users\yck01\GitHub\robot_game_controller\config\profiles\demo_team_b.yaml --proc bus_broker
+[launcher] waiting for bus_broker first heartbeat...
+[bus_broker] bus broker up: XSUB tcp://127.0.0.1:5550  XPUB tcp://127.0.0.1:5551
+[launcher] bus_broker heartbeat received
+[launcher] spawn collision_broker: C:\Users\yck01\miniconda3\envs\game\python.exe -m apps.collision_broker --profile C:\Users\yck01\GitHub\robot_game_controller\config\profiles\demo_team_b.yaml --proc collision_broker
+[launcher] waiting for collision_broker first heartbeat...
+[collision_broker] ready: ROUTER tcp://127.0.0.1:5560 <-> DEALER tcp://127.0.0.1:5561
+[launcher] collision_broker heartbeat received
+[launcher] spawn collision_worker: C:\Users\yck01\miniconda3\envs\game\python.exe -m subsystems.collision_worker --profile C:\Users\yck01\GitHub\robot_game_controller\config\profiles\demo_team_b.yaml --proc collision_worker --instance 0
+[launcher] spawn collision_worker: C:\Users\yck01\miniconda3\envs\game\python.exe -m subsystems.collision_worker --profile C:\Users\yck01\GitHub\robot_game_controller\config\profiles\demo_team_b.yaml --proc collision_worker --instance 1
+[launcher] spawn collision_worker: C:\Users\yck01\miniconda3\envs\game\python.exe -m subsystems.collision_worker --profile C:\Users\yck01\GitHub\robot_game_controller\config\profiles\demo_team_b.yaml --proc collision_worker --instance 2
+[launcher] spawn collision_worker: C:\Users\yck01\miniconda3\envs\game\python.exe -m subsystems.collision_worker --profile C:\Users\yck01\GitHub\robot_game_controller\config\profiles\demo_team_b.yaml --proc collision_worker --instance 3
+[launcher] spawn collision_worker: C:\Users\yck01\miniconda3\envs\game\python.exe -m subsystems.collision_worker --profile C:\Users\yck01\GitHub\robot_game_controller\config\profiles\demo_team_b.yaml --proc collision_worker --instance 4
+[launcher] spawn collision_worker: C:\Users\yck01\miniconda3\envs\game\python.exe -m subsystems.collision_worker --profile C:\Users\yck01\GitHub\robot_game_controller\config\profiles\demo_team_b.yaml --proc collision_worker --instance 5
+[launcher] spawn collision_worker: C:\Users\yck01\miniconda3\envs\game\python.exe -m subsystems.collision_worker --profile C:\Users\yck01\GitHub\robot_game_controller\config\profiles\demo_team_b.yaml --proc collision_worker --instance 6
+[launcher] spawn collision_worker: C:\Users\yck01\miniconda3\envs\game\python.exe -m subsystems.collision_worker --profile C:\Users\yck01\GitHub\robot_game_controller\config\profiles\demo_team_b.yaml --proc collision_worker --instance 7
+[launcher] waiting for collision_worker_07 first heartbeat...
+pybullet build time: May 28 2026 14:36:41
+pybullet build time: May 28 2026 14:36:41
+pybullet build time: May 28 2026 14:36:41
+pybullet build time: May 28 2026 14:36:41
+pybullet build time: May 28 2026 14:36:41
+pybullet build time: May 28 2026 14:36:41
+pybullet build time: May 28 2026 14:36:41
+pybullet build time: May 28 2026 14:36:41
+[collision_worker_07] ready: compas_fab PyBullet(direct), touch lists 11b+1t, connected to tcp://127.0.0.1:5561
+[collision_worker_06] ready: compas_fab PyBullet(direct), touch lists 11b+1t, connected to tcp://127.0.0.1:5561
+[collision_worker_02] ready: compas_fab PyBullet(direct), touch lists 11b+1t, connected to tcp://127.0.0.1:5561
+[launcher] collision_worker_07 heartbeat received
+[launcher] spawn robot_io.b: C:\Users\yck01\miniconda3\envs\game\python.exe -m apps.robot_io --profile C:\Users\yck01\GitHub\robot_game_controller\config\profiles\demo_team_b.yaml --proc robot_io.b
+[launcher] waiting for robot_io.b first heartbeat...
+[collision_worker_00] ready: compas_fab PyBullet(direct), touch lists 11b+1t, connected to tcp://127.0.0.1:5561
+[collision_worker_01] ready: compas_fab PyBullet(direct), touch lists 11b+1t, connected to tcp://127.0.0.1:5561
+[collision_worker_04] ready: compas_fab PyBullet(direct), touch lists 11b+1t, connected to tcp://127.0.0.1:5561
+[collision_worker_05] ready: compas_fab PyBullet(direct), touch lists 11b+1t, connected to tcp://127.0.0.1:5561
+[collision_worker_03] ready: compas_fab PyBullet(direct), touch lists 11b+1t, connected to tcp://127.0.0.1:5561
+[robot_real_rtde] startup: connected host=192.168.0.2 servo_hz=200.0
+[robot_io.b] impl=real_rtde headless=False
+[launcher] robot_io.b heartbeat received
+[launcher] waiting for telem.robot.actual.b first sample...
+[launcher] telem.robot.actual.b sample received
+[launcher] spawn game_controller: C:\Users\yck01\miniconda3\envs\game\python.exe -m apps.game_controller --profile C:\Users\yck01\GitHub\robot_game_controller\config\profiles\demo_team_b.yaml --proc game_controller
+[launcher] waiting for game_controller first heartbeat...
+[game_controller] no active teams; will only emit heartbeat + skeleton state.full
+[game_controller] teams=['b'] collision_check=True
+[game_controller] startup-align reseat team=b attempt=1 j6_robot=-0.4681 j6_dial=-4.6807 max_err_rad=inf
+[launcher] game_controller heartbeat received
+[launcher] spawn haptic_io.b: C:\Users\yck01\miniconda3\envs\game\python.exe -m apps.haptic_io --profile C:\Users\yck01\GitHub\robot_game_controller\config\profiles\demo_team_b.yaml --proc haptic_io.b
+[launcher] waiting for robot_io.b first heartbeat...
+[haptic_io.b] impl=real team=b
+[launcher] robot_io.b heartbeat received
+[launcher] waiting for haptic_io.b first heartbeat...
+[launcher] haptic_io.b heartbeat received
+[launcher] spawn gamemaster_ui: C:\Users\yck01\miniconda3\envs\game\python.exe -m apps.gamemaster_ui --profile C:\Users\yck01\GitHub\robot_game_controller\config\profiles\demo_team_b.yaml --proc gamemaster_ui
+[launcher] waiting for gamemaster_ui first heartbeat...
+[game_controller] startup-align done team=b attempts=1 max_err_rad=0.1347
+pygame 2.6.1 (SDL 2.28.4, Python 3.12.13)
+Hello from the pygame community. https://www.pygame.org/contribute.html
+[launcher] gamemaster_ui heartbeat received
+[launcher] all children up: ['bus_broker', 'collision_broker', 'collision_worker_00', 'collision_worker_01', 'collision_worker_02', 'collision_worker_03', 'collision_worker_04', 'collision_worker_05', 'collision_worker_06', 'collision_worker_07', 'robot_io.b', 'game_controller', 'haptic_io.b', 'gamemaster_ui']
+RTDEControlInterface: RTDE control script is not running!
+[robot_real_rtde] detected protective_stop=True; entering fault handling
+[launcher] --- status ---
+  bus_broker                    age  467.8 ms  reported_loop_hz    1.00  observed_hb_hz  1.00
+  collision_broker              age  310.7 ms  reported_loop_hz    1.00  observed_hb_hz  1.00
+  collision_worker_00           age  326.0 ms  reported_loop_hz  114.34  observed_hb_hz  1.00  checks_per_sec  195.39
+  collision_worker_01           age  341.1 ms  reported_loop_hz  112.80  observed_hb_hz  1.00  checks_per_sec  194.07
+  collision_worker_02           age  360.6 ms  reported_loop_hz  112.18  observed_hb_hz  1.00  checks_per_sec  191.83
+  collision_worker_03           age  326.8 ms  reported_loop_hz  110.09  observed_hb_hz  1.00  checks_per_sec  193.07
+  collision_worker_04           age  326.8 ms  reported_loop_hz  112.65  observed_hb_hz  1.00  checks_per_sec  193.06
+  collision_worker_05           age  326.8 ms  reported_loop_hz  111.10  observed_hb_hz  1.00  checks_per_sec  193.54
+  collision_worker_06           age  365.3 ms  reported_loop_hz  113.54  observed_hb_hz  1.00  checks_per_sec  194.34
+  collision_worker_07           age  373.6 ms  reported_loop_hz  113.73  observed_hb_hz  1.00  checks_per_sec  193.28
+  robot_io.b                    age  477.4 ms  reported_loop_hz  127.18  observed_hb_hz  1.00
+  game_controller               age  205.6 ms  reported_loop_hz   47.21  observed_hb_hz  1.00
+  haptic_io.b                   age  965.0 ms  reported_loop_hz  100.00  observed_hb_hz  1.09
+  gamemaster_ui                 age  985.4 ms  reported_loop_hz   24.94  observed_hb_hz  0.98
+[launcher] --- status ---
+  bus_broker                    age  474.0 ms  reported_loop_hz    1.01  observed_hb_hz  1.00
+  collision_broker              age  315.8 ms  reported_loop_hz    1.01  observed_hb_hz  1.00
+  collision_worker_00           age  346.8 ms  reported_loop_hz   62.71  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_01           age  346.9 ms  reported_loop_hz   62.71  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_02           age  363.2 ms  reported_loop_hz   62.70  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_03           age  331.3 ms  reported_loop_hz   62.70  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_04           age  331.3 ms  reported_loop_hz   62.70  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_05           age  331.3 ms  reported_loop_hz   62.70  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_06           age  363.1 ms  reported_loop_hz   62.70  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_07           age  378.2 ms  reported_loop_hz   62.71  observed_hb_hz  1.00  checks_per_sec    0.00
+  robot_io.b                    age  478.0 ms  reported_loop_hz  114.27  observed_hb_hz  1.00
+  game_controller               age  211.4 ms  reported_loop_hz   60.00  observed_hb_hz  1.00
+  haptic_io.b                   age  970.7 ms  reported_loop_hz   99.99  observed_hb_hz  1.00
+  gamemaster_ui                 age  950.9 ms  reported_loop_hz   22.88  observed_hb_hz  0.99
+[robot_real_rtde] request_recovery: timeout_s=4.00
+[robot_real_rtde] recovery_step: querying dashboard pre-status
+[robot_real_rtde] dashboard pre-status: {'robotmode': 'Robotmode: RUNNING', 'safetymode': 'Safetymode: PROTECTIVE_STOP', 'safetystatus': 'Safetystatus: PROTECTIVE_STOP', 'running': 'Program running: false', 'programState': 'STOPPED <未命名>'}
+[robot_real_rtde] recovery_step: close safety popup + unlock protective stop
+[robot_real_rtde] dashboard unlock responses: {'close safety popup': 'closing safety popup', 'unlock protective stop': 'Protective stop releasing'}
+[robot_real_rtde] dashboard post-unlock: {'robotmode': 'Robotmode: RUNNING', 'safetymode': 'Safetymode: NORMAL', 'safetystatus': 'Safetystatus: NORMAL', 'running': 'Program running: false', 'programState': 'STOPPED <未命名>'}
+[robot_real_rtde] recovery_step: power on + brake release
+[robot_real_rtde] dashboard power responses: {'power on': 'Powering on', 'brake release': 'Brake releasing'}
+[robot_real_rtde] reinit: tearing down OLD interfaces first
+RTDEControlInterface: RTDE control script is not running!
+[robot_real_rtde] teardown: control.servoStop() ok
+RTDEControlInterface: RTDE control script is not running!
+[robot_real_rtde] teardown: control.stopScript() ok
+[robot_real_rtde] teardown: control.disconnect() ok
+[robot_real_rtde] teardown: receive.disconnect() ok
+[robot_real_rtde] reinit: reconnecting receive (startup sequence)
+[robot_real_rtde] reinit: connect_control attempt 1
+[robot_real_rtde] reinit: connect_control attempt 1 OK
+[robot_real_rtde] protective_stop cleared
+[robot_real_rtde] reinit: done program_running=None protective=False control_ok=False
+[robot_real_rtde] dashboard post-reinit: {'robotmode': 'Robotmode: RUNNING', 'safetymode': 'Safetymode: NORMAL', 'safetystatus': 'Safetystatus: NORMAL', 'running': 'Program running: true', 'programState': 'STOPPED <未命名>'}
+[robot_real_rtde] recovery_done: recovery_ok
+[launcher] --- status ---
+  bus_broker                    age  489.5 ms  reported_loop_hz    1.00  observed_hb_hz  1.00
+  collision_broker              age  348.1 ms  reported_loop_hz    1.01  observed_hb_hz  1.00
+  collision_worker_00           age  379.2 ms  reported_loop_hz   60.90  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_01           age  363.8 ms  reported_loop_hz   60.89  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_02           age  394.6 ms  reported_loop_hz   60.88  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_03           age  348.1 ms  reported_loop_hz   60.91  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_04           age  363.8 ms  reported_loop_hz   60.89  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_05           age  363.8 ms  reported_loop_hz   60.89  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_06           age  394.7 ms  reported_loop_hz   60.88  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_07           age  410.2 ms  reported_loop_hz   60.90  observed_hb_hz  1.00  checks_per_sec    0.00
+  robot_io.b                    age  555.3 ms  reported_loop_hz  118.00  observed_hb_hz  0.75
+  game_controller               age  240.9 ms  reported_loop_hz   60.00  observed_hb_hz  1.00
+  haptic_io.b                   age    0.0 ms  reported_loop_hz   99.99  observed_hb_hz  1.00
+  gamemaster_ui                 age  928.7 ms  reported_loop_hz   22.62  observed_hb_hz  0.99
+[launcher] --- status ---
+  bus_broker                    age  643.1 ms  reported_loop_hz    1.00  observed_hb_hz  1.00
+  collision_broker              age  487.1 ms  reported_loop_hz    1.00  observed_hb_hz  1.00
+  collision_worker_00           age  518.4 ms  reported_loop_hz   63.49  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_01           age  518.4 ms  reported_loop_hz   63.50  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_02           age  533.7 ms  reported_loop_hz   63.50  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_03           age  502.7 ms  reported_loop_hz   63.49  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_04           age  502.8 ms  reported_loop_hz   63.49  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_05           age  502.8 ms  reported_loop_hz   63.49  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_06           age  549.0 ms  reported_loop_hz   63.50  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_07           age  549.0 ms  reported_loop_hz   63.50  observed_hb_hz  1.00  checks_per_sec    0.00
+  robot_io.b                    age  690.8 ms  reported_loop_hz  143.95  observed_hb_hz  0.75
+  game_controller               age  383.3 ms  reported_loop_hz   59.99  observed_hb_hz  1.00
+  haptic_io.b                   age  142.6 ms  reported_loop_hz   99.99  observed_hb_hz  1.00
+  gamemaster_ui                 age    0.0 ms  reported_loop_hz   22.57  observed_hb_hz  0.99
+[robot_real_rtde] request_recovery: timeout_s=4.00
+[robot_real_rtde] recovery_done: recovery_not_needed
+[launcher] --- status ---
+  bus_broker                    age  715.8 ms  reported_loop_hz    1.01  observed_hb_hz  1.00
+  collision_broker              age  560.0 ms  reported_loop_hz    1.00  observed_hb_hz  1.00
+  collision_worker_00           age  590.6 ms  reported_loop_hz   63.32  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_01           age  590.6 ms  reported_loop_hz   63.32  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_02           age  606.2 ms  reported_loop_hz   63.32  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_03           age  575.1 ms  reported_loop_hz   63.32  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_04           age  575.1 ms  reported_loop_hz   63.32  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_05           age  575.1 ms  reported_loop_hz   63.32  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_06           age  621.8 ms  reported_loop_hz   63.31  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_07           age  621.8 ms  reported_loop_hz   63.31  observed_hb_hz  1.00  checks_per_sec    0.00
+  robot_io.b                    age  763.6 ms  reported_loop_hz  130.26  observed_hb_hz  1.00
+  game_controller               age  456.0 ms  reported_loop_hz   59.99  observed_hb_hz  1.00
+  haptic_io.b                   age  215.3 ms  reported_loop_hz   99.98  observed_hb_hz  1.00
+  gamemaster_ui                 age 1019.6 ms  reported_loop_hz   22.73  observed_hb_hz  0.99
+[launcher] --- status ---
+  bus_broker                    age  828.9 ms  reported_loop_hz    1.00  observed_hb_hz  1.00
+  collision_broker              age  670.5 ms  reported_loop_hz    1.00  observed_hb_hz  1.00
+  collision_worker_00           age  701.6 ms  reported_loop_hz   63.44  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_01           age  701.6 ms  reported_loop_hz   63.44  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_02           age  733.6 ms  reported_loop_hz   63.44  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_03           age  686.1 ms  reported_loop_hz   63.43  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_04           age  701.6 ms  reported_loop_hz   63.44  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_05           age  686.0 ms  reported_loop_hz   63.43  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_06           age  733.6 ms  reported_loop_hz   63.44  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_07           age  733.6 ms  reported_loop_hz   63.44  observed_hb_hz  1.00  checks_per_sec    0.00
+  robot_io.b                    age  876.0 ms  reported_loop_hz  109.07  observed_hb_hz  1.00
+  game_controller               age  576.6 ms  reported_loop_hz   60.00  observed_hb_hz  1.00
+  haptic_io.b                   age  335.6 ms  reported_loop_hz  100.01  observed_hb_hz  1.00
+  gamemaster_ui                 age  202.8 ms  reported_loop_hz   22.37  observed_hb_hz  0.69
+[launcher] --- status ---
+  bus_broker                    age  914.4 ms  reported_loop_hz    1.00  observed_hb_hz  1.00
+  collision_broker              age  757.0 ms  reported_loop_hz    0.99  observed_hb_hz  1.00
+  collision_worker_00           age  788.3 ms  reported_loop_hz   62.55  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_01           age  788.3 ms  reported_loop_hz   62.55  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_02           age  819.4 ms  reported_loop_hz   62.56  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_03           age  772.6 ms  reported_loop_hz   62.54  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_04           age  788.3 ms  reported_loop_hz   62.55  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_05           age  772.9 ms  reported_loop_hz   62.54  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_06           age  819.4 ms  reported_loop_hz   62.56  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_07           age  819.4 ms  reported_loop_hz   62.56  observed_hb_hz  1.00  checks_per_sec    0.00
+  robot_io.b                    age  972.4 ms  reported_loop_hz  136.87  observed_hb_hz  1.00
+  game_controller               age  658.6 ms  reported_loop_hz   60.00  observed_hb_hz  1.00
+  haptic_io.b                   age  418.1 ms  reported_loop_hz  100.00  observed_hb_hz  1.00
+  gamemaster_ui                 age  460.5 ms  reported_loop_hz   29.76  observed_hb_hz  0.65
+[robot_real_rtde] request_recovery: timeout_s=4.00
+[robot_real_rtde] recovery_done: recovery_not_needed
+[robot_real_rtde] request_recovery: timeout_s=4.00
+[robot_real_rtde] recovery_done: recovery_not_needed
+[robot_real_rtde] request_recovery: timeout_s=4.00
+[robot_real_rtde] recovery_done: recovery_not_needed
+[robot_real_rtde] request_recovery: timeout_s=4.00
+[robot_real_rtde] recovery_done: recovery_not_needed
+[launcher] --- status ---
+  bus_broker                    age  955.2 ms  reported_loop_hz    1.00  observed_hb_hz  1.00
+  collision_broker              age  798.1 ms  reported_loop_hz    1.00  observed_hb_hz  1.00
+  collision_worker_00           age  829.8 ms  reported_loop_hz   63.89  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_01           age  829.8 ms  reported_loop_hz   63.89  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_02           age  860.7 ms  reported_loop_hz   63.88  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_03           age  814.3 ms  reported_loop_hz   63.90  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_04           age  829.8 ms  reported_loop_hz   63.89  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_05           age  814.2 ms  reported_loop_hz   63.90  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_06           age  861.0 ms  reported_loop_hz   63.88  observed_hb_hz  1.00  checks_per_sec    0.00
+  collision_worker_07           age  861.0 ms  reported_loop_hz   63.88  observed_hb_hz  1.00  checks_per_sec    0.00
+  robot_io.b                    age    0.0 ms  reported_loop_hz  107.79  observed_hb_hz  1.00
+  game_controller               age  700.5 ms  reported_loop_hz   60.00  observed_hb_hz  1.00
+  haptic_io.b                   age  459.3 ms  reported_loop_hz   99.99  observed_hb_hz  1.00
+  gamemaster_ui                 age  275.8 ms  reported_loop_hz   22.88  observed_hb_hz  0.90
+[robot_real_rtde] request_recovery: timeout_s=4.00
+[robot_real_rtde] recovery_done: recovery_not_needed
+[launcher] gamemaster_ui exited with code 0; shutting down
+[launcher] shutting down children...
+[collision_broker] stopped
+[bus_broker] stopped
