@@ -71,7 +71,7 @@ tuning:
     prox_floor: 0.6
     forward_timeout_ms: 40
   game:
-    duration_s: 240
+    duration_s: 3600
     sum_score_rate_unit_per_s: 100
     force_stage: play
 
