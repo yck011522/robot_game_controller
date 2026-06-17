@@ -7,7 +7,7 @@
 serial_ports:
   # Team haptic dial boards. Empty means "do not scan; run disconnected".
   haptic_a: []
-  haptic_b: ["COM21", "COM22", "COM23", "COM27", "COM28", "COM29"]
+  haptic_b: ["COM53", "COM52", "COM51", "COM50", "COM49", "COM48"]
 
   # Deferred hardware subsystems. Leave null until the matching process lands.
   safety_barrier: null
