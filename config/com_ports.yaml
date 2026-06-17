@@ -1,0 +1,20 @@
+# Installation-local serial port assignments.
+#
+# Discovery scripts should update this file when hardware is moved to a new
+# PC or USB topology. Runtime processes read these values directly and should
+# not probe unrelated COM ports during launcher startup.
+
+serial_ports:
+  # Team haptic dial boards. Empty means "do not scan; run disconnected".
+  haptic_a: []
+  haptic_b: ["COM21", "COM22", "COM23", "COM27", "COM28", "COM29"]
+
+  # Deferred hardware subsystems. Leave null until the matching process lands.
+  safety_barrier: null
+  light_column_1_3: null
+  light_column_4_5: null
+  light_column_6_8: null
+  admin_buttons: null
+  bucket_motors: null
+  score_board: null
+  weight_sensor: null

@@ -20,6 +20,7 @@ from typing import Any, Callable
 import serial
 import serial.tools.list_ports
 
+from core.com_ports import resolve_serial_ports
 import port_registry
 
 
@@ -255,9 +256,9 @@ class RealHaptic:
         # is derived from robot actual so startup remains coherent.
         self._has_runtime_command = False
 
-        serial_ports = profile.hardware.get("serial_ports", {}) if isinstance(profile.hardware, dict) else {}
-        configured_ports = serial_ports.get(f"haptic_{team}") if isinstance(serial_ports, dict) else None
-        self._configured_ports = [str(v).strip() for v in configured_ports] if isinstance(configured_ports, list) else []
+        port_resolution = resolve_serial_ports(profile, f"haptic_{team}")
+        self._configured_ports = list(port_resolution.ports)
+        self._ports_configured = port_resolution.configured
         self._param_lines = _build_param_lines(profile.tuning.get("haptic", {}))
         self._enable_lines = _build_enable_lines(profile.tuning.get("haptic", {}))
 
@@ -411,7 +412,7 @@ class RealHaptic:
 
     def _candidate_ports(self) -> list[str]:
         """Return configured ports, else auto-discovered CH340 ports."""
-        if self._configured_ports:
+        if self._ports_configured:
             return list(self._configured_ports)
         ports: list[str] = []
         for info in self._list_ports_fn():

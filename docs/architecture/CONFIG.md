@@ -15,6 +15,7 @@ Last reviewed: 2026-06-06.
 ```
 config/
   launcher.yaml          # tiny file: which profile to use when --profile is not given
+  com_ports.yaml         # installation-local COM port assignments from discovery tools
   profiles/
     bus_smoke.yaml       # absolute minimum: bus broker + a tap. Nothing else.
     dev_keyboard.yaml    # P2 manual smoke: all sim, keyboard input, pybullet GUI
@@ -594,9 +595,12 @@ churn during a show).
 
 ## 7. Open items
 
-- Whether to also support per-machine YAML overrides for things like
-  COM port numbers that legitimately change between identical
-  installations. Defer until we run on a second physical machine.
+- COM port numbers are now split into `config/com_ports.yaml` so the
+  launcher does not probe serial hardware during normal startup. Discovery
+  tools should update that file out of band. Existing
+  `hardware.serial_ports` profile entries remain a compatibility fallback,
+  but the standalone file is authoritative when it contains a key, including
+  an empty list to mean "run disconnected; do not scan".
 - Whether profiles should compose (e.g. `extends: dev_keyboard`) once
   there are more than ~5 of them. Defer.
 - Whether `force_stage` in `tuning.game` is the right place for dev
