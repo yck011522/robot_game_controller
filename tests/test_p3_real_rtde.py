@@ -88,8 +88,58 @@ class _FakeRtdeCore:
     def __init__(self) -> None:
         self.receive = _FakeReceive()
         self.control = _FakeControl()
+        self.wait_ready_calls: list[tuple] = []
+        self.power_brake_calls: list[tuple] = []
+        self.dashboard_status_calls: list[tuple] = []
         self.connect_receive_calls: list[str] = []
         self.connect_control_calls: list[tuple[str, float]] = []
+
+    def wait_for_dashboard_ready(
+        self,
+        host: str,
+        *,
+        ready_timeout_s: float,
+        poll_s: float,
+        socket_timeout_s: float,
+        log,
+    ):
+        self.wait_ready_calls.append((host, ready_timeout_s, poll_s, socket_timeout_s))
+        if log is not None:
+            log("fake_wait_ready", {"robotmode": "Robotmode: POWER_OFF"})
+        return {"robotmode": "Robotmode: POWER_OFF", "is in remote control": "true"}
+
+    def power_on_and_release_brakes(
+        self,
+        host: str,
+        *,
+        power_timeout_s: float,
+        brake_timeout_s: float,
+        poll_s: float,
+        socket_timeout_s: float,
+        log,
+    ):
+        self.power_brake_calls.append(
+            (host, power_timeout_s, brake_timeout_s, poll_s, socket_timeout_s)
+        )
+        if log is not None:
+            log("fake_power_brake", {"robotmode": "Robotmode: RUNNING"})
+        return {"post_brake": {"robotmode": "Robotmode: RUNNING"}}
+
+    def dashboard_status_snapshot(self, host: str, timeout_s: float = 1.0):
+        self.dashboard_status_calls.append((host, timeout_s))
+        return {
+            "robotmode": "Robotmode: RUNNING",
+            "safetymode": "Safetymode: NORMAL",
+            "safetystatus": "Safetystatus: NORMAL",
+            "running": "Program running: true",
+            "programState": "PLAYING external_control.urp",
+        }
+
+    def run_dashboard_sequence(self, host: str, commands: list[str], timeout_s: float = 1.0):
+        return {
+            "connected": True,
+            "responses": {command: "ok" for command in commands},
+        }
 
     def connect_receive(self, host: str):
         self.connect_receive_calls.append(host)
@@ -113,6 +163,8 @@ def main() -> int:
     q0, qd0 = robot.read_state()
     assert q0 == fake.receive.q, f"initial actual_q mismatch: {q0}"
     assert qd0 == fake.receive.qd, f"initial actual_qd mismatch: {qd0}"
+    assert fake.wait_ready_calls == [("192.168.0.2", 120.0, 1.0, 2.0)]
+    assert fake.power_brake_calls == [("192.168.0.2", 30.0, 30.0, 1.0, 2.0)]
     assert fake.connect_receive_calls == ["192.168.0.2"]
     assert fake.connect_control_calls == [("192.168.0.2", 200.0)]
     assert robot.rtde_ok is True
@@ -151,7 +203,7 @@ def main() -> int:
     assert status1["fault_reason"] == "rtde_control_error"
 
     robot.maybe_step()
-    assert robot.rtde_ok is True
+    assert robot.rtde_ok is False, "control failure should remain latched without recovery"
     fake.receive.protective_stopped = True
     robot.read_state()
     status2 = robot.status_snapshot()

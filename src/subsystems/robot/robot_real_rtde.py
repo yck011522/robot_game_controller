@@ -19,10 +19,14 @@ SERVOJ_SPEED = 0.5
 SERVOJ_ACCELERATION = 0.5
 CONTROL_RETRY_BACKOFF_S = 0.5
 PROTECTIVE_STOP_UNLOCK_COOLDOWN_S = 0.0
-DASHBOARD_TIMEOUT_S = 0.75
+DASHBOARD_TIMEOUT_S = 2.0
+DEFAULT_STARTUP_READY_TIMEOUT_S = 120.0
 DEFAULT_RECOVERY_TIMEOUT_S = 5.0
 SAFETY_CLEAR_POLL_S = 0.3
 SAFETY_CLEAR_MAX_POLLS = 6
+POWER_ON_TIMEOUT_S = 30.0
+BRAKE_RELEASE_TIMEOUT_S = 30.0
+DASHBOARD_POWER_POLL_S = 1.0
 # Bounded retry while reopening the control channel inside the recovery window.
 CONTROL_CONNECT_RETRY_S = 0.4
 
@@ -38,6 +42,7 @@ class RealRtdeRobot:
         servo_hz: float = DEFAULT_SERVO_HZ,
         lookahead_time: float = DEFAULT_LOOKAHEAD_TIME,
         gain: int = DEFAULT_SERVO_GAIN,
+        startup_ready_timeout_s: float = DEFAULT_STARTUP_READY_TIMEOUT_S,
         startup_timeout_s: float = 5.0,
         startup_poll_s: float = 0.05,
         _rtde_helpers: Any | None = None,
@@ -75,6 +80,8 @@ class RealRtdeRobot:
         self._recovery_attempted = False
         self._last_recovery_note: str | None = None
 
+        self._wait_for_dashboard_startup_ready(float(startup_ready_timeout_s))
+        self._power_on_and_release_brakes(context="startup")
         self._rtde_r = self._rtde_helpers.connect_receive(host)
         self._actual_q = self._wait_for_initial_actual_q(float(startup_timeout_s))
         self._actual_qd = [0.0] * len(self._actual_q)
@@ -205,6 +212,45 @@ class RealRtdeRobot:
             if log_errors:
                 print(f"[robot_real_rtde] receive.disconnect() cleanup raised: {exc}", flush=True)
 
+    def _dashboard_log(self, label: str, payload: Any) -> None:
+        """Print compact dashboard sequence debug lines."""
+        print(f"[robot_real_rtde] dashboard {label}: {payload}", flush=True)
+
+    def _wait_for_dashboard_startup_ready(self, timeout_s: float) -> None:
+        """Wait for the robot controller to be reachable and remotely controllable."""
+        print(
+            f"[robot_real_rtde] startup_step: wait dashboard ready timeout_s={timeout_s:.1f}",
+            flush=True,
+        )
+        self._rtde_helpers.wait_for_dashboard_ready(
+            self._host,
+            ready_timeout_s=timeout_s,
+            poll_s=DASHBOARD_POWER_POLL_S,
+            socket_timeout_s=DASHBOARD_TIMEOUT_S,
+            log=self._dashboard_log,
+        )
+
+    def _power_on_and_release_brakes(
+        self,
+        *,
+        context: str,
+        power_timeout_s: float = POWER_ON_TIMEOUT_S,
+        brake_timeout_s: float = BRAKE_RELEASE_TIMEOUT_S,
+    ) -> None:
+        """Run the shared Dashboard power/brake sequence."""
+        print(
+            f"[robot_real_rtde] {context}_step: power on + brake release",
+            flush=True,
+        )
+        self._rtde_helpers.power_on_and_release_brakes(
+            self._host,
+            power_timeout_s=power_timeout_s,
+            brake_timeout_s=brake_timeout_s,
+            poll_s=DASHBOARD_POWER_POLL_S,
+            socket_timeout_s=DASHBOARD_TIMEOUT_S,
+            log=self._dashboard_log,
+        )
+
     def _reinitialize_interfaces(self) -> None:
         """Reconnect RTDE receive/control after the robot clears a protective stop."""
         # Release the single control slot BEFORE reconnecting.
@@ -255,19 +301,12 @@ class RealRtdeRobot:
 
     def _dashboard_status_snapshot(self, *, label: str) -> dict[str, str]:
         """Fetch a small dashboard status snapshot used by recovery decisions."""
-        info = self._rtde_helpers.run_dashboard_sequence(
+        responses = self._rtde_helpers.dashboard_status_snapshot(
             self._host,
-            [
-                "robotmode",
-                "safetymode",
-                "safetystatus",
-                "running",
-                "programState",
-            ],
             timeout_s=DASHBOARD_TIMEOUT_S,
         )
-        responses = info.get("responses", {}) if isinstance(info, dict) else {}
         if isinstance(responses, dict):
+            self._dashboard_log(label, responses)
             return dict(responses)
         del label
         return {}
@@ -368,13 +407,11 @@ class RealRtdeRobot:
 
             if self._recovery_deadline_expired():
                 return
-            self._rtde_helpers.run_dashboard_sequence(
-                self._host,
-                [
-                    "power on",
-                    "brake release",
-                ],
-                timeout_s=DASHBOARD_TIMEOUT_S,
+            remaining_s = max(0.1, self._recovery_deadline_t - time.perf_counter())
+            self._power_on_and_release_brakes(
+                context="recovery",
+                power_timeout_s=min(POWER_ON_TIMEOUT_S, remaining_s),
+                brake_timeout_s=min(BRAKE_RELEASE_TIMEOUT_S, remaining_s),
             )
 
             if self._recovery_deadline_expired():

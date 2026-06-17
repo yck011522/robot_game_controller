@@ -7,6 +7,7 @@ the migration staging area.
 from __future__ import annotations
 
 import socket
+import time
 from typing import Any
 
 from rtde_control import RTDEControlInterface
@@ -15,6 +16,14 @@ from rtde_receive import RTDEReceiveInterface
 
 PORT_DASHBOARD = 29999
 PORT_RTDE = 30004
+DASHBOARD_STATUS_COMMANDS = [
+    "robotmode",
+    "safetymode",
+    "safetystatus",
+    "running",
+    "programState",
+    "is in remote control",
+]
 
 
 class DashboardClient:
@@ -81,6 +90,181 @@ def run_dashboard_sequence(robot_ip: str, commands: list[str], timeout_s: float 
         result["responses"] = responses
     finally:
         dash.close()
+    return result
+
+
+def dashboard_status_snapshot(robot_ip: str, timeout_s: float = 1.0) -> dict[str, str]:
+    """Fetch the dashboard status lines used by startup and recovery."""
+    info = run_dashboard_sequence(robot_ip, DASHBOARD_STATUS_COMMANDS, timeout_s=timeout_s)
+    responses = info.get("responses", {}) if isinstance(info, dict) else {}
+    return dict(responses) if isinstance(responses, dict) else {}
+
+
+def dashboard_robotmode_running(response: str | None) -> bool:
+    """Return whether a dashboard robotmode line reports RUNNING."""
+    return isinstance(response, str) and "RUNNING" in response.upper()
+
+
+def dashboard_robotmode_idle_or_running(response: str | None) -> bool:
+    """Return whether the robot has finished the power-on transition."""
+    if not isinstance(response, str):
+        return False
+    upper = response.upper()
+    return "IDLE" in upper or "RUNNING" in upper
+
+
+def dashboard_robotmode_starting(response: str | None) -> bool:
+    """Return whether a dashboard robotmode line still looks transitional."""
+    if not isinstance(response, str):
+        return False
+    upper = response.upper()
+    return "BOOT" in upper or "START" in upper
+
+
+def dashboard_remote_control(response: str | None) -> bool | None:
+    """Parse the dashboard remote-control boolean when the controller exposes it."""
+    if not isinstance(response, str):
+        return None
+    normalized = response.strip().lower()
+    if normalized == "true":
+        return True
+    if normalized == "false":
+        return False
+    return None
+
+
+def dashboard_safety_protective(response: str | None) -> bool:
+    """Return whether a dashboard safetystatus line reports a protective stop."""
+    return isinstance(response, str) and "PROTECTIVE_STOP" in response.upper()
+
+
+def dashboard_running_true(response: str | None) -> bool:
+    """Return whether a dashboard running line reports the program as running."""
+    return isinstance(response, str) and "program running: true" in response.lower()
+
+
+def wait_for_dashboard_ready(
+    robot_ip: str,
+    *,
+    ready_timeout_s: float = 120.0,
+    poll_s: float = 1.0,
+    socket_timeout_s: float = 1.0,
+    log=None,
+) -> dict[str, str]:
+    """Wait until Dashboard/RTDE are reachable, not local, and not booting."""
+    deadline = time.monotonic() + max(0.1, float(ready_timeout_s))
+    poll_s = max(0.05, float(poll_s))
+    last_note = "not checked yet"
+    while time.monotonic() <= deadline:
+        dashboard_open = is_tcp_open(robot_ip, PORT_DASHBOARD, timeout_s=socket_timeout_s)
+        rtde_open = is_tcp_open(robot_ip, PORT_RTDE, timeout_s=socket_timeout_s)
+        if dashboard_open:
+            try:
+                snapshot = dashboard_status_snapshot(robot_ip, timeout_s=socket_timeout_s)
+            except Exception as exc:  # noqa: BLE001
+                last_note = f"dashboard status failed: {exc}"
+            else:
+                remote = dashboard_remote_control(snapshot.get("is in remote control"))
+                starting = dashboard_robotmode_starting(snapshot.get("robotmode"))
+                if log is not None:
+                    log(
+                        "startup_wait",
+                        {
+                            "dashboard_open": dashboard_open,
+                            "rtde_open": rtde_open,
+                            "remote_control": remote,
+                            "starting": starting,
+                            "status": snapshot,
+                        },
+                    )
+                if rtde_open and remote is not False and not starting:
+                    return snapshot
+                if not rtde_open:
+                    last_note = f"RTDE TCP {PORT_RTDE} is not reachable"
+                elif remote is False:
+                    last_note = "robot is in local control"
+                elif starting:
+                    last_note = f"robot is starting up: {snapshot.get('robotmode')}"
+        else:
+            last_note = f"Dashboard TCP {PORT_DASHBOARD} is not reachable"
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0.0:
+            break
+        time.sleep(min(poll_s, remaining))
+
+    raise TimeoutError(
+        f"UR dashboard/RTDE did not become ready within {ready_timeout_s:.1f}s: {last_note}"
+    )
+
+
+def _poll_dashboard_status(
+    robot_ip: str,
+    *,
+    predicate,
+    timeout_s: float,
+    poll_s: float,
+    socket_timeout_s: float,
+    log=None,
+    label: str,
+) -> dict[str, str]:
+    deadline = time.monotonic() + max(0.1, float(timeout_s))
+    poll_s = max(0.05, float(poll_s))
+    last_status: dict[str, str] = {}
+    while time.monotonic() <= deadline:
+        last_status = dashboard_status_snapshot(robot_ip, timeout_s=socket_timeout_s)
+        if log is not None:
+            log(label, last_status)
+        if predicate(last_status):
+            return last_status
+        remaining = deadline - time.monotonic()
+        if remaining <= 0.0:
+            break
+        time.sleep(min(poll_s, remaining))
+    raise TimeoutError(f"timed out waiting for {label}: {last_status}")
+
+
+def power_on_and_release_brakes(
+    robot_ip: str,
+    *,
+    power_timeout_s: float = 30.0,
+    brake_timeout_s: float = 30.0,
+    poll_s: float = 1.0,
+    socket_timeout_s: float = 1.0,
+    log=None,
+) -> dict[str, Any]:
+    """Run the Dashboard power-on/brake-release sequence and wait for RUNNING."""
+    result: dict[str, Any] = {
+        "power_on": run_dashboard_sequence(robot_ip, ["power on"], timeout_s=socket_timeout_s),
+    }
+    if log is not None:
+        log("power_on", result["power_on"])
+
+    result["post_power"] = _poll_dashboard_status(
+        robot_ip,
+        predicate=lambda status: dashboard_robotmode_idle_or_running(status.get("robotmode")),
+        timeout_s=power_timeout_s,
+        poll_s=poll_s,
+        socket_timeout_s=socket_timeout_s,
+        log=log,
+        label="post_power",
+    )
+
+    result["brake_release"] = run_dashboard_sequence(
+        robot_ip, ["brake release"], timeout_s=socket_timeout_s
+    )
+    if log is not None:
+        log("brake_release", result["brake_release"])
+
+    result["post_brake"] = _poll_dashboard_status(
+        robot_ip,
+        predicate=lambda status: dashboard_robotmode_running(status.get("robotmode")),
+        timeout_s=brake_timeout_s,
+        poll_s=poll_s,
+        socket_timeout_s=socket_timeout_s,
+        log=log,
+        label="post_brake",
+    )
     return result
 
 
