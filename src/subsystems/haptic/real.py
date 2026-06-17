@@ -20,12 +20,12 @@ from typing import Any, Callable
 import serial
 import serial.tools.list_ports
 
-from core.com_ports import resolve_serial_ports
+from core.com_ports import require_serial_baudrate, resolve_serial_ports
 import port_registry
 
 
 _CH340_VID_PIDS = {(0x1A86, 0x7522), (0x1A86, 0x7523)}
-_BAUDRATE = 115200
+_SERIAL_SETTINGS_KEY = "p5_haptic_single_dial"  # config key that owns this firmware's serial speed
 _DISCOVERY_INTERVAL_S = 3.0
 _WATCHDOG_TIMEOUT_S = 0.5
 _PROBE_TIMEOUT_S = 1.5
@@ -52,11 +52,13 @@ class _SingleDialBoard:
         *,
         port: str,
         owner: str,
+        baudrate: int,
         serial_factory: Callable[[], Any],
         now_fn: Callable[[], float],
         param_lines: list[tuple[str, int]],
     ) -> None:
         self.port = port
+        self.baudrate = baudrate  # baudrate loaded from config/com_ports.yaml for this firmware
         self.dial_id: int | None = None
         self.telemetry = _DialTelemetry()
         # True after host sends an R command to align dial coordinates with
@@ -93,7 +95,7 @@ class _SingleDialBoard:
         try:
             ser = self._serial_factory()
             ser.port = self.port
-            ser.baudrate = _BAUDRATE
+            ser.baudrate = self.baudrate
             ser.timeout = 0.05
             ser.write_timeout = 0.0
             ser.dtr = False
@@ -257,6 +259,7 @@ class RealHaptic:
         self._has_runtime_command = False
 
         port_resolution = resolve_serial_ports(profile, f"haptic_{team}")
+        self._baudrate = require_serial_baudrate(_SERIAL_SETTINGS_KEY)
         self._configured_ports = list(port_resolution.ports)
         self._ports_configured = port_resolution.configured
         self._param_lines = _build_param_lines(profile.tuning.get("haptic", {}))
@@ -395,6 +398,7 @@ class RealHaptic:
             board = _SingleDialBoard(
                 port=port,
                 owner=f"haptic_io.{self._team}",
+                baudrate=self._baudrate,
                 serial_factory=self._serial_factory,
                 now_fn=self._now,
                 param_lines=self._param_lines,

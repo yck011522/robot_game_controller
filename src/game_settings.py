@@ -102,7 +102,7 @@ class GameSettings:
     # When True, use simulated weight sensors instead of real load cells
     simulate_weight_sensors: bool = False
     # Simulated dial angles in joint degrees, keyed by motor ID.
-    # Written by the simulator UI panel, read by SimulatedHapticSystem.
+    # Written by simulator UI paths and read by simulated haptic runtimes.
     sim_dial_angles: Dict[int, float] = field(
         default_factory=lambda: {mid: 0.0 for mid in ALL_MOTOR_IDS}
     )

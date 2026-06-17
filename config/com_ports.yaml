@@ -10,11 +10,18 @@ serial_ports:
   haptic_b: ["COM53", "COM52", "COM51", "COM50", "COM49", "COM48"]
 
   # Deferred hardware subsystems. Leave null until the matching process lands.
-  safety_barrier: null
   light_column_1_3: "COM45" # CH1/A
   light_column_4_5: "COM39" # CH2/B
   light_column_6_8: "COM42" # CH3/C
+  safety_barrier: "COM43" # CH4/D
   weight_sensor: "COM46" # CH5/E
   bucket_motors: "COM41" # CH6/F
   score_board: "COM40" # CH7/G
   admin_buttons: "COM44" # CH8/H
+
+serial_settings:
+  p5_haptic_single_dial:
+    baudrate: 115200 # USB serial speed for the single-dial ESP32 haptic firmware.
+  light_columns:
+    baudrate: 921600 # RS485 speed validated for the LED column controllers.
+    inter_command_delay_s: 0.002 # Minimum gap between LED frames; lower values can corrupt colors.

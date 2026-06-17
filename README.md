@@ -128,9 +128,10 @@ Individual child processes are launchable by hand using the same
 CLI the launcher uses internally
 (see [docs/architecture/SUPERVISOR.md §3.1](docs/architecture/SUPERVISOR.md#31-launching-a-single-process-for-development)).
 
-The legacy single-process app still works too:
+The legacy single-process app has been retired. `src/main.py` now only prints
+a compatibility message; use the launcher instead:
 
 ```powershell
 conda activate game
-python src/main.py
+python -m apps.launcher --profile <profile>
 ```

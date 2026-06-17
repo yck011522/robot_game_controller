@@ -1,85 +1,24 @@
-"""Entry point — wires GameSettings, GameController, and GameMasterUI together.
+"""Compatibility entry point for the retired single-process runtime.
 
-Threading model:
-  - Main thread: Tkinter UI (required by Tkinter)
-  - Game loop thread: GameController (50 Hz)
-  - Haptic threads: reader/writer/discovery (managed by HapticSystem)
-  - Robot thread: physics simulation (managed by SimulatedRobotInterface)
-
-Usage:
-    python main.py              # Normal mode (requires hardware)
-    python main.py --simulate   # Simulated haptic controllers (no hardware)
+The maintained launch path is now the process supervisor in `apps.launcher`.
+This stub exists so old `python src/main.py` commands fail with a useful
+message instead of importing archived modules.
 """
 
+from __future__ import annotations
+
 import sys
-import os
-import argparse
-
-# Ensure src directory is on the path
-sys.path.insert(0, os.path.dirname(__file__))
-
-from game_settings import GameSettings
-from game_controller import GameController
-from gamemaster_ui import GameMasterUI
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Robot Game Controller")
-    parser.add_argument(
-        "--sim-haptics",
-        action="store_true",
-        help="Use simulated haptic dial controllers (no ESP32 hardware required)",
+def main() -> int:
+    """Print the supported launcher command and exit with a usage error."""
+
+    print(
+        "The root single-process runtime has been archived. "
+        "Use `python -m apps.launcher --profile <profile>` from the repo root."
     )
-    parser.add_argument(
-        "--sim-robot",
-        action="store_true",
-        help="Use simulated robot instead of connecting via RTDE",
-    )
-    parser.add_argument(
-        "--sim-weights",
-        action="store_true",
-        help="Use simulated weight sensors instead of real load cells",
-    )
-    parser.add_argument(
-        "--sim-all",
-        action="store_true",
-        help="Enable all simulations (haptics, robot, weight sensors)",
-    )
-    parser.add_argument(
-        "--robot-ip",
-        nargs=2,
-        metavar=("TEAM1_IP", "TEAM2_IP"),
-        help="IP addresses of the two UR robots (implies --no-sim-robot)",
-    )
-    args = parser.parse_args()
-
-    settings = GameSettings()
-    if args.sim_all or args.sim_haptics:
-        settings.set("simulate_haptics", True)
-    if args.sim_all or args.sim_robot:
-        settings.set("simulate_robot", True)
-    if args.sim_all or args.sim_weights:
-        settings.set("simulate_weight_sensors", True)
-    if args.robot_ip:
-        settings.set("simulate_robot", False)
-        settings.set("team1_robot_ip", args.robot_ip[0])
-        settings.set("team2_robot_ip", args.robot_ip[1])
-
-    controller = GameController(settings)
-    ui = GameMasterUI(settings)
-
-    # Start the game controller (runs on its own thread)
-    controller.start()
-
-    try:
-        # Run Tkinter on the main thread (blocking)
-        ui.run()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        controller.stop()
-        print("Shutdown complete.")
+    return 2
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

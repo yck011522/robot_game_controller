@@ -162,19 +162,14 @@ python -c "import serial.tools.list_ports; [print(p) for p in serial.tools.list_
 
 ## 5. Auto-Start on Boot (Optional, Later)
 
-For production deployment, set up the game controller to launch automatically.
-
-> The multi-process launcher already exists. Keep using the legacy
-> `src/main.py` entry point only while the deployment profile is still
-> under construction; once the deployment profile is finalized, switch
-> this batch file to `python -m apps.launcher --profile <profile>`.
+For production deployment, set up the launcher to start automatically.
 
 1. Create a batch file `C:\robot_game_controller\start_game.bat`:
    ```bat
    @echo off
    call C:\Users\<USER>\miniforge3\Scripts\activate.bat game
    cd /d C:\robot_game_controller
-   python src\main.py
+   python -m apps.launcher --profile <profile>
    ```
 2. Add a shortcut to `shell:startup` or create a Windows Task Scheduler entry
 

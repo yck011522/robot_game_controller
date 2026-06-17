@@ -21,7 +21,7 @@ Strip XY mapping (center of arena = 0,0):
   71: (1773, -1480), 72: (1868, -1480)
   81: (2272, 0),     82: (2367, 0)
 
-Protocol: RS485 at 9600 baud (or user-specified).
+Protocol: RS485 using the baudrate configured in `config/com_ports.yaml`.
 Command format (WS2811/12V LED strips):
   [Header: DD 55 EE] [Group: 00 00] [Device: 00 XX] [Port: 01/02] [Function: 99]
   [LED Type: 02] [Reserved: 00 00] [Length: 00 54] [Repeat: 00 01]
@@ -42,6 +42,7 @@ except ImportError:
     serial = None
 
 import port_registry
+from core.com_ports import require_serial_baudrate, require_serial_float
 
 logger = logging.getLogger(__name__)
 
@@ -59,10 +60,9 @@ _LED_TYPE_RESERVED = bytes([0x00, 0x00])
 _LED_LENGTH = 0x54  # 84 bytes = 28 LEDs × 3 RGB
 _LED_REPEAT = bytes([0x00, 0x01])
 _LEDS_PER_STRIP = 28
-_DEFAULT_BAUDRATE = 921600
+_SERIAL_SETTINGS_KEY = "light_columns"  # config key that owns LED RS485 transport settings
 # Validated at 921600 baud: 2 ms is reliable, 1 ms produces corrupted colors.
 _RECOMMENDED_MIN_INTER_COMMAND_S = 0.002
-_DEFAULT_INTER_COMMAND_S = 0.002
 
 # ─────────────────────────────────────────────────────────────────────────────
 # USB-RS485 Adapter Detection
@@ -356,16 +356,18 @@ class RS485Connection:
     def __init__(
         self,
         port: Optional[str] = None,
-        baudrate: int = _DEFAULT_BAUDRATE,
+        baudrate: Optional[int] = None,
         write_timeout: float = 1.0,
     ):
         """
         Args:
             port: Serial port name (e.g., 'COM3'). If None, auto-detect.
-            baudrate: Baud rate (default 9600)
+            baudrate: Baud rate supplied by the caller from config/com_ports.yaml.
         """
+        if baudrate is None:
+            raise ValueError("RS485Connection requires a config-sourced baudrate")
         self.port = port
-        self.baudrate = baudrate
+        self.baudrate = baudrate  # RS485 speed owned by config/com_ports.yaml
         self.write_timeout = write_timeout
         self.ser = None
         self._lock = threading.Lock()
@@ -644,8 +646,8 @@ class LEDSystem:
         self,
         serial_port: Optional[str] = None,
         serial_ports: Optional[List[str]] = None,
-        baudrate: int = _DEFAULT_BAUDRATE,
-        inter_command_delay_s: float = _DEFAULT_INTER_COMMAND_S,
+        baudrate: Optional[int] = None,
+        inter_command_delay_s: Optional[float] = None,
         debug_hex: bool = False,
         auto_discover: bool = True,
         exclude_ports: Optional[set] = None,
@@ -655,16 +657,23 @@ class LEDSystem:
             serial_port: Single RS485 port (legacy compatibility).
             serial_ports: Explicit list of RS485 ports.
                           Takes precedence over *serial_port*.
-            baudrate: RS485 baud rate.
-            inter_command_delay_s: Delay between RS485 frames.
+            baudrate: Deprecated; configure serial_settings.light_columns.baudrate.
+            inter_command_delay_s: Deprecated; configure serial_settings.light_columns.inter_command_delay_s.
             debug_hex: If True, log outgoing frame hex.
             auto_discover: If True, run a background thread that scans for
                            RS485 adapters and probes LED controllers.
             exclude_ports: COM port names to skip during auto-discovery
                            (e.g. ports claimed by the haptic system).
         """
-        self._baudrate = baudrate
-        self._inter_command_delay_s = max(0.0, inter_command_delay_s)
+        if baudrate is not None:
+            raise ValueError("LEDSystem baudrate must be configured in config/com_ports.yaml")
+        if inter_command_delay_s is not None:
+            raise ValueError("LEDSystem inter-command delay must be configured in config/com_ports.yaml")
+        self._baudrate = require_serial_baudrate(_SERIAL_SETTINGS_KEY)
+        self._inter_command_delay_s = max(
+            0.0,
+            require_serial_float(_SERIAL_SETTINGS_KEY, "inter_command_delay_s", min_value=0.0),
+        )
         self._debug_hex = debug_hex
         self._auto_discover = auto_discover
         self._exclude_ports = set(exclude_ports) if exclude_ports else set()

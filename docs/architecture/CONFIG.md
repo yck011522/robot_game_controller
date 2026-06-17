@@ -595,12 +595,14 @@ churn during a show).
 
 ## 7. Open items
 
-- COM port numbers are now split into `config/com_ports.yaml` so the
-  launcher does not probe serial hardware during normal startup. Discovery
-  tools should update that file out of band. Existing
+- COM port numbers and serial connection settings are now split into
+  `config/com_ports.yaml` so the launcher does not probe serial hardware
+  during normal startup. Discovery tools should update that file out of band.
+  Existing
   `hardware.serial_ports` profile entries remain a compatibility fallback,
   but the standalone file is authoritative when it contains a key, including
-  an empty list to mean "run disconnected; do not scan".
+  an empty list to mean "run disconnected; do not scan". Baud rates live under
+  `serial_settings` and are required by runtime serial code.
 - Whether profiles should compose (e.g. `extends: dev_keyboard`) once
   there are more than ~5 of them. Defer.
 - Whether `force_stage` in `tuning.game` is the right place for dev

@@ -90,8 +90,8 @@ These apply to every phase below; they are not separate phases.
   new paths.
 - Add `docs/MIGRATION_PLAN.md` (this file) and ensure the architecture
   docs link to it.
-- The existing `src/main.py` and the old gamemaster UI keep running
-  unchanged — anyone running the system today is unaffected.
+- The old `src/main.py` single-process entry point was later retired once
+  the process launcher became the maintained runtime path.
 
 **Exit criterion:** repo tree matches the target layout; existing
 launch path still works.
@@ -123,7 +123,8 @@ launch path still works.
   prints a 5 s status table (per-child heartbeat age, reported `loop_hz`,
   bus-observed heartbeat rate). No respawn yet — that lands in P12.
 - `requirements.txt` gains `pyzmq>=26` and `PyYAML>=6`.
-- Legacy `src/main.py` is untouched.
+- Legacy `src/main.py` was initially untouched for P1, then later replaced
+  with a compatibility stub that points to `apps.launcher`.
 
 **Exit criterion (met):** `python -m apps.launcher --profile bus_smoke`
 (with `PYTHONPATH=src`) brings the broker up, the broker emits a 1 Hz
@@ -369,10 +370,10 @@ single-dial protocol, expected behavior, and acceptance criteria.
 - Infrequent settings such as gains, torque limits, detent spacing,
   vibration, and telemetry interval should remain out-of-band profile /
   connect-time writes, not part of the per-tick command stream.
-- `src/haptic_serial.py`, `src/enumerate_usb.py`, and
-  `src/port_registry.py` are useful starting points, but the current
-  serial stack is not directly compatible with the planned hardware
-  split because it assumes two motors per board.
+- The retired `src/haptic_serial.py` dual-motor stack was useful context,
+  but it is no longer part of the maintained runtime because it assumes two
+  motors per board. `src/enumerate_usb.py` and `src/port_registry.py` remain
+  available as supporting utilities.
 - P5 should therefore rev the firmware protocol instead of carrying the
   old dual-motor shape forward.
 - Required protocol change: one persistent dial ID per board, not

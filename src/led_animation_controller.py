@@ -44,8 +44,8 @@ class LEDAnimationController:
         self,
         serial_port: Optional[str] = None,
         serial_ports: Optional[List[str]] = None,
-        baudrate: int = 921600,
-        inter_command_delay_s: float = 0.002,
+        baudrate: Optional[int] = None,
+        inter_command_delay_s: Optional[float] = None,
         debug_hex: bool = False,
         auto_discover: bool = True,
         exclude_ports: Optional[set] = None,
@@ -54,8 +54,8 @@ class LEDAnimationController:
         Args:
             serial_port: RS485 port (auto-detected if None). Legacy single-bus.
             serial_ports: Explicit list of RS485 ports (multi-bus).
-            baudrate: RS485 baud rate (default 921600)
-            inter_command_delay_s: Delay between RS485 packets for parser stability
+            baudrate: Deprecated; configure serial_settings.light_columns.baudrate.
+            inter_command_delay_s: Deprecated; configure serial_settings.light_columns.inter_command_delay_s.
             debug_hex: If True, logs outgoing packet bytes
             auto_discover: If True, background-scan for RS485 adapters and probe
                            for LED controllers.

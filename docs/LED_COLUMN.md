@@ -370,11 +370,14 @@ AA BB
 
 ## 12. Validated Timing Constraints (Windows + RS485)
 
-These values were validated on the current test setup (single controller, strips 11/12):
+These values are owned by `config/com_ports.yaml` under
+`serial_settings.light_columns`. The current show config uses:
 
-- `baudrate = 115200` works reliably.
-- Flash tests pass reliably with inter-frame delay `>= 7 ms`.
-- At `6 ms`, flashing becomes unreliable (frames appear dropped/ignored).
+- `baudrate = 921600`
+- `inter_command_delay_s = 0.002`
+
+Earlier 115200-baud tests required much larger frame spacing; keep those
+numbers as historical context only, not as runtime defaults.
 
 ### Why 6 ms Can Fail
 
@@ -383,45 +386,44 @@ Each full-strip command is approximately 102 bytes on the wire.
 - UART 8N1 sends 10 bits per byte.
 - Wire time per frame is therefore:
 
-`102 bytes * 10 bits / 115200 bps = 8.85 ms`
+`102 bytes * 10 bits / 921600 bps = 1.11 ms`
 
 So practical command spacing should include:
 
-- `~8.85 ms` transmission time
+- `~1.11 ms` transmission time
 - plus extra controller parse/processing margin
 
-This makes `>= 7 ms` additional delay a practical floor on this setup, and `10 ms` a safer default.
+The current configured `2 ms` additional delay has been reliable with the
+921600-baud setup.
 
 ### Animation Planning Implication
 
 For per-command delay `d` milliseconds:
 
-`command_period_ms ~= 8.85 + d`
+`command_period_ms ~= 1.11 + d`
 
-At `d = 10 ms`, command period is about `18.85 ms`, giving:
+At `d = 2 ms`, command period is about `3.11 ms`, giving:
 
-- maximum command rate `~53 Hz`
-- for 2 strips updated each frame, max frame rate `~26 FPS`
+- maximum command rate `~321 Hz`
+- for 2 strips updated each frame, max frame rate `~160 FPS`
 
 Recommendation:
 
-- Use `10 ms` inter-command delay as default for reliability.
-- Avoid assuming 50 FPS for multi-strip updates at 115200 baud.
+- Keep LED serial timing in `config/com_ports.yaml`.
+- Avoid assuming old 115200-baud timing limits after switching to 921600 baud.
 - Prefer updating only changed strips per frame where possible.
 
-### Note on Practical 35 FPS Observation
+### Historical 115200-Baud Observation
 
-In tests, around 35 FPS was observed for dual-strip animation despite the conservative
-`~26.5 FPS` estimate above.
+In earlier 115200-baud tests, around 35 FPS was observed for dual-strip animation
+despite a conservative `~26.5 FPS` estimate.
 
 Reason: there are two pacing models:
 
-- **between-all-commands** (safer): delay is enforced after every command
-	- For 2 strips with 10 ms gap: about `26.5 FPS` max
-- **between-strips-only** (faster): delay only between A/B commands within one frame
-	- For 2 strips with 10 ms gap: about `35.9 FPS` max
+- **between-all-commands** (safer): delay was enforced after every command.
+- **between-strips-only** (faster): delay was only enforced between A/B commands within one frame.
 
 The higher observed value matches the **between-strips-only** model.
-For production reliability, prefer **between-all-commands** unless additional testing
-proves long-run stability at the faster mode.
-
+For production reliability, keep the active pacing values in `config/com_ports.yaml`
+and prefer **between-all-commands** unless additional testing proves long-run
+stability at a faster mode.

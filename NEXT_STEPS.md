@@ -240,14 +240,13 @@ Order of reading for a fresh session:
      protocol; unchanged by the migration.
    - [docs/LED_COLUMN.md](docs/LED_COLUMN.md)
    - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
-7. Current source (legacy, to map onto the target architecture):
-   - [src/main.py](src/main.py) — current single-process launcher (threads).
-   - [src/game_controller.py](src/game_controller.py) — current GC + game loop.
+7. Current source and archived legacy context:
+   - [src/main.py](src/main.py) — compatibility stub; use `apps.launcher`.
+   - [archive/game_controller.py](archive/game_controller.py) — archived single-process GC + game loop.
    - [src/game_settings.py](src/game_settings.py) — current shared state object.
    - [src/state_publisher.py](src/state_publisher.py) — current UDP broadcaster.
    - [src/gamemaster_ui.py](src/gamemaster_ui.py) — current Tk UI to be replaced.
-   - [src/jogging_controller.py](src/jogging_controller.py)
-   - [src/haptic_serial.py](src/haptic_serial.py)
+   - [archive/jogging_controller.py](archive/jogging_controller.py) — archived single-process jogging logic.
    - [src/robot_interface.py](src/robot_interface.py)
    - [src/weight_sensor.py](src/weight_sensor.py)
    - [src/led_animation_controller.py](src/led_animation_controller.py)

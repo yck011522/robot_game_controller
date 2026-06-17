@@ -234,14 +234,13 @@ class JoggingController:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    import time
     import sys
-    import os
 
-    # Add src directory to path for importing haptic_serial
-    sys.path.insert(0, os.path.dirname(__file__))
-    from haptic_serial import HapticSystem
-    from robot_interface import SimulatedRobotInterface
+    print(
+        "JoggingController is a library module. Use `python -m apps.launcher "
+        "--profile <profile>` for integrated runtime tests."
+    )
+    sys.exit(0)
 
     # --- Settings ---
     TEAM_1_MOTORS = [11, 12, 13, 14, 15, 16]

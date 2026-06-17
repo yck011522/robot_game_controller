@@ -22,11 +22,10 @@ import time
 import threading
 import sys
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Protocol
 
 from game_settings import GameSettings, TEAM1_MOTOR_IDS, TEAM2_MOTOR_IDS
 from jogging_controller import JoggingController, JointConfig, JointState
-from haptic_serial import HapticSystem, SimulatedHapticSystem
 from robot_interface import SimulatedRobotInterface, URRobotInterface
 from led_animation_controller import LEDAnimationController
 from weight_sensor import (
@@ -84,6 +83,112 @@ STAGES = ["Sync", "Idle", "Tutorial", "GameOn", "Conclusion", "Reset"]
 _SYNC_TOLERANCE_DEG = 2.0
 
 
+@dataclass(frozen=True)
+class _SimTelemetryFrame:
+    """Immutable simulated haptic telemetry frame returned to the game loop."""
+
+    motor_id: int
+    angle: int  # dial position in decidegrees, matching haptic firmware telemetry
+    speed: int  # dial velocity in decidegrees per second; zero for this simple simulator
+    torque: int  # reported motor torque in milliamps; zero because no motor exists
+    timestamp: float  # wall-clock sample time from time.time()
+
+
+class _HapticRuntime(Protocol):
+    """Minimal haptic API consumed by this legacy single-process controller."""
+
+    def start(self) -> None:
+        """Start haptic communication or simulation."""
+
+    def stop(self) -> None:
+        """Stop haptic communication or simulation."""
+
+    def get_all_telemetry(self) -> dict[int, Optional[_SimTelemetryFrame]]:
+        """Return latest haptic telemetry keyed by motor ID."""
+
+    def set_control(
+        self,
+        motor_id: int,
+        position: int,
+        min_bound: Optional[int] = None,
+        max_bound: Optional[int] = None,
+    ) -> None:
+        """Apply a haptic feedback target for one motor."""
+
+    @property
+    def connected_motor_ids(self) -> set[int]:
+        """Return the motor IDs currently considered connected."""
+
+
+class _SimulatedHapticSystem:
+    """GameSettings-backed haptic simulator for the legacy single-process UI.
+
+    The retired dual-motor serial hardware stack used to provide both real and
+    simulated runtimes. Keeping this tiny simulator here preserves the old
+    desktop demo path without keeping the obsolete hardware driver alive.
+    """
+
+    def __init__(
+        self,
+        expected_motor_ids: list[int],
+        settings: GameSettings,
+        motor_bounds: Optional[dict[int, tuple[int, int]]] = None,
+    ) -> None:
+        """Create a simulator for the requested haptic motor IDs."""
+
+        self.expected_motor_ids = set(expected_motor_ids)  # motors surfaced as connected after start()
+        self._settings = settings  # shared UI/game register used for simulated dial positions
+        self._motor_bounds = dict(motor_bounds) if motor_bounds else {}  # retained for API compatibility
+        self._started = False  # True after start(); gates telemetry and connection status
+
+    def start(self) -> None:
+        """Mark every configured simulated haptic motor as connected."""
+
+        self._started = True
+
+    def stop(self) -> None:
+        """Mark simulated haptic motors as disconnected."""
+
+        self._started = False
+
+    def get_all_telemetry(self) -> dict[int, Optional[_SimTelemetryFrame]]:
+        """Return telemetry for every expected motor."""
+
+        return {mid: self.get_telemetry(mid) for mid in self.expected_motor_ids}
+
+    def get_telemetry(self, motor_id: int) -> Optional[_SimTelemetryFrame]:
+        """Return one simulated telemetry frame, or None before start()."""
+
+        if not self._started or motor_id not in self.expected_motor_ids:
+            return None
+        sim_angles = self._settings.get("sim_dial_angles")  # joint degrees keyed by motor ID
+        joint_deg = sim_angles.get(motor_id, 0.0)  # simulated joint angle in degrees
+        gear_ratio = self._settings.get("gear_ratio")  # dial rotations per robot joint rotation
+        decideg = int(round(joint_deg * gear_ratio * 10.0))  # convert degrees to decidegrees
+        return _SimTelemetryFrame(
+            motor_id=motor_id,
+            angle=decideg,
+            speed=0,
+            torque=0,
+            timestamp=time.time(),
+        )
+
+    def set_control(
+        self,
+        motor_id: int,
+        position: int,
+        min_bound: Optional[int] = None,
+        max_bound: Optional[int] = None,
+    ) -> None:
+        """Accept feedback commands for API compatibility; simulation ignores them."""
+
+    @property
+    def connected_motor_ids(self) -> set[int]:
+        """Return all expected motors while the simulator is running."""
+
+        return set(self.expected_motor_ids) if self._started else set()
+
+
 @dataclass
 class _TeamPipeline:
     """Per-team subsystem bundle: one robot arm + its haptics + jogging controller."""
@@ -91,7 +196,7 @@ class _TeamPipeline:
     team_id: int
     motor_ids: list[int]
     jogger: JoggingController
-    haptic: HapticSystem  # or SimulatedHapticSystem
+    haptic: _HapticRuntime
     robot: SimulatedRobotInterface  # or URRobotInterface
     motor_bounds: dict[int, tuple[int, int]]
     latest_states: dict[int, JointState] = field(default_factory=dict)
@@ -168,15 +273,17 @@ class GameController:
             }
 
             if s.get("simulate_haptics"):
-                haptic = SimulatedHapticSystem(
+                haptic = _SimulatedHapticSystem(
                     expected_motor_ids=motor_ids,
                     settings=s,
                     motor_bounds=motor_bounds,
                 )
             else:
-                haptic = HapticSystem(
-                    expected_motor_ids=motor_ids,
-                    motor_bounds=motor_bounds,
+                raise RuntimeError(
+                    "Real haptics were removed from the legacy single-process "
+                    "GameController with the retired dual-motor driver. Use "
+                    "`python -m apps.launcher --profile <profile>` so "
+                    "apps.haptic_io runs the single-dial P5 haptic runtime."
                 )
 
             if not s.get("simulate_robot"):
