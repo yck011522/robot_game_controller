@@ -33,6 +33,12 @@ subsystems:
     fps_min: 45.0
     heartbeat_age_max: 1100
 
+  safety_barrier_controller:
+    fps_target: 18.0
+    fps_min: 5.0
+    heartbeat_age_max: 1100
+    telem_age_max: 1100
+
   gamemaster_ui:
     fps_target: 60.0
     fps_min: 50.0

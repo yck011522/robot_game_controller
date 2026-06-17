@@ -70,6 +70,16 @@ tuning:
     probe_half_deg: 10
     prox_floor: 0.6
     forward_timeout_ms: 40
+  safety_barrier:
+    bypass_channels:
+      SBarr11: false
+      SBarr12: false
+      SBarr21: false
+      SBarr22: false
+      SBarr31: false
+      SBarr32: false
+      SBarr41: false
+      SBarr42: false
   game:
     duration_s: 240
     sum_score_rate_unit_per_s: 100

@@ -429,7 +429,19 @@ def main(argv: list[str] | None = None) -> int:
                 exit_code = 1
                 return exit_code
 
-        # ---- tier 5: remaining per-team IO -----------------------------
+        # ---- tier 5: global IO -----------------------------------------
+        for pname in ("safety_barrier_controller",):
+            if profile.is_enabled(pname):
+                children[pname] = _spawn(pname, profile_path,
+                                          module_registry=module_registry)
+                if not _wait_for_first_heartbeat(sub, poller, pname,
+                                                  STARTUP_HEARTBEAT_TIMEOUT_S,
+                                                  children, seen_first,
+                                                  last_recv_mono_ns, last_loop_hz, recv_window):
+                    exit_code = 1
+                    return exit_code
+
+        # ---- tier 6: remaining per-team IO -----------------------------
         for team in profile.active_teams:
             if profile.is_enabled("robot_io", team=team):
                 pname = f"robot_io.{team}"
@@ -452,7 +464,7 @@ def main(argv: list[str] | None = None) -> int:
                         exit_code = 1
                         return exit_code
 
-        # ---- tier 6: spectator dashboard -------------------------------
+        # ---- tier 7: spectator dashboard -------------------------------
         # Launch by default for every profile so the observer UI is always
         # present when the runtime comes up, even if the profile's legacy
         # `subsystems.gamemaster_ui` entry is null.

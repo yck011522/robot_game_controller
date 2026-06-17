@@ -27,7 +27,17 @@ subsystems:
 
   bus_broker:        real
 
-tuning: {}
+tuning:
+  safety_barrier:
+    bypass_channels:
+      SBarr11: false
+      SBarr12: false
+      SBarr21: false
+      SBarr22: false
+      SBarr31: false
+      SBarr32: false
+      SBarr41: false
+      SBarr42: false
 hardware: {}
 recorder:
   root: "./recordings"

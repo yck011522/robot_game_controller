@@ -24,6 +24,7 @@ from subsystems.robot.joint_limits import clamp_joint_target_rad, resolve_joint_
 DEFAULT_TICK_HZ = 200.0
 TELEM_PERIOD_S = 1.0 / 100.0  # 100 Hz per BUS.md 禮5.3
 DEFAULT_RECOVERY_TIMEOUT_S = 4.0
+DEFAULT_SAFETY_TELEM_AGE_MAX_MS = 1100.0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -46,6 +47,15 @@ def main(argv: list[str] | None = None) -> int:
     robot_hw = proc.profile.hardware.get("robot", {}) or {}
     robot_cfg = robot_hw.get(team, {}) or {}
     q_min, q_max = resolve_joint_limits_rad(proc.profile.tuning.get("robot", {}), axes=6)
+    safety_enabled = proc.profile.subsystem_impl("safety_barrier_controller") is not None
+    safety_telem_age_max_s = (
+        default_runtime_setting(
+            "safety_barrier_controller",
+            "telem_age_max",
+            DEFAULT_SAFETY_TELEM_AGE_MAX_MS,
+        )
+        or DEFAULT_SAFETY_TELEM_AGE_MAX_MS
+    ) / 1000.0
     import math as _math
     initial_pose_rad = [_math.radians(float(v)) for v in initial_pose_deg]
 
@@ -85,6 +95,10 @@ def main(argv: list[str] | None = None) -> int:
     telem_topic = f"telem.robot.actual.{team}"
     next_telem = time.perf_counter()
     seq = 0
+    latest_barrier_state = {
+        "ok": True if not safety_enabled else None,
+        "last_state_recv_mono_s": None,
+    }
 
     def tick(p: Proc) -> None:
         nonlocal next_telem, seq
@@ -94,9 +108,7 @@ def main(argv: list[str] | None = None) -> int:
         latest_recover_timeout_s = None
         events = dict(poller.poll(1))
         if state_sub in events:
-            # TODO(safety): consume and discard state.full for now so this
-            # socket stays drained until the real barrier controller exists.
-            _drain_latest(state_sub, on_msg=lambda _b: None)
+            _drain_latest(state_sub, on_msg=lambda body: _update_barrier_state(latest_barrier_state, body))
         if sub in events:
             while True:
                 try:
@@ -120,14 +132,20 @@ def main(argv: list[str] | None = None) -> int:
                         latest_recover_timeout_s = DEFAULT_RECOVERY_TIMEOUT_S
                 except zmq.Again:
                     break
-        if latest_q is not None:
+        safety_allows_motion = _safety_allows_motion(
+            latest_barrier_state,
+            enabled=safety_enabled,
+            stale_after_s=safety_telem_age_max_s,
+        )
+        if latest_q is not None and safety_allows_motion:
             impl.set_target(clamp_joint_target_rad(latest_q, q_min, q_max, axes=6))
-        if latest_clamps is not None and hasattr(impl, "set_clamps"):
+        if latest_clamps is not None and safety_allows_motion and hasattr(impl, "set_clamps"):
             impl.set_clamps(latest_clamps)
         if latest_recover_timeout_s is not None and hasattr(impl, "request_recovery"):
             impl.request_recovery(timeout_s=max(0.1, latest_recover_timeout_s))
 
-        impl.maybe_step()
+        if safety_allows_motion:
+            impl.maybe_step()
 
         now = time.perf_counter()
         if now >= next_telem:
@@ -188,6 +206,29 @@ def _extract_barrier_ok(body: dict) -> bool | None:
         return None
     ok = barrier.get("ok")
     return ok if isinstance(ok, bool) else None
+
+
+def _update_barrier_state(state: dict, body: dict) -> None:
+    """Update RobotIO's local safety-barrier cache from one `state.full` sample."""
+
+    ok = _extract_barrier_ok(body)
+    if ok is None:
+        return
+    state["ok"] = ok
+    state["last_state_recv_mono_s"] = time.perf_counter()
+
+
+def _safety_allows_motion(state: dict, *, enabled: bool, stale_after_s: float) -> bool:
+    """Return whether RobotIO may send/step robot targets this tick."""
+
+    if not enabled:
+        return True
+    last_recv = state.get("last_state_recv_mono_s")
+    if not isinstance(last_recv, float):
+        return False
+    if (time.perf_counter() - last_recv) > stale_after_s:
+        return False
+    return bool(state.get("ok", False))
 
 
 def _read_startup_barrier_ok(sub: zmq.Socket, timeout_s: float = 0.5) -> bool | None:

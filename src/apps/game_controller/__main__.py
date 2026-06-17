@@ -16,6 +16,7 @@ import yaml  # noqa: E402
 import zmq  # noqa: E402
 
 from core import bus  # noqa: E402
+from core.config import default_runtime_setting  # noqa: E402
 from core.proc import Proc, banner  # noqa: E402
 from subsystems.jogging.in_process import InProcessPlanner  # noqa: E402
 
@@ -34,6 +35,7 @@ DEFAULT_BUCKET_VALUES = [0.0, 0.0, 0.0]
 DEFAULT_LOOK_POSE_DEG = [0.0, -90.0, 90.0, 0.0, 0.0, 0.0]
 DEFAULT_HAPTIC_BOUNDS_DEG_MIN = [-180.0] * 6
 DEFAULT_HAPTIC_BOUNDS_DEG_MAX = [180.0] * 6
+DEFAULT_SAFETY_TELEM_AGE_MAX_MS = 1100.0
 CONCLUSION_INITIAL_PAUSE_S = 1.0
 CONCLUSION_BUCKET_EMPTY_PAUSE_S = 0.5
 CONCLUSION_ANNOUNCEMENT_PAUSE_S = 1.0
@@ -48,9 +50,19 @@ def main(argv: list[str] | None = None) -> int:
     active_teams = list(proc.profile.active_teams)
     game_cfg = _game_config(proc.profile.tuning.get("game"))
     haptic_cfg = _haptic_config(proc.profile.tuning.get("haptic"))
+    safety_enabled = proc.profile.subsystem_impl("safety_barrier_controller") is not None
+    safety_telem_age_max_s = (
+        default_runtime_setting(
+            "safety_barrier_controller",
+            "telem_age_max",
+            DEFAULT_SAFETY_TELEM_AGE_MAX_MS,
+        )
+        or DEFAULT_SAFETY_TELEM_AGE_MAX_MS
+    ) / 1000.0
     robot_show_poses = _load_robot_show_poses_deg()
     pub = bus.make_pub(proc.ctx)
     control_rep = bus.make_rep(proc.ctx)
+    safety_sub = bus.make_sub(proc.ctx, topics=["telem.safety"]) if safety_enabled else None
     proc.use_heartbeat_pub(pub)
 
     # P2 ships team-A only; team-B wiring is symmetric and lands when
@@ -142,11 +154,14 @@ def main(argv: list[str] | None = None) -> int:
         "recovery_pending_dispatch": False,
         "recovery_request_id": 0,
         "recovery_teams": [],
+        "safety_blocked": False,
+        "safety_pause_latched": False,
         # Cache the last reply per source so a UI retry with the same
         # request_id can be acknowledged without reapplying the action.
         "last_request_id_by_source": {},
         "last_reply_by_source": {},
     }
+    safety_state = _initial_safety_state(enabled=safety_enabled)
 
     def tick(p: Proc) -> None:
         nonlocal state_seq
@@ -162,6 +177,10 @@ def main(argv: list[str] | None = None) -> int:
             ),
         )
         _maybe_publish_recovery_request(pub, p.proc, control_state)
+
+        if safety_sub is not None:
+            _drain_latest(safety_sub, on_msg=lambda body: _update_safety_state(safety_state, body))
+        _refresh_safety_block(control_state, safety_state, safety_telem_age_max_s)
 
         if bool(control_state.get("recovery_active", False)):
             deadline_ns = control_state.get("recovery_deadline_mono_ns")
@@ -344,10 +363,11 @@ def main(argv: list[str] | None = None) -> int:
             if recovered:
                 control_state["recovery_active"] = False
                 control_state["recovery_pending_dispatch"] = False
-                control_state["soft_pause"] = False
-                control_state["last_action"] = "play_resume"
-                control_state["last_action_ts_mono_ns"] = now_ns
-                soft_paused = False
+                if not bool(control_state.get("safety_blocked", False)) and not bool(control_state.get("safety_pause_latched", False)):
+                    control_state["soft_pause"] = False
+                    control_state["last_action"] = "play_resume"
+                    control_state["last_action_ts_mono_ns"] = now_ns
+                    soft_paused = False
 
         # Emit a (very small) state.full snapshot per BUS.md 禮6.1.
         paused_teams = [
@@ -362,6 +382,10 @@ def main(argv: list[str] | None = None) -> int:
                 break
         if bool(control_state.get("recovery_active", False)):
             pause_reason = "recovery"
+        elif bool(control_state.get("safety_blocked", False)):
+            pause_reason = _safety_pause_reason(safety_state)
+        elif bool(control_state.get("safety_pause_latched", False)):
+            pause_reason = "barrier_ack_required"
         elif soft_paused:
             pause_reason = "soft_estop"
 
@@ -380,6 +404,9 @@ def main(argv: list[str] | None = None) -> int:
             "paused": paused,
             "pause_reason": pause_reason,
             "soft_estop": soft_paused,
+            "safety": {
+                "barrier": _state_full_safety_barrier(safety_state),
+            },
             "countdown_s": countdown_s,
             "game_duration_s": game_cfg["duration_s"],
             "sum_score_rate_unit_per_s": game_cfg["sum_score_rate_unit_per_s"],
@@ -432,6 +459,8 @@ def main(argv: list[str] | None = None) -> int:
             st["planner"].close()
             st["sub_haptic"].close(0)
             st["sub_actual"].close(0)
+        if safety_sub is not None:
+            safety_sub.close(0)
         control_rep.close(0)
 
     return proc.run(tick, teardown=teardown)
@@ -448,6 +477,73 @@ def _drain_latest(sub: zmq.Socket, *, on_msg) -> None:
             break
     if last is not None:
         on_msg(last)
+
+
+def _initial_safety_state(*, enabled: bool) -> dict[str, Any]:
+    """Return the GameController's local safety barrier cache."""
+
+    return {
+        "enabled": enabled,
+        "ok": True if not enabled else False,
+        "channels": [],
+        "errors": [],
+        "last_recv_mono_s": None,
+        "stale": enabled,
+    }
+
+
+def _update_safety_state(state: dict[str, Any], body: dict[str, Any]) -> None:
+    """Store the latest `telem.safety` payload and local receipt time."""
+
+    state["ok"] = bool(body.get("ok", False))
+    channels = body.get("channels")
+    state["channels"] = [bool(value) for value in channels] if isinstance(channels, list) else []
+    errors = body.get("errors")
+    state["errors"] = [str(value) for value in errors] if isinstance(errors, list) else []
+    state["last_recv_mono_s"] = time.perf_counter()
+    state["stale"] = False
+
+
+def _refresh_safety_block(
+    control_state: dict[str, Any],
+    safety_state: dict[str, Any],
+    telem_age_max_s: float,
+) -> None:
+    """Update safety pause flags from the latest barrier sample and age budget."""
+
+    if not bool(safety_state.get("enabled", False)):
+        control_state["safety_blocked"] = False
+        safety_state["stale"] = False
+        return
+
+    last_recv = safety_state.get("last_recv_mono_s")
+    stale = not isinstance(last_recv, float) or (time.perf_counter() - last_recv) > telem_age_max_s
+    safety_state["stale"] = stale
+    blocked = stale or not bool(safety_state.get("ok", False))
+    control_state["safety_blocked"] = blocked
+    if blocked:
+        control_state["soft_pause"] = True
+        control_state["safety_pause_latched"] = True
+
+
+def _safety_pause_reason(safety_state: dict[str, Any]) -> str:
+    """Return the pause reason string for the current safety block."""
+
+    if bool(safety_state.get("stale", False)):
+        return "barrier_stale"
+    return "barrier_open"
+
+
+def _state_full_safety_barrier(safety_state: dict[str, Any]) -> dict[str, Any]:
+    """Build the `state.full.safety.barrier` block for UI and RobotIO consumers."""
+
+    return {
+        "enabled": bool(safety_state.get("enabled", False)),
+        "ok": bool(safety_state.get("ok", True)) and not bool(safety_state.get("stale", False)),
+        "channels": list(safety_state.get("channels", [])),
+        "stale": bool(safety_state.get("stale", False)),
+        "errors": list(safety_state.get("errors", [])),
+    }
 
 
 def _drain_ui_game_control_requests(rep: zmq.Socket, *, on_msg) -> None:
@@ -794,12 +890,16 @@ def _apply_ui_game_control(
     if not isinstance(action, str):
         return False, "missing action", None
     if action == "play_resume":
+        if bool(control_state.get("safety_blocked", False)):
+            control_state["soft_pause"] = True
+            return False, "safety barrier is not clear", action
         recovery_teams = [
             team for team, st in teams.items()
             if _robot_status_needs_recovery(st.get("robot_status", {}))
         ]
         if recovery_teams:
             control_state["soft_pause"] = True
+            control_state["safety_pause_latched"] = False
             control_state["recovery_active"] = True
             control_state["recovery_deadline_mono_ns"] = now_ns + int(RECOVERY_TIMEOUT_S * 1e9)
             control_state["recovery_pending_dispatch"] = True
@@ -807,6 +907,7 @@ def _apply_ui_game_control(
             control_state["recovery_teams"] = list(recovery_teams)
         else:
             control_state["soft_pause"] = False
+            control_state["safety_pause_latched"] = False
             control_state["recovery_active"] = False
             control_state["recovery_pending_dispatch"] = False
             control_state["recovery_teams"] = []

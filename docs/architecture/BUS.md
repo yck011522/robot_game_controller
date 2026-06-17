@@ -324,10 +324,12 @@ Subscribers that care about stage edges detect them by comparing
   },
 
   // Safety inputs.
-  //   barrier.channels  — 8 light-barrier beams. true = beam unbroken.
-  //   barrier.ok        — false iff ANY channel is broken (any breach
-  //                       halts the whole system; the array is not
-  //                       zoned per team).
+  //   barrier.channels  -- 8 raw light-barrier beams in the persistent
+  //                        channel order configured in com_ports.yaml.
+  //                        true = beam unbroken / normally-closed input HIGH.
+  //   barrier.ok        -- final decision checked by GC and RobotIO.
+  //                        Bypass config is applied before this reaches
+  //                        state.full; stale/error state forces ok false.
   //   estop.pressed     — logical e-stop assertion status as reported
   //                       by ButtonController. The field is normalized
   //                       to logical semantics; downstream consumers do
@@ -335,7 +337,9 @@ Subscribers that care about stage edges detect them by comparing
   "safety": {
     "barrier": {
       "ok": true,
-      "channels": [true, true, true, true, true, true, true, true]
+      "channels": [true, true, true, true, true, true, true, true],
+      "stale": false,
+      "errors": []
     },
     "estop": {"pressed": false}
   },
@@ -501,11 +505,18 @@ Logical meaning:
 {
   "ts_mono_ns": ...,
   "producer": "safety_barrier_controller",
-  // 8 light-barrier beams. true = beam unbroken. ok = AND(channels);
-  // any single broken channel halts the whole system (the array is
-  // not zoned per team).
+  // 8 raw light-barrier beams. true = beam unbroken / normally-closed
+  // input HIGH. ok is the final bypass-aware decision; consumers check ok.
   "ok": true,
-  "channels": [true, true, true, true, true, true, true, true]
+  "channels": [true, true, true, true, true, true, true, true],
+  "effective_channels": [true, true, true, true, true, true, true, true],
+  "channel_labels": ["SBarr11", "SBarr12", "SBarr21", "SBarr22",
+                     "SBarr31", "SBarr32", "SBarr41", "SBarr42"],
+  "bypass_channels": {
+    "SBarr11": false, "SBarr12": false, "SBarr21": false, "SBarr22": false,
+    "SBarr31": false, "SBarr32": false, "SBarr41": false, "SBarr42": false
+  },
+  "errors": []
 }
 ```
 

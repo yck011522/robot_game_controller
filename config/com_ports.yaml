@@ -25,3 +25,17 @@ serial_settings:
   light_columns:
     baudrate: 921600 # RS485 speed validated for the LED column controllers.
     inter_command_delay_s: 0.002 # Minimum gap between LED frames; lower values can corrupt colors.
+  safety_barrier:
+    baudrate: 115200 # Modbus RTU speed for the 4x RS485 IO units on COM43.
+    slave_addresses: [1, 2, 3, 4] # Four IO units, two discrete input channels each.
+    channel_order:
+      - SBarr11 # address 1, input 1
+      - SBarr12 # address 1, input 2
+      - SBarr21 # address 2, input 1
+      - SBarr22 # address 2, input 2
+      - SBarr31 # address 3, input 1
+      - SBarr32 # address 3, input 2
+      - SBarr41 # address 4, input 1
+      - SBarr42 # address 4, input 2
+    read_timeout_s: 0.070 # Per-module serial read timeout used during validation.
+    inter_request_delay_s: 0.006 # Stable quiet gap: 6 ms gave 200/200 clean 8-input sweeps.
