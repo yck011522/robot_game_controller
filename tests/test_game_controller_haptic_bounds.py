@@ -64,6 +64,29 @@ def test_dynamic_bounds_use_nearest_hits_per_direction() -> None:
         )
 
 
+def test_profile_static_bounds_convert_from_robot_to_dial_space() -> None:
+    cfg = gc._haptic_config(
+        {
+            "gear_ratio": [0.1] * 6,
+            "bounds_deg_min": [-180.0] * 6,
+            "bounds_deg_max": [180.0] * 6,
+        }
+    )
+
+    assert math.isclose(
+        cfg["bounds_min_rad"][0],
+        math.radians(-1800.0),
+        rel_tol=0.0,
+        abs_tol=1e-9,
+    )
+    assert math.isclose(
+        cfg["bounds_max_rad"][0],
+        math.radians(1800.0),
+        rel_tol=0.0,
+        abs_tol=1e-9,
+    )
+
+
 def test_dynamic_bounds_fallback_when_axis_stale() -> None:
     cfg = _base_haptic_cfg()
     state = {

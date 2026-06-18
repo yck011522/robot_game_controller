@@ -268,8 +268,11 @@ class RealHaptic:
         haptic_tuning = profile.tuning.get("haptic", {}) if isinstance(profile.tuning, dict) else {}
         self._gear_ratio = _normalize_gear_ratio(haptic_tuning.get("gear_ratio"))
         self._tracking_target_rad = [0.0] * 6
-        self._bounds_min_rad = _default_bounds_rad(haptic_tuning.get("bounds_deg_min"), _DEFAULT_BOUNDS_MIN_RAD)
-        self._bounds_max_rad = _default_bounds_rad(haptic_tuning.get("bounds_deg_max"), _DEFAULT_BOUNDS_MAX_RAD)
+        bounds_min_robot_rad = _default_bounds_rad(haptic_tuning.get("bounds_deg_min"), _DEFAULT_BOUNDS_MIN_RAD)
+        bounds_max_robot_rad = _default_bounds_rad(haptic_tuning.get("bounds_deg_max"), _DEFAULT_BOUNDS_MAX_RAD)
+        self._bounds_min_rad, self._bounds_max_rad = _robot_bounds_to_dial_bounds_rad(
+            bounds_min_robot_rad, bounds_max_robot_rad, self._gear_ratio
+        )
         self._latest_robot_actual_rad: list[float] | None = None
         # Pending reseat payload in dial space, applied once per connected id.
         self._pending_reseat_dial_rad: list[float] | None = None
@@ -473,6 +476,35 @@ def _default_bounds_rad(value: Any, fallback: list[float]) -> list[float]:
     return out[:6]
 
 
+def _robot_bounds_to_dial_bounds_rad(
+    bounds_min_robot_rad: list[float],
+    bounds_max_robot_rad: list[float],
+    gear_ratio: list[float],
+) -> tuple[list[float], list[float]]:
+    """Convert profile robot-joint bounds to dial-space firmware bounds.
+
+    Called during `RealHaptic` initialization for the pre-command fallback
+    bounds. Runtime `cmd.haptic.*` bounds are already dial-space and are
+    copied directly by `apply_command`.
+    """
+
+    out_min: list[float] = []
+    out_max: list[float] = []
+    for axis in range(6):
+        # Negative gearing reverses endpoint order; sorting keeps firmware
+        # control frames valid with min <= max.
+        gear = float(gear_ratio[axis]) if axis < len(gear_ratio) else 1.0
+        if abs(gear) < 1e-9:
+            gear = 1.0
+        lo_robot = float(bounds_min_robot_rad[axis])
+        hi_robot = float(bounds_max_robot_rad[axis])
+        lo_dial = lo_robot / gear
+        hi_dial = hi_robot / gear
+        out_min.append(min(lo_dial, hi_dial))
+        out_max.append(max(lo_dial, hi_dial))
+    return out_min, out_max
+
+
 def _build_param_lines(node: Any) -> list[tuple[str, int]]:
     data = node if isinstance(node, dict) else {}
     out: list[tuple[str, int]] = []
@@ -520,12 +552,16 @@ def _build_param_lines(node: Any) -> list[tuple[str, int]]:
 
 
 def _build_enable_lines(node: Any) -> list[tuple[str, int]]:
+    """Return force-mode enable writes sent after startup reseat completes."""
     data = node if isinstance(node, dict) else {}
     oob_kick = data.get("oob_kick") if isinstance(data.get("oob_kick"), dict) else {}
+    # Protocol default is enabled; profiles may explicitly disable it with
+    # tuning.haptic.oob_kick.enabled: false.
+    oob_kick_enabled = bool(oob_kick.get("enabled", True))
     return [
         ("enable_tracking", 1),
         ("enable_bounds_restoration", 1),
-        ("enable_oob_kick", 1 if bool(oob_kick.get("enabled", False)) else 0),
+        ("enable_oob_kick", 1 if oob_kick_enabled else 0),
     ]
 
 

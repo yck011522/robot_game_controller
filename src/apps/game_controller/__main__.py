@@ -688,20 +688,26 @@ def _game_config(node: Any) -> dict[str, float]:
 def _haptic_config(node: Any) -> dict[str, Any]:
     data = node if isinstance(node, dict) else {}
     gear_ratio = _coerce_float_list(data.get("gear_ratio"), [1.0] * 6)
+    gear = [(v if abs(v) > 1e-9 else 1.0) for v in gear_ratio]
+    bounds_min_robot_rad = [
+        math.radians(v)
+        for v in _coerce_float_list(
+            data.get("bounds_deg_min"), DEFAULT_HAPTIC_BOUNDS_DEG_MIN
+        )
+    ]
+    bounds_max_robot_rad = [
+        math.radians(v)
+        for v in _coerce_float_list(
+            data.get("bounds_deg_max"), DEFAULT_HAPTIC_BOUNDS_DEG_MAX
+        )
+    ]
+    bounds_min_dial_rad, bounds_max_dial_rad = _robot_bounds_to_dial_bounds_rad(
+        bounds_min_robot_rad, bounds_max_robot_rad, gear
+    )
     return {
-        "gear_ratio": [(v if abs(v) > 1e-9 else 1.0) for v in gear_ratio],
-        "bounds_min_rad": [
-            math.radians(v)
-            for v in _coerce_float_list(
-                data.get("bounds_deg_min"), DEFAULT_HAPTIC_BOUNDS_DEG_MIN
-            )
-        ],
-        "bounds_max_rad": [
-            math.radians(v)
-            for v in _coerce_float_list(
-                data.get("bounds_deg_max"), DEFAULT_HAPTIC_BOUNDS_DEG_MAX
-            )
-        ],
+        "gear_ratio": gear,
+        "bounds_min_rad": bounds_min_dial_rad,
+        "bounds_max_rad": bounds_max_dial_rad,
         "prox_bounds_stale_ticks": max(
             1, int(_coerce_positive_float(data.get("prox_bounds_stale_ticks"), 12.0))
         ),
@@ -867,6 +873,33 @@ def _robot_to_dial_rad(robot_rad: float, gear_ratio: float) -> float:
     if abs(ratio) < 1e-9:
         ratio = 1.0
     return float(robot_rad) / ratio
+
+
+def _robot_bounds_to_dial_bounds_rad(
+    bounds_min_robot_rad: list[float],
+    bounds_max_robot_rad: list[float],
+    gear_ratio: list[float],
+) -> tuple[list[float], list[float]]:
+    """Convert profile robot-joint bounds into dial-space firmware bounds.
+
+    Called by `_haptic_config` while loading profile tuning. The haptic
+    firmware receives dial-space `C,<target>,<min>,<max>` values, while the
+    profile stores bounds in robot-joint degrees beside the robot limits.
+    """
+
+    out_min: list[float] = []
+    out_max: list[float] = []
+    for axis in range(6):
+        # Each axis may use a different dial-to-joint gear ratio; convert
+        # both endpoints and sort so negative gearing still yields lo <= hi.
+        gear = float(gear_ratio[axis]) if axis < len(gear_ratio) else 1.0
+        lo_robot = float(bounds_min_robot_rad[axis])
+        hi_robot = float(bounds_max_robot_rad[axis])
+        lo_dial = _robot_to_dial_rad(lo_robot, gear)
+        hi_dial = _robot_to_dial_rad(hi_robot, gear)
+        out_min.append(min(lo_dial, hi_dial))
+        out_max.append(max(lo_dial, hi_dial))
+    return out_min, out_max
 
 
 def _publish_haptic_reseat(

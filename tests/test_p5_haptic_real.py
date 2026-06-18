@@ -23,7 +23,11 @@ if str(SRC) not in sys.path:
 from core import com_ports  # noqa: E402
 from core.config import ConfigError, load as load_profile  # noqa: E402
 from led_serial import LEDSystem  # noqa: E402
-from subsystems.haptic.real import RealHaptic  # noqa: E402
+from subsystems.haptic.real import (  # noqa: E402
+    RealHaptic,
+    _build_enable_lines,
+    _robot_bounds_to_dial_bounds_rad,
+)
 
 
 class _FakeSerial:
@@ -166,6 +170,33 @@ def test_real_backend_discovers_and_drives() -> None:
             com_ports.clear_cache()
 
 
+def test_oob_kick_enable_defaults_to_protocol_enabled() -> None:
+    """OOB kick should stay enabled unless a profile explicitly disables it."""
+
+    default_lines = _build_enable_lines({})
+    explicit_on_lines = _build_enable_lines({"oob_kick": {"enabled": True}})
+    explicit_off_lines = _build_enable_lines({"oob_kick": {"enabled": False}})
+
+    assert ("enable_oob_kick", 1) in default_lines
+    assert ("enable_oob_kick", 1) in explicit_on_lines
+    assert ("enable_oob_kick", 0) in explicit_off_lines
+    print("[test] oob kick default enable behavior: OK")
+
+
+def test_real_backend_static_bounds_convert_to_dial_space() -> None:
+    """RealHaptic startup fallback bounds should use the same gear convention."""
+
+    bounds_min, bounds_max = _robot_bounds_to_dial_bounds_rad(
+        [math.radians(-180.0)] * 6,
+        [math.radians(180.0)] * 6,
+        [0.1] * 6,
+    )
+
+    assert math.isclose(bounds_min[0], math.radians(-1800.0), abs_tol=1e-9)
+    assert math.isclose(bounds_max[0], math.radians(1800.0), abs_tol=1e-9)
+    print("[test] real haptic static bounds gear conversion: OK")
+
+
 def test_config_rejects_bad_haptic_port_list() -> None:
     with TemporaryDirectory() as tmpdir:
         path = Path(tmpdir) / "bad_haptic_profile.yaml"
@@ -301,6 +332,8 @@ def test_led_serial_settings_loaded_from_yaml() -> None:
 
 def main() -> int:
     test_real_backend_discovers_and_drives()
+    test_oob_kick_enable_defaults_to_protocol_enabled()
+    test_real_backend_static_bounds_convert_to_dial_space()
     test_config_rejects_bad_haptic_port_list()
     test_com_ports_yaml_empty_disables_haptic_scan()
     test_com_ports_yaml_overrides_profile_haptic_ports()
