@@ -2,14 +2,14 @@
   "meta": {
     "base_seed": 12345,
     "duration_per_worker_s": 600.0,
-    "generated": "2026-06-18T10:56:05",
+    "generated": "2026-06-18T16:58:57",
     "totals": {
       "distinct_pairs": 65,
-      "n_checks": 2519831,
-      "n_collisions": 1791579,
-      "n_pairs_total": 7249267
+      "n_checks": 2518047,
+      "n_collisions": 1821439,
+      "n_pairs_total": 7627006
     },
-    "wall_s": 603.9669601999922,
+    "wall_s": 603.9750953000039,
     "workers": 20
   },
   "observed_pairs": [
