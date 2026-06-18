@@ -193,6 +193,40 @@ def test_path_collision_distance_randomizes_vector() -> None:
     print("[test] random trajectory path collision reroll: OK")
 
 
+def test_path_collision_reroll_resets_to_planner_target() -> None:
+    """Rerolling should discard stale blocked target offset."""
+
+    clock = _Clock()
+    rig = RandomTrajectoryHaptic(team="b", profile=_make_profile(), now_fn=clock)
+    planner_target = [0.2, -0.1, 0.3, -0.2, 0.4, -0.3]
+
+    rig.update_robot_actual([0.0] * 6)
+    rig.set_running(True)
+    clock.advance(0.1)
+    rig.sample()
+    assert rig.robot_target_rad != planner_target
+
+    rig.update_state_full(
+        {
+            "teams": {
+                "b": {
+                    "robot": {
+                        "q_target_rad": planner_target,
+                    },
+                    "collision": {
+                        "first_hit": {
+                            "distance_deg": 3.0,
+                        }
+                    },
+                }
+            }
+        }
+    )
+
+    assert rig.robot_target_rad == planner_target
+    print("[test] random trajectory collision reroll target reset: OK")
+
+
 def test_validation_profile_loads_requested_team_b_limits() -> None:
     """The launcher profile should select Team B real robot and requested limits."""
 
@@ -217,6 +251,7 @@ def main() -> int:
     test_run_request_waits_for_robot_actual_before_motion()
     test_unchecking_before_robot_actual_cancels_pending_run()
     test_path_collision_distance_randomizes_vector()
+    test_path_collision_reroll_resets_to_planner_target()
     test_validation_profile_loads_requested_team_b_limits()
     print("\n[test] RANDOM TRAJECTORY HAPTIC TESTS PASSED\n")
     return 0

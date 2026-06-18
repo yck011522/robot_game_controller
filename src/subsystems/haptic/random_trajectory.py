@@ -161,6 +161,7 @@ class RandomTrajectoryHaptic:
         if distance_deg is None:
             return
         if distance_deg <= self._turnaround_distance_deg:
+            self._latch_to_latest_planner_target(reason="path_collision_base")
             self._randomize_velocity(reason="path_collision")
 
     def sample(self) -> dict[str, Any] | None:
