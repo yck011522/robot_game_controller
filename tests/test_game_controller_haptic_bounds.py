@@ -114,6 +114,25 @@ def test_hold_current_pose_publishes_measured_robot_target() -> None:
     assert body["clamps"] == {"path": 1.0, "prox": 1.0, "final": 1.0}
 
 
+def test_state_full_planner_diagnostics_are_compact() -> None:
+    info = {
+        "input_mode": "absolute",
+        "forward_certified": False,
+        "v_cmd_rad_s": [1, 2, 3, 4, 5, 6],
+        "v_out_rad_s": [0, 0, 0, 0, 0, 0],
+        "prox_hits": [[True]],
+    }
+
+    out = gc._state_full_planner(info)
+
+    assert out == {
+        "input_mode": "absolute",
+        "forward_certified": False,
+        "v_cmd_rad_s": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        "v_out_rad_s": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    }
+
+
 def test_dynamic_bounds_fallback_when_axis_stale() -> None:
     cfg = _base_haptic_cfg()
     state = {

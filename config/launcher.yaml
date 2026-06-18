@@ -7,6 +7,7 @@
 # default_profile: dev_keyboard
 # default_profile: dev_one_robot_keyboard
 # default_profile: dev_team_b_haptic_real_sim_robot
+# default_profile: demo_team_b
 default_profile: random_trajectory_collision_validation
 
 # Maps a logical process name to the python module the launcher spawns

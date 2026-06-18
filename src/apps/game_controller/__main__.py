@@ -122,6 +122,7 @@ def main(argv: list[str] | None = None) -> int:
             "last_path_scalar": 1.0,
             "last_prox_scalar": 1.0,
             "last_final_scalar": 1.0,
+            "last_planner_info": {},
             "last_prox_probe_offsets_deg": [],
             "last_prox_hits": [[False] * 20 for _ in range(6)],
             "last_prox_age_ticks": [9999] * 6,
@@ -254,6 +255,7 @@ def main(argv: list[str] | None = None) -> int:
                 st["last_path_scalar"] = 1.0
                 st["last_prox_scalar"] = 1.0
                 st["last_final_scalar"] = 1.0
+                st["last_planner_info"] = {}
                 st["last_prox_probe_offsets_deg"] = []
                 st["last_prox_hits"] = [[False] * 20 for _ in range(6)]
                 st["last_prox_age_ticks"] = [9999] * 6
@@ -283,6 +285,7 @@ def main(argv: list[str] | None = None) -> int:
                 st["last_path_scalar"] = 1.0
                 st["last_prox_scalar"] = 1.0
                 st["last_final_scalar"] = 1.0
+                st["last_planner_info"] = {}
                 st["last_prox_probe_offsets_deg"] = []
                 st["last_prox_hits"] = [[False] * 20 for _ in range(6)]
                 st["last_prox_age_ticks"] = [9999] * 6
@@ -326,6 +329,7 @@ def main(argv: list[str] | None = None) -> int:
                 st["last_path_scalar"] = 1.0
                 st["last_prox_scalar"] = 1.0
                 st["last_final_scalar"] = 1.0
+                st["last_planner_info"] = {}
                 st["last_prox_probe_offsets_deg"] = []
                 st["last_prox_hits"] = [[False] * 20 for _ in range(6)]
                 st["last_prox_age_ticks"] = [9999] * 6
@@ -358,6 +362,7 @@ def main(argv: list[str] | None = None) -> int:
                 st["last_path_scalar"] = 1.0
                 st["last_prox_scalar"] = 1.0
                 st["last_final_scalar"] = 1.0
+                st["last_planner_info"] = {}
                 st["last_prox_probe_offsets_deg"] = []
                 st["last_prox_hits"] = [[False] * 20 for _ in range(6)]
                 st["last_prox_age_ticks"] = [9999] * 6
@@ -387,6 +392,7 @@ def main(argv: list[str] | None = None) -> int:
             st["last_path_scalar"] = float(info.get("path_scalar", 1.0))
             st["last_prox_scalar"] = float(info.get("prox_scalar", 1.0))
             st["last_final_scalar"] = float(info.get("final_scalar", 1.0))
+            st["last_planner_info"] = dict(info)
             st["last_prox_probe_offsets_deg"] = list(
                 info.get("prox_probe_offsets_deg") or []
             )
@@ -523,6 +529,7 @@ def main(argv: list[str] | None = None) -> int:
                             "prox_hits": st["last_prox_hits"],
                             "prox_age_ticks": st["last_prox_age_ticks"],
                         },
+                        "planner": _state_full_planner(st.get("last_planner_info")),
                         "score": st["score"],
                         "summed_score": st["summed_score"],
                         "buckets": list(st["bucket_values"]),
@@ -641,6 +648,18 @@ def _state_full_safety_barrier(safety_state: dict[str, Any]) -> dict[str, Any]:
         "channels": list(safety_state.get("channels", [])),
         "stale": bool(safety_state.get("stale", False)),
         "errors": list(safety_state.get("errors", [])),
+    }
+
+
+def _state_full_planner(info: Any) -> dict[str, Any]:
+    """Build the compact planner diagnostics block for state.full traces."""
+
+    data = info if isinstance(info, dict) else {}
+    return {
+        "input_mode": data.get("input_mode"),
+        "forward_certified": data.get("forward_certified"),
+        "v_cmd_rad_s": _coerce_float_list(data.get("v_cmd_rad_s"), [0.0] * 6),
+        "v_out_rad_s": _coerce_float_list(data.get("v_out_rad_s"), [0.0] * 6),
     }
 
 
