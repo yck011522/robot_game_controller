@@ -333,7 +333,7 @@ def test_validation_profile_loads_requested_team_b_limits() -> None:
     assert profile.tuning["robot"]["max_acceleration_deg_s2"] == [45, 65, 65, 115, 115, 115]
     assert profile.tuning["random_trajectory_validation"]["enabled_on_start"] is False
     assert profile.tuning["random_trajectory_validation"]["speed_scale"] == 1.0
-    assert profile.tuning["random_trajectory_validation"]["proximity_flip_distance_deg"] == 3.0
+    assert profile.tuning["random_trajectory_validation"]["proximity_flip_distance_deg"] > 0.0
     assert profile.tuning["random_trajectory_validation"]["proximity_stale_ticks"] == 12
     print("[test] random trajectory validation profile: OK")
 

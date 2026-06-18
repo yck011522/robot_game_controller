@@ -24,7 +24,7 @@ DEFAULT_PATH_TURNAROUND_DISTANCE_DEG = 3.0
 DEFAULT_LIMIT_MARGIN_DEG = 1.0
 DEFAULT_PROXIMITY_FLIP_DISTANCE_DEG = 3.0
 DEFAULT_PROXIMITY_STALE_TICKS = 12
-DEFAULT_WINDOW_SIZE = (430, 180)
+DEFAULT_WINDOW_SIZE = (860, 390)
 
 
 class RandomTrajectoryHaptic:
@@ -106,10 +106,12 @@ class RandomTrajectoryHaptic:
         self._prox_probe_offsets_deg: list[float] = []
         self._prox_hits: list[list[bool]] = [[] for _ in range(6)]
         self._prox_age_ticks: list[int] = [9999] * 6
+        self._last_axis_decisions = [_empty_axis_decision(axis) for axis in range(6)]
 
         self._pygame = None
         self._screen = None
         self._font = None
+        self._small_font = None
         if self._ui_enabled:
             self._init_ui()
 
@@ -222,6 +224,7 @@ class RandomTrajectoryHaptic:
                 "last_path_distance_deg": self._last_path_distance_deg,
                 "robot_velocity_rad_s": list(self._robot_velocity_rad_s),
                 "robot_target_rad": list(self._robot_target_rad),
+                "axis_decisions": [dict(item) for item in self._last_axis_decisions],
             },
         }
 
@@ -245,13 +248,14 @@ class RandomTrajectoryHaptic:
         self._screen = pygame.display.set_mode(DEFAULT_WINDOW_SIZE)
         pygame.display.set_caption("Random trajectory validation")
         self._font = pygame.font.SysFont("Segoe UI", 20)
+        self._small_font = pygame.font.SysFont("Consolas", 15)
 
     def _poll_ui(self) -> None:
         """Process checkbox, keyboard, and redraw events without blocking."""
 
         if self._pygame is None or self._screen is None:
             return
-        checkbox_rect = self._pygame.Rect(24, 28, 28, 28)
+        checkbox_rect = self._pygame.Rect(24, 24, 28, 28)
         for event in self._pygame.event.get():
             if event.type == self._pygame.QUIT:
                 self.set_running(False)
@@ -263,16 +267,20 @@ class RandomTrajectoryHaptic:
         self._draw_ui(checkbox_rect)
 
     def _draw_ui(self, checkbox_rect) -> None:
-        """Render the checkbox and live validation status text."""
+        """Render live trajectory, proximity, and direction decisions."""
 
         assert self._pygame is not None
         assert self._screen is not None
         assert self._font is not None
+        assert self._small_font is not None
         bg_color = (22, 24, 28)
         box_color = (210, 220, 230)
         active_color = (80, 200, 130)
         text_color = (235, 238, 242)
         muted_color = (150, 160, 170)
+        table_color = (40, 44, 50)
+        line_color = (72, 78, 88)
+        warning_color = (245, 170, 80)
         self._screen.fill(bg_color)
         self._pygame.draw.rect(self._screen, box_color, checkbox_rect, width=2)
         if self._running:
@@ -280,12 +288,67 @@ class RandomTrajectoryHaptic:
             self._pygame.draw.rect(self._screen, active_color, inner)
         label = "Run random trajectory"
         status = "RUNNING" if self._running else "PAUSED"
-        reason = f"last turn: {self._last_randomize_reason}"
-        count = f"turns: {self._randomize_count}"
-        self._screen.blit(self._font.render(label, True, text_color), (66, 28))
-        self._screen.blit(self._font.render(status, True, active_color if self._running else muted_color), (24, 76))
-        self._screen.blit(self._font.render(reason, True, muted_color), (24, 108))
-        self._screen.blit(self._font.render(count, True, muted_color), (24, 138))
+        path = _format_distance(self._last_path_distance_deg)
+        self._screen.blit(self._font.render(label, True, text_color), (66, 24))
+        status_color = active_color if self._running else muted_color
+        self._screen.blit(self._font.render(status, True, status_color), (660, 22))
+
+        summary = (
+            f"turns={self._randomize_count}  last={self._last_randomize_reason}  "
+            f"path_hit_deg={path}  flip_if<= {self._proximity_flip_distance_deg:.1f}deg  "
+            f"stale>{self._proximity_stale_ticks} ticks"
+        )
+        self._screen.blit(self._small_font.render(summary, True, muted_color), (24, 68))
+
+        table_rect = self._pygame.Rect(18, 100, 824, 250)
+        self._pygame.draw.rect(self._screen, table_color, table_rect)
+        self._pygame.draw.rect(self._screen, line_color, table_rect, width=1)
+        columns = [
+            (30, "Axis"),
+            (88, "Vel deg/s"),
+            (178, "RNG->Out"),
+            (238, "Target deg"),
+            (342, "Prox -"),
+            (432, "Prox +"),
+            (522, "Age"),
+            (580, "Decision used for last vector"),
+        ]
+        for x, title in columns:
+            self._screen.blit(self._small_font.render(title, True, text_color), (x, 112))
+        self._pygame.draw.line(self._screen, line_color, (24, 136), (836, 136), width=1)
+
+        for axis in range(6):
+            row_y = 146 + axis * 32
+            if axis % 2 == 1:
+                row_rect = self._pygame.Rect(24, row_y - 4, 812, 28)
+                self._pygame.draw.rect(self._screen, (31, 35, 40), row_rect)
+            decision = self._last_axis_decisions[axis]
+            velocity_deg_s = math.degrees(self._robot_velocity_rad_s[axis])
+            target_deg = math.degrees(self._robot_target_rad[axis])
+            final_dir = str(decision.get("final_dir", "hold"))
+            direction = f"{decision.get('rng_dir', 'hold')}->{final_dir}"
+            direction_color = muted_color
+            if final_dir == "pos":
+                direction_color = active_color
+            elif final_dir == "neg":
+                direction_color = warning_color
+            age = decision.get("prox_age_ticks")
+            age_text = str(age) if isinstance(age, int) and age < 9000 else "stale"
+            values = [
+                (30, f"J{axis + 1}", text_color),
+                (88, f"{velocity_deg_s:+7.2f}", direction_color),
+                (178, direction, direction_color),
+                (238, f"{target_deg:+8.2f}", text_color),
+                (342, _format_distance(decision.get("prox_neg_deg")), muted_color),
+                (432, _format_distance(decision.get("prox_pos_deg")), muted_color),
+                (522, age_text, muted_color),
+                (580, str(decision.get("decision", "")), text_color),
+            ]
+            for x, value, color in values:
+                self._screen.blit(self._small_font.render(value, True, color), (x, row_y))
+
+        footer = "Prox columns show nearest collision hit in each direction; '-' means no hit."
+        self._screen.blit(self._small_font.render(footer, True, muted_color), (24, 362))
         self._pygame.display.flip()
 
     def _integrate_target(self, dt_s: float) -> None:
@@ -342,41 +405,87 @@ class RandomTrajectoryHaptic:
         """Choose a new fixed robot-space velocity within profile limits."""
 
         velocity: list[float] = []
+        decisions: list[dict[str, Any]] = []
         for axis in range(6):
             max_speed = abs(self._max_velocity_rad_s[axis]) * self._speed_scale
             min_speed = max_speed * self._min_axis_speed_fraction
             if max_speed <= 0.0:
                 velocity.append(0.0)
+                decisions.append(_empty_axis_decision(axis, decision="disabled"))
                 continue
             speed = self._rng.uniform(min_speed, max_speed)
-            sign = -1.0 if self._rng.random() < 0.5 else 1.0
-            sign = self._proximity_biased_sign(axis, sign)
+            rng_sign = -1.0 if self._rng.random() < 0.5 else 1.0
+            sign, decision = self._proximity_sign_decision(axis, rng_sign)
             if self._robot_target_rad[axis] <= self._q_min_rad[axis] + self._limit_margin_rad:
                 sign = 1.0
+                decision = "joint_min_force_positive"
             elif self._robot_target_rad[axis] >= self._q_max_rad[axis] - self._limit_margin_rad:
                 sign = -1.0
+                decision = "joint_max_force_negative"
             velocity.append(sign * speed)
+            decisions.append(
+                self._axis_decision_record(
+                    axis=axis,
+                    rng_sign=rng_sign,
+                    final_sign=sign,
+                    speed_rad_s=speed,
+                    decision=decision,
+                )
+            )
         self._robot_velocity_rad_s = velocity
+        self._last_axis_decisions = decisions
         self._randomize_count += 1
         self._last_randomize_reason = reason
 
     def _proximity_biased_sign(self, axis: int, sign: float) -> float:
         """Flip sign if recent proximity probes say the chosen side is tight."""
 
+        biased_sign, _decision = self._proximity_sign_decision(axis, sign)
+        return biased_sign
+
+    def _proximity_sign_decision(self, axis: int, sign: float) -> tuple[float, str]:
+        """Return the proximity-biased sign and the decision reason."""
+
         side_clearance = self._axis_clearance_deg(axis)
         if side_clearance is None:
-            return sign
+            return sign, "prox_missing_or_stale"
         chosen_key = "pos" if sign >= 0.0 else "neg"
         opposite_key = "neg" if chosen_key == "pos" else "pos"
         chosen_clearance = side_clearance.get(chosen_key)
         opposite_clearance = side_clearance.get(opposite_key)
         if chosen_clearance is None:
-            return sign
+            return sign, "chosen_side_free"
         if chosen_clearance > self._proximity_flip_distance_deg:
-            return sign
+            return sign, "chosen_side_far"
         if opposite_clearance is None or opposite_clearance > chosen_clearance:
-            return -sign
-        return sign
+            return -sign, "prox_flip"
+        return sign, "opposite_side_tighter"
+
+    def _axis_decision_record(
+        self,
+        *,
+        axis: int,
+        rng_sign: float,
+        final_sign: float,
+        speed_rad_s: float,
+        decision: str,
+    ) -> dict[str, Any]:
+        """Build one row of UI/debug data for a generated velocity axis."""
+
+        clearance = self._axis_clearance_deg(axis) or {}
+        age = self._prox_age_ticks[axis] if axis < len(self._prox_age_ticks) else 9999
+        return {
+            "axis": axis + 1,
+            "rng_dir": _direction_label(rng_sign),
+            "final_dir": _direction_label(final_sign),
+            "speed_deg_s": math.degrees(speed_rad_s),
+            "signed_velocity_deg_s": math.degrees(final_sign * speed_rad_s),
+            "prox_neg_deg": clearance.get("neg"),
+            "prox_pos_deg": clearance.get("pos"),
+            "prox_age_ticks": int(age),
+            "prox_fresh": clearance != {},
+            "decision": decision,
+        }
 
     def _axis_clearance_deg(self, axis: int) -> dict[str, float | None] | None:
         """Return nearest positive and negative proximity hit distances."""
@@ -405,6 +514,41 @@ class RandomTrajectoryHaptic:
                 prev = nearest["neg"]
                 nearest["neg"] = distance_deg if prev is None else min(prev, distance_deg)
         return nearest
+
+
+def _empty_axis_decision(axis: int, *, decision: str = "not_generated") -> dict[str, Any]:
+    """Return the default per-axis row shown before the first random vector."""
+
+    return {
+        "axis": axis + 1,
+        "rng_dir": "hold",
+        "final_dir": "hold",
+        "speed_deg_s": 0.0,
+        "signed_velocity_deg_s": 0.0,
+        "prox_neg_deg": None,
+        "prox_pos_deg": None,
+        "prox_age_ticks": 9999,
+        "prox_fresh": False,
+        "decision": decision,
+    }
+
+
+def _direction_label(sign: float) -> str:
+    """Format a sign as the compact direction label used in the UI."""
+
+    if sign > 0.0:
+        return "pos"
+    if sign < 0.0:
+        return "neg"
+    return "hold"
+
+
+def _format_distance(value: Any) -> str:
+    """Format an optional degree distance for the dashboard table."""
+
+    if isinstance(value, (int, float)):
+        return f"{float(value):.1f}"
+    return "-"
 
 
 def _mapping(value: Any) -> dict[str, Any]:
