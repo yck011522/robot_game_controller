@@ -38,7 +38,9 @@ DEFAULT_HAPTIC_BOUNDS_DEG_MIN = [-180.0] * 6
 DEFAULT_HAPTIC_BOUNDS_DEG_MAX = [180.0] * 6
 DEFAULT_SAFETY_TELEM_AGE_MAX_MS = 1100.0
 CONCLUSION_INITIAL_PAUSE_S = 1.0
+CONCLUSION_BUCKET_LOOK_MOTION_WAIT_S = 5.0
 CONCLUSION_BUCKET_EMPTY_PAUSE_S = 0.5
+CONCLUSION_CELEBRATION_MOTION_WAIT_S = 5.0
 CONCLUSION_ANNOUNCEMENT_PAUSE_S = 1.0
 UI_GAME_CONTROL_TOPIC = "cmd.ui.game_control"
 BUCKET_COMMAND_TOPIC = "cmd.bucket"
@@ -1597,6 +1599,18 @@ def _tick_conclusion_team(
             _set_bucket_pose_phase(state, now_ns, pose_cfg)
         return
 
+    if phase == "move_to_bucket_pose":
+        # Temporary stand-in for the future conclusion robot motion that
+        # will move to the active bucket look pose. Do not block the GC
+        # loop here; this phase simply lets state.full keep publishing
+        # while we simulate waiting for that motion to finish.
+        # TODO(conclusion-motion): replace this timer with completion from
+        # the free-motion planner / robot trajectory executor.
+        if phase_elapsed_s >= CONCLUSION_BUCKET_LOOK_MOTION_WAIT_S:
+            state["conclusion_phase"] = "sum_bucket"
+            state["conclusion_phase_started_mono_ns"] = now_ns
+        return
+
     if phase == "sum_bucket":
         bucket_index = int(state.get("conclusion_active_bucket_index") or 0)
         if bucket_index >= len(state["bucket_values"]):
@@ -1635,9 +1649,20 @@ def _tick_conclusion_team(
             state["conclusion_active_bucket_index"] = next_bucket_index
             state["conclusion_bucket_open_triggered"] = False
             if next_bucket_index >= len(state["bucket_values"]):
-                _set_announcement_phase(state, now_ns, pose_cfg)
+                _set_celebration_phase(state, now_ns, pose_cfg)
             else:
                 _set_bucket_pose_phase(state, now_ns, pose_cfg)
+        return
+
+    if phase == "celebration_motion":
+        # Temporary stand-in for the future celebration robot motion that
+        # happens after the final bucket opens. Keep this non-blocking so
+        # GameController continues publishing state while the fake motion
+        # duration elapses.
+        # TODO(conclusion-motion): replace this timer with completion from
+        # the celebration trajectory executor.
+        if phase_elapsed_s >= CONCLUSION_CELEBRATION_MOTION_WAIT_S:
+            _set_announcement_phase(state, now_ns, pose_cfg)
         return
 
     if phase == "announcement_pose":
@@ -1672,15 +1697,31 @@ def _set_bucket_pose_phase(
     bucket_index = int(state.get("conclusion_active_bucket_index") or 0)
     pose_names = ["robot_lookb1_pose", "robot_lookb2_pose", "robot_lookb3_pose"]
     pose_name = pose_names[min(bucket_index, len(pose_names) - 1)]
-    state["conclusion_phase"] = "sum_bucket"
+    state["conclusion_phase"] = "move_to_bucket_pose"
     state["conclusion_target_pose_name"] = pose_name
     state["conclusion_target_pose_deg"] = pose_cfg.get(
         pose_name, list(DEFAULT_LOOK_POSE_DEG)
     )
     state["conclusion_phase_started_mono_ns"] = now_ns
-    # TODO(conclusion-motion): insert the collision-free move to the
-    # bucket-look pose here. Until that planner exists, the robot stays
-    # frozen and the controller advances directly into score summation.
+    # TODO(conclusion-motion): send the collision-free move to this
+    # bucket-look pose here. Until that planner exists,
+    # move_to_bucket_pose waits for CONCLUSION_BUCKET_LOOK_MOTION_WAIT_S.
+
+
+def _set_celebration_phase(
+    state: dict[str, Any], now_ns: int, pose_cfg: dict[str, list[float]]
+) -> None:
+    """Enter the temporary post-bucket celebration phase."""
+
+    state["conclusion_phase"] = "celebration_motion"
+    state["conclusion_target_pose_name"] = "robot_celebration_pose"
+    state["conclusion_target_pose_deg"] = pose_cfg.get(
+        "robot_celebration_pose", list(DEFAULT_LOOK_POSE_DEG)
+    )
+    state["conclusion_phase_started_mono_ns"] = now_ns
+    # TODO(conclusion-motion): send the celebration trajectory here. Until
+    # that exists, celebration_motion waits for
+    # CONCLUSION_CELEBRATION_MOTION_WAIT_S.
 
 
 def _set_announcement_phase(
@@ -1761,6 +1802,7 @@ def _default_pose_map() -> dict[str, list[float]]:
         "robot_lookb1_pose": list(DEFAULT_LOOK_POSE_DEG),
         "robot_lookb2_pose": list(DEFAULT_LOOK_POSE_DEG),
         "robot_lookb3_pose": list(DEFAULT_LOOK_POSE_DEG),
+        "robot_celebration_pose": list(DEFAULT_LOOK_POSE_DEG),
         "robot_announcement_pose": list(DEFAULT_LOOK_POSE_DEG),
         "robot_win_pose": list(DEFAULT_LOOK_POSE_DEG),
         "robot_lose_pose": list(DEFAULT_LOOK_POSE_DEG),

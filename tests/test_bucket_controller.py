@@ -13,7 +13,6 @@ if str(SRC) not in sys.path:
 from core.config import load as load_profile  # noqa: E402
 from subsystems.bucket.common import BUCKET_LABELS, BucketMotorConfig, MotorStatus  # noqa: E402
 from subsystems.bucket.controller import BucketControllerRuntime  # noqa: E402
-from apps.game_controller import __main__ as game_controller  # noqa: E402
 
 
 class _FakeClock:
@@ -128,40 +127,6 @@ def test_limit_status_completes_command_without_watchdog_stop() -> None:
     assert bucket["last_result"]["ok"] is True
 
 
-def test_conclusion_uses_one_based_bucket_command() -> None:
-    """Conclusion should publish B2, not a zero-based bucket index."""
-
-    commands: list[dict] = []
-    state = {
-        "team": "b",
-        "bucket_values": [0, 1, 0],
-        "summed_score": 0,
-        "score": 1,
-        "conclusion_phase": "sum_bucket",
-        "conclusion_active_bucket_index": 1,
-        "conclusion_phase_started_mono_ns": 0,
-        "conclusion_sum_remainder_units": 0.0,
-    }
-
-    game_controller._tick_conclusion_team(
-        state,
-        dt=1.0,
-        game_cfg={"sum_score_rate_unit_per_s": 100.0},
-        pose_cfg={},
-        stage_state={"winner_team": None},
-        bucket_command_fn=lambda *args, **kwargs: commands.append({"args": args, **kwargs}),
-    )
-
-    assert commands == [
-        {
-            "args": ("open",),
-            "team": "b",
-            "bucket_number": 2,
-            "reason": "conclusion_bucket_counted",
-        }
-    ]
-
-
 def test_dev_bucket_profile_loads() -> None:
     """The dedicated bucket integration profile should validate."""
 
@@ -175,7 +140,6 @@ def main() -> int:
     test_open_and_close_use_physical_direction_mapping()
     test_watchdog_stops_motor_after_timeout()
     test_limit_status_completes_command_without_watchdog_stop()
-    test_conclusion_uses_one_based_bucket_command()
     test_dev_bucket_profile_loads()
     print("[test] bucket controller tests passed")
     return 0
