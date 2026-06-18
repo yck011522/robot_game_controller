@@ -63,17 +63,17 @@ tuning:
     q_limits_min_deg: [-180, -180, -180, -180, -180, -180]
     q_limits_max_deg: [180, 180, 180, 180, 180, 180]
     max_velocity_deg_s: [15, 20, 30, 40, 50, 50]
-    max_acceleration_deg_s2: [45, 65, 65, 115, 115, 115]
+    max_acceleration_deg_s2: [45, 95, 95, 115, 115, 115]
     headless: false
     initial_pose_deg: [0.0, -90.0, 90.0, 0.0, 0.0, 0.0]
   collision:
     check_self: true
     check_world: true
-    timeout_ms: 40
+    timeout_ms: 60
     retries: 2
     bundle_size: 1
   jogging:
-    n_forward_steps: 12
+    n_forward_steps: 16
     forward_step_deg: 1.0
     path_cutoff_deg: 3.0
     forward_bundle_size: 1

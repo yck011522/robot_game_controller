@@ -61,7 +61,7 @@ tuning:
     retries: 2
     bundle_size: 1
   jogging:
-    n_forward_steps: 12
+    n_forward_steps: 18
     forward_step_deg: 1.0
     path_cutoff_deg: 3.0
     forward_bundle_size: 1
