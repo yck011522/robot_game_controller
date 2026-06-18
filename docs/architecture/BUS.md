@@ -325,7 +325,7 @@ Subscribers that care about stage edges detect them by comparing
 
   // Safety inputs.
   //   barrier.channels  -- 8 raw light-barrier beams in the persistent
-  //                        channel order configured in com_ports.yaml.
+  //                        channel order configured in device_ports_and_addr.yaml.
   //                        true = beam unbroken / normally-closed input HIGH.
   //   barrier.ok        -- final decision checked by GC and RobotIO.
   //                        Bypass config is applied before this reaches

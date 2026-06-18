@@ -21,7 +21,7 @@ Strip XY mapping (center of arena = 0,0):
   71: (1773, -1480), 72: (1868, -1480)
   81: (2272, 0),     82: (2367, 0)
 
-Protocol: RS485 using the baudrate configured in `config/com_ports.yaml`.
+Protocol: RS485 using the baudrate configured in `config/device_ports_and_addr.yaml`.
 Command format (WS2811/12V LED strips):
   [Header: DD 55 EE] [Group: 00 00] [Device: 00 XX] [Port: 01/02] [Function: 99]
   [LED Type: 02] [Reserved: 00 00] [Length: 00 54] [Repeat: 00 01]
@@ -42,7 +42,7 @@ except ImportError:
     serial = None
 
 import port_registry
-from core.com_ports import require_serial_baudrate, require_serial_float
+from core.device_connection import require_serial_baudrate, require_serial_float
 
 logger = logging.getLogger(__name__)
 
@@ -362,12 +362,12 @@ class RS485Connection:
         """
         Args:
             port: Serial port name (e.g., 'COM3'). If None, auto-detect.
-            baudrate: Baud rate supplied by the caller from config/com_ports.yaml.
+            baudrate: Baud rate supplied by the caller from config/device_ports_and_addr.yaml.
         """
         if baudrate is None:
             raise ValueError("RS485Connection requires a config-sourced baudrate")
         self.port = port
-        self.baudrate = baudrate  # RS485 speed owned by config/com_ports.yaml
+        self.baudrate = baudrate  # RS485 speed owned by config/device_ports_and_addr.yaml
         self.write_timeout = write_timeout
         self.ser = None
         self._lock = threading.Lock()
@@ -666,9 +666,9 @@ class LEDSystem:
                            (e.g. ports claimed by the haptic system).
         """
         if baudrate is not None:
-            raise ValueError("LEDSystem baudrate must be configured in config/com_ports.yaml")
+            raise ValueError("LEDSystem baudrate must be configured in config/device_ports_and_addr.yaml")
         if inter_command_delay_s is not None:
-            raise ValueError("LEDSystem inter-command delay must be configured in config/com_ports.yaml")
+            raise ValueError("LEDSystem inter-command delay must be configured in config/device_ports_and_addr.yaml")
         self._baudrate = require_serial_baudrate(_SERIAL_SETTINGS_KEY)
         self._inter_command_delay_s = max(
             0.0,

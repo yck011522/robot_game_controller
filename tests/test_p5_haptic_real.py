@@ -3,8 +3,8 @@
 Validates two things without requiring physical ESP32 boards:
 1. The real backend discovers dial IDs 21-26, seeds position, and emits
    high-rate `R` / `C` / `S` serial commands.
-2. Profile validation rejects malformed `hardware.serial_ports.haptic_*`
-   values before the launcher ever spawns the process.
+2. Device connection validation rejects malformed or incomplete hardware
+   connection settings before real serial backends run.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ SRC = REPO_ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from core import com_ports  # noqa: E402
+from core import device_connection  # noqa: E402
 from core.config import ConfigError, load as load_profile  # noqa: E402
 from led_serial import LEDSystem  # noqa: E402
 from subsystems.haptic.real import (  # noqa: E402
@@ -81,7 +81,6 @@ class _FakeSerial:
 
 def _make_profile() -> SimpleNamespace:
     return SimpleNamespace(
-        hardware={"serial_ports": {"haptic_b": []}},
         tuning={
             "haptic": {
                 "bounds_deg_min": [-90, -90, -90, -90, -90, -90],
@@ -100,14 +99,14 @@ def _make_profile() -> SimpleNamespace:
     )
 
 
-def _write_com_ports_config(path: Path, serial_ports_yaml: str = "") -> None:
-    """Write a test COM-port config with the required haptic serial baudrate."""
+def _write_device_connection_config(path: Path, serial_ports_yaml: str = "") -> None:
+    """Write a test device config with the required haptic serial baudrate."""
 
     path.write_text(
         "serial_ports:\n"
         f"{serial_ports_yaml}"
         "serial_settings:\n"
-        "  p5_haptic_single_dial:\n"
+        "  haptic_dial:\n"
         "    baudrate: 123456\n",
         encoding="utf-8",
     )
@@ -115,10 +114,13 @@ def _write_com_ports_config(path: Path, serial_ports_yaml: str = "") -> None:
 
 def test_real_backend_discovers_and_drives() -> None:
     with TemporaryDirectory() as tmpdir:
-        original = com_ports.DEFAULT_COM_PORTS_PATH
-        com_ports.clear_cache()
-        com_ports.DEFAULT_COM_PORTS_PATH = Path(tmpdir) / "com_ports.yaml"
-        _write_com_ports_config(com_ports.DEFAULT_COM_PORTS_PATH)
+        original = device_connection.DEFAULT_DEVICE_CONNECTION_PATH
+        device_connection.clear_cache()
+        device_connection.DEFAULT_DEVICE_CONNECTION_PATH = Path(tmpdir) / "device_ports_and_addr.yaml"
+        _write_device_connection_config(
+            device_connection.DEFAULT_DEVICE_CONNECTION_PATH,
+            "  haptic_b: [COM21, COM22, COM23, COM24, COM25, COM26]\n",
+        )
         scripts_by_port = {
             f"COM{21 + idx}": f"T,{21 + idx},0,{100 + idx},{10 + idx},0,{1000 + idx},0\nI,2,{21 + idx}\nV,1,0.3.0\n"
             for idx in range(6)
@@ -129,16 +131,10 @@ def test_real_backend_discovers_and_drives() -> None:
         def serial_factory():
             return _FakeSerial(scripts_by_port, writes_by_port, baudrates_by_port)
 
-        ports = [
-            SimpleNamespace(device=port, vid=0x1A86, pid=0x7523)
-            for port in scripts_by_port
-        ]
-
         rig = RealHaptic(
             team="b",
             profile=_make_profile(),
             serial_factory=serial_factory,
-            list_ports_fn=lambda: ports,
         )
         try:
             rig.update_robot_actual([0.0, 0.05, 0.1, 0.15, 0.2, 0.25])
@@ -166,8 +162,8 @@ def test_real_backend_discovers_and_drives() -> None:
             print("[test] real haptic backend discovery + command path: OK")
         finally:
             rig.close()
-            com_ports.DEFAULT_COM_PORTS_PATH = original
-            com_ports.clear_cache()
+            device_connection.DEFAULT_DEVICE_CONNECTION_PATH = original
+            device_connection.clear_cache()
 
 
 def test_oob_kick_enable_defaults_to_protocol_enabled() -> None:
@@ -197,11 +193,11 @@ def test_real_backend_static_bounds_convert_to_dial_space() -> None:
     print("[test] real haptic static bounds gear conversion: OK")
 
 
-def test_config_rejects_bad_haptic_port_list() -> None:
+def test_config_rejects_profile_hardware_block() -> None:
     with TemporaryDirectory() as tmpdir:
-        path = Path(tmpdir) / "bad_haptic_profile.yaml"
+        path = Path(tmpdir) / "stale_hardware_profile.yaml"
         path.write_text(
-            "profile_name: bad_haptic\n"
+            "profile_name: stale_hardware\n"
             "active_teams: [b]\n"
             "subsystems:\n"
             "  haptic_io: {a: null, b: real}\n"
@@ -214,102 +210,113 @@ def test_config_rejects_bad_haptic_port_list() -> None:
             "    q_limits_min_deg: [-180, -180, -180, -180, -180, -180]\n"
             "    q_limits_max_deg: [180, 180, 180, 180, 180, 180]\n"
             "hardware:\n"
-            "  serial_ports:\n"
-            "    haptic_b: COM7\n",
+            "  serial_ports: {haptic_b: [COM7]}\n",
             encoding="utf-8",
         )
         try:
             load_profile(path)
         except ConfigError as exc:
-            assert "hardware.serial_ports.haptic_b" in str(exc)
-            print("[test] config rejects malformed haptic serial_ports: OK")
+            assert "'hardware' is no longer supported" in str(exc)
+            print("[test] config rejects stale profile hardware block: OK")
             return
-        raise AssertionError("ConfigError not raised for malformed hardware.serial_ports.haptic_b")
+        raise AssertionError("ConfigError not raised for stale profile hardware block")
 
 
-def test_com_ports_yaml_empty_disables_haptic_scan() -> None:
+def test_device_config_rejects_bad_haptic_port_list() -> None:
     with TemporaryDirectory() as tmpdir:
-        path = Path(tmpdir) / "com_ports.yaml"
-        _write_com_ports_config(path, "  haptic_b: []\n")
-        original = com_ports.DEFAULT_COM_PORTS_PATH
-        com_ports.clear_cache()
-        com_ports.DEFAULT_COM_PORTS_PATH = path
+        path = Path(tmpdir) / "device_ports_and_addr.yaml"
+        _write_device_connection_config(path, "  haptic_b: [COM7, 12]\n")
+        original = device_connection.DEFAULT_DEVICE_CONNECTION_PATH
+        device_connection.clear_cache()
+        device_connection.DEFAULT_DEVICE_CONNECTION_PATH = path
+        try:
+            try:
+                device_connection.resolve_serial_ports("haptic_b")
+            except ValueError as exc:
+                assert "serial_ports.haptic_b" in str(exc)
+                print("[test] device config rejects malformed haptic port list: OK")
+                return
+            raise AssertionError("ValueError not raised for malformed haptic port list")
+        finally:
+            device_connection.DEFAULT_DEVICE_CONNECTION_PATH = original
+            device_connection.clear_cache()
+
+
+def test_device_config_empty_disables_haptic_scan() -> None:
+    with TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "device_ports_and_addr.yaml"
+        _write_device_connection_config(path, "  haptic_b: []\n")
+        original = device_connection.DEFAULT_DEVICE_CONNECTION_PATH
+        device_connection.clear_cache()
+        device_connection.DEFAULT_DEVICE_CONNECTION_PATH = path
         try:
             rig = RealHaptic(
                 team="b",
                 profile=_make_profile(),
                 serial_factory=lambda: _FakeSerial({}, {}),
-                list_ports_fn=lambda: [
-                    SimpleNamespace(device="COM99", vid=0x1A86, pid=0x7523)
-                ],
             )
             try:
                 sample = rig.sample()
                 assert sample["board_connected"] == [False] * 6
                 assert rig._candidate_ports() == []
-                print("[test] com_ports.yaml empty haptic entry disables scan: OK")
+                print("[test] device config empty haptic entry disables scan: OK")
             finally:
                 rig.close()
         finally:
-            com_ports.DEFAULT_COM_PORTS_PATH = original
-            com_ports.clear_cache()
+            device_connection.DEFAULT_DEVICE_CONNECTION_PATH = original
+            device_connection.clear_cache()
 
 
-def test_com_ports_yaml_overrides_profile_haptic_ports() -> None:
+def test_device_config_supplies_haptic_ports() -> None:
     with TemporaryDirectory() as tmpdir:
-        path = Path(tmpdir) / "com_ports.yaml"
-        _write_com_ports_config(path, "  haptic_b: [COM31, COM32]\n")
-        original = com_ports.DEFAULT_COM_PORTS_PATH
-        com_ports.clear_cache()
-        com_ports.DEFAULT_COM_PORTS_PATH = path
+        path = Path(tmpdir) / "device_ports_and_addr.yaml"
+        _write_device_connection_config(path, "  haptic_b: [COM31, COM32]\n")
+        original = device_connection.DEFAULT_DEVICE_CONNECTION_PATH
+        device_connection.clear_cache()
+        device_connection.DEFAULT_DEVICE_CONNECTION_PATH = path
         try:
             rig = RealHaptic(
                 team="b",
-                profile=SimpleNamespace(
-                    hardware={"serial_ports": {"haptic_b": ["COM21"]}},
-                    tuning={"haptic": {}},
-                ),
+                profile=SimpleNamespace(tuning={"haptic": {}}),
                 serial_factory=lambda: _FakeSerial({}, {}),
-                list_ports_fn=lambda: [],
             )
             try:
                 assert rig._candidate_ports() == ["COM31", "COM32"]
-                print("[test] com_ports.yaml overrides profile haptic ports: OK")
+                print("[test] device config supplies haptic ports: OK")
             finally:
                 rig.close()
         finally:
-            com_ports.DEFAULT_COM_PORTS_PATH = original
-            com_ports.clear_cache()
+            device_connection.DEFAULT_DEVICE_CONNECTION_PATH = original
+            device_connection.clear_cache()
 
 
 def test_missing_haptic_baudrate_is_rejected() -> None:
     with TemporaryDirectory() as tmpdir:
-        path = Path(tmpdir) / "com_ports.yaml"
+        path = Path(tmpdir) / "device_ports_and_addr.yaml"
         path.write_text("serial_ports:\n  haptic_b: [COM31]\n", encoding="utf-8")
-        original = com_ports.DEFAULT_COM_PORTS_PATH
-        com_ports.clear_cache()
-        com_ports.DEFAULT_COM_PORTS_PATH = path
+        original = device_connection.DEFAULT_DEVICE_CONNECTION_PATH
+        device_connection.clear_cache()
+        device_connection.DEFAULT_DEVICE_CONNECTION_PATH = path
         try:
             try:
                 RealHaptic(
                     team="b",
                     profile=_make_profile(),
                     serial_factory=lambda: _FakeSerial({}, {}),
-                    list_ports_fn=lambda: [],
                 )
             except ValueError as exc:
-                assert "serial_settings.p5_haptic_single_dial.baudrate" in str(exc)
+                assert "serial_settings.haptic_dial.baudrate" in str(exc)
                 print("[test] missing haptic baudrate rejected: OK")
                 return
             raise AssertionError("ValueError not raised for missing haptic baudrate")
         finally:
-            com_ports.DEFAULT_COM_PORTS_PATH = original
-            com_ports.clear_cache()
+            device_connection.DEFAULT_DEVICE_CONNECTION_PATH = original
+            device_connection.clear_cache()
 
 
 def test_led_serial_settings_loaded_from_yaml() -> None:
     with TemporaryDirectory() as tmpdir:
-        path = Path(tmpdir) / "com_ports.yaml"
+        path = Path(tmpdir) / "device_ports_and_addr.yaml"
         path.write_text(
             "serial_settings:\n"
             "  light_columns:\n"
@@ -317,26 +324,27 @@ def test_led_serial_settings_loaded_from_yaml() -> None:
             "    inter_command_delay_s: 0.004\n",
             encoding="utf-8",
         )
-        original = com_ports.DEFAULT_COM_PORTS_PATH
-        com_ports.clear_cache()
-        com_ports.DEFAULT_COM_PORTS_PATH = path
+        original = device_connection.DEFAULT_DEVICE_CONNECTION_PATH
+        device_connection.clear_cache()
+        device_connection.DEFAULT_DEVICE_CONNECTION_PATH = path
         try:
             system = LEDSystem(auto_discover=False)
             assert system._baudrate == 765432
             assert system._inter_command_delay_s == 0.004
             print("[test] LED serial settings load from YAML: OK")
         finally:
-            com_ports.DEFAULT_COM_PORTS_PATH = original
-            com_ports.clear_cache()
+            device_connection.DEFAULT_DEVICE_CONNECTION_PATH = original
+            device_connection.clear_cache()
 
 
 def main() -> int:
     test_real_backend_discovers_and_drives()
     test_oob_kick_enable_defaults_to_protocol_enabled()
     test_real_backend_static_bounds_convert_to_dial_space()
-    test_config_rejects_bad_haptic_port_list()
-    test_com_ports_yaml_empty_disables_haptic_scan()
-    test_com_ports_yaml_overrides_profile_haptic_ports()
+    test_config_rejects_profile_hardware_block()
+    test_device_config_rejects_bad_haptic_port_list()
+    test_device_config_empty_disables_haptic_scan()
+    test_device_config_supplies_haptic_ports()
     test_missing_haptic_baudrate_is_rejected()
     test_led_serial_settings_loaded_from_yaml()
     print("\n[test] P5 HAPTIC REAL TESTS PASSED\n")

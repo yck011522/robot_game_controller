@@ -38,7 +38,6 @@ tuning:
       SBarr32: false
       SBarr41: false
       SBarr42: false
-hardware: {}
 recorder:
   root: "./recordings"
   enabled: false

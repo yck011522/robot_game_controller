@@ -18,14 +18,12 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 import serial
-import serial.tools.list_ports
 
-from core.com_ports import require_serial_baudrate, resolve_serial_ports
+from core.device_connection import require_serial_baudrate, resolve_serial_ports
 import port_registry
 
 
-_CH340_VID_PIDS = {(0x1A86, 0x7522), (0x1A86, 0x7523)}
-_SERIAL_SETTINGS_KEY = "p5_haptic_single_dial"  # config key that owns this firmware's serial speed
+_SERIAL_SETTINGS_KEY = "haptic_dial"  # config key that owns this firmware's serial speed
 _DISCOVERY_INTERVAL_S = 3.0
 _WATCHDOG_TIMEOUT_S = 0.5
 _PROBE_TIMEOUT_S = 1.5
@@ -58,7 +56,7 @@ class _SingleDialBoard:
         param_lines: list[tuple[str, int]],
     ) -> None:
         self.port = port
-        self.baudrate = baudrate  # baudrate loaded from config/com_ports.yaml for this firmware
+        self.baudrate = baudrate  # baudrate loaded from config/device_ports_and_addr.yaml for this firmware
         self.dial_id: int | None = None
         self.telemetry = _DialTelemetry()
         # True after host sends an R command to align dial coordinates with
@@ -242,14 +240,12 @@ class RealHaptic:
         team: str,
         profile,
         serial_factory: Callable[[], Any] | None = None,
-        list_ports_fn: Callable[[], list[Any]] | None = None,
         now_fn: Callable[[], float] | None = None,
     ) -> None:
         # Profile selects one six-dial team; ids are fixed per team namespace.
         self._team = team
         self._profile = profile
         self._serial_factory = serial_factory or serial.Serial
-        self._list_ports_fn = list_ports_fn or serial.tools.list_ports.comports
         self._now = now_fn or time.monotonic
         self._expected_dial_ids = _team_dial_ids(team)
         self._connections: dict[int, _SingleDialBoard] = {}
@@ -258,10 +254,9 @@ class RealHaptic:
         # is derived from robot actual so startup remains coherent.
         self._has_runtime_command = False
 
-        port_resolution = resolve_serial_ports(profile, f"haptic_{team}")
+        port_resolution = resolve_serial_ports(f"haptic_{team}")
         self._baudrate = require_serial_baudrate(_SERIAL_SETTINGS_KEY)
         self._configured_ports = list(port_resolution.ports)
-        self._ports_configured = port_resolution.configured
         self._param_lines = _build_param_lines(profile.tuning.get("haptic", {}))
         self._enable_lines = _build_enable_lines(profile.tuning.get("haptic", {}))
 
@@ -418,20 +413,9 @@ class RealHaptic:
             known_ports.add(port)
 
     def _candidate_ports(self) -> list[str]:
-        """Return configured ports, else auto-discovered CH340 ports."""
-        if self._ports_configured:
-            return list(self._configured_ports)
-        ports: list[str] = []
-        for info in self._list_ports_fn():
-            vid = getattr(info, "vid", None)
-            pid = getattr(info, "pid", None)
-            device = getattr(info, "device", None)
-            if (vid, pid) not in _CH340_VID_PIDS or not isinstance(device, str) or not device:
-                continue
-            if port_registry.is_port_claimed(device):
-                continue
-            ports.append(device)
-        return ports
+        """Return configured ports; runtime never scans unrelated COM ports."""
+
+        return list(self._configured_ports)
 
     def _robot_to_dial(self, idx: int, robot_rad: float) -> float:
         """Convert robot joint radians to dial radians via per-axis gear ratio."""

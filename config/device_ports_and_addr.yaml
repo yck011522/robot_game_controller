@@ -1,15 +1,16 @@
-# Installation-local serial port assignments.
+# Installation-local hardware ports and network addresses.
 #
 # Discovery scripts should update this file when hardware is moved to a new
-# PC or USB topology. Runtime processes read these values directly and should
-# not probe unrelated COM ports during launcher startup.
+# PC, USB topology, or robot network. Runtime processes read these values
+# directly and fail if a required real-hardware connection is missing.
 
 serial_ports:
-  # Team haptic dial boards. Empty means "do not scan; run disconnected".
+  # Team haptic dial boards. Empty means "configured disconnected"; runtime
+  # will not scan unrelated COM ports during launcher startup.
   haptic_a: []
   haptic_b: ["COM53", "COM52", "COM51", "COM50", "COM49", "COM48"]
 
-  # Deferred hardware subsystems. Leave null until the matching process lands.
+  # Shared serial hardware.
   light_column_1_3: "COM45" # CH1/A
   light_column_4_5: "COM39" # CH2/B
   light_column_6_8: "COM42" # CH3/C
@@ -20,7 +21,7 @@ serial_ports:
   admin_buttons: "COM44" # CH8/H
 
 serial_settings:
-  p5_haptic_single_dial:
+  haptic_dial:
     baudrate: 115200 # USB serial speed for the single-dial ESP32 haptic firmware.
   light_columns:
     baudrate: 921600 # RS485 speed validated for the LED column controllers.
@@ -39,3 +40,9 @@ serial_settings:
       - SBarr42 # address 4, input 2
     read_timeout_s: 0.070 # Per-module serial read timeout used during validation.
     inter_request_delay_s: 0.006 # Stable quiet gap: 6 ms gave 200/200 clean 8-input sweeps.
+
+robot:
+  # Team B UR10e RTDE endpoint. Port 30004 is the standard RTDE port.
+  b:
+    host: "192.168.0.2"
+    port: 30004

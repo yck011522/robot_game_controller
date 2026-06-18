@@ -1,9 +1,10 @@
 # Config
 
-Single-file YAML profiles select **which processes to start, which teams
-are active, which subsystems use Real vs Sim impls, and all tuning
-parameters**. There is no separate base / system file — every profile is
-self-contained so a deployment is one file.
+YAML profiles select **which processes to start, which teams are active,
+which subsystems use Real vs Sim impls, and all tuning parameters**.
+Installation-local hardware wiring lives separately in
+`config/device_ports_and_addr.yaml`, so profiles stay focused on
+run-to-run behavior instead of PC-specific COM ports and IP addresses.
 
 Status: **CONFIRMED for the current P1-P4 runtime slice; revise again when the deferred hardware broadcasters/controllers land.**
 Last reviewed: 2026-06-06.
@@ -15,7 +16,7 @@ Last reviewed: 2026-06-06.
 ```
 config/
   launcher.yaml          # tiny file: which profile to use when --profile is not given
-  com_ports.yaml         # installation-local COM port assignments from discovery tools
+  device_ports_and_addr.yaml  # installation-local COM ports, serial settings, robot IPs
   profiles/
     bus_smoke.yaml       # absolute minimum: bus broker + a tap. Nothing else.
     dev_keyboard.yaml    # P2 manual smoke: all sim, keyboard input, pybullet GUI
@@ -98,7 +99,7 @@ subsystems:
   # UR10e arm per team.
   # sim_pybullet — pybullet-backed simulator with the URDF from
   #                incoming_code/ur10e_robot/. No real robot needed.
-  # real_rtde    — actual UR10e over RTDE TCP (uses hardware.robot.<team>).
+  # real_rtde    — actual UR10e over RTDE TCP (uses config/device_ports_and_addr.yaml robot.<team>).
   robot_io:
     a: sim_pybullet
     b: null
@@ -235,32 +236,6 @@ tuning:
     # force_stage: play   # dev escape hatch; current profiles still pin Play
 
 # ============================================================
-# Hardware addressing
-# Only consulted when an impl is `real`. Sim impls ignore this block.
-# ============================================================
-hardware:
-  # UR10e RTDE endpoints (port 30004 is the standard RTDE port).
-  robot:
-    a: {host: "192.168.1.101", port: 30004}
-    b: {host: "192.168.1.102", port: 30004}
-
-  # Logical name → physical COM port. One RS-485 USB adapter per process
-  # (SYSTEM_MAP §1 rule #7). If a port is missing or in use at spawn time,
-  # the owning process logs an error and exits; the supervisor decides
-  # whether to keep restarting it (see SUPERVISOR.md).
-  serial_ports:
-    haptic_a:            ["COM3", "COM4", "COM5", "COM6", "COM7", "COM8"]  # 6 ESP32 boards
-    haptic_b:            []
-    weight_sensor:       "COM20"
-    light_column_1_3:    "COM21"   # LED columns 1, 2, 3 on this RS-485 bus
-    light_column_4_5:    "COM26"   # LED columns 4, 5
-    light_column_6_8:    "COM27"   # LED columns 6, 7, 8
-    scoreboard:          "COM22"
-    bucket_motors:       "COM23"
-    admin_buttons:       "COM24"   # two stations: start_resume + reset (momentary NC), estop (latching NC)
-    safety_barrier:      "COM25"
-
-# ============================================================
 # Recorder
 # Per-game folders are written under <root>/games/<game_id>/.
 # See LOGGING.md for the on-disk layout (to be written).
@@ -371,7 +346,6 @@ subsystems:
   bus_broker: real
 
 tuning: {}                        # nothing reads tuning in this profile
-hardware: {}
 recorder: {root: "./recordings", enabled: false, keep_raw_audio: false, keep_raw_video: false}
 ```
 
@@ -435,8 +409,6 @@ tuning:
     sum_score_rate_unit_per_s: 100
     sim_bucket_values: {a: [320, 240, 160]}
     force_stage: play
-
-hardware: {}
 recorder: { root: "./recordings", enabled: false, keep_raw_audio: false, keep_raw_video: false }
 ```
 
@@ -493,9 +465,6 @@ tuning:
     prox_floor: 0.6
     forward_timeout_ms: 40
   game: { duration_s: 240, sum_score_rate_unit_per_s: 100, force_stage: play }
-
-hardware:
-  robot: { b: {host: "192.168.0.2", port: 30004} }
 ```
 
 ### 4.4 `show.yaml`
@@ -535,22 +504,6 @@ tuning:
 The installation-wide conclusion pose placeholders live outside the
 profiles in [config/robot_show_poses.yaml](c:/Users/yck01/GitHub/robot_game_controller/config/robot_show_poses.yaml). This keeps show choreography separate from per-profile runtime wiring.
 
-hardware:
-  robot:
-    a: {host: "192.168.1.101", port: 30004}
-    b: {host: "192.168.1.102", port: 30004}
-  serial_ports:
-    haptic_a:            ["COM3","COM4","COM5","COM6","COM7","COM8"]
-    haptic_b:            ["COM9","COM10","COM11","COM12","COM13","COM14"]
-    weight_sensor:       "COM20"
-    light_column_1_3:    "COM21"
-    light_column_4_5:    "COM26"
-    light_column_6_8:    "COM27"
-    scoreboard:          "COM22"
-    bucket_motors:       "COM23"
-    admin_buttons:       "COM24"
-    safety_barrier:      "COM25"
-
 recorder: { root: "D:/recordings", enabled: true, keep_raw_audio: false, keep_raw_video: false }
 ```
 
@@ -566,8 +519,8 @@ failure it prints all errors and exits non-zero. Checks:
    and teams in `active_teams` are non-`null`.
 3. Every impl string is registered in `core/subsystem_registry.py`.
 4. `collision_workers.count` is `>= 0`.
-5. If any `real` impl needs a `hardware.*` field, that field is present
-   (e.g. `robot_io.a: real_rtde` requires `hardware.robot.a.host`).
+5. Profiles must not contain `hardware`; ports and robot addresses belong
+   in `config/device_ports_and_addr.yaml`.
 6. `recorder.root` parent directory is writable.
 
 A schema file (`config/schema.json`) is generated from the dataclass
@@ -585,7 +538,7 @@ Fields fall into three categories:
 |----------|----------|--------------------|
 | **Hot** | `tuning.haptic.*`, `tuning.collision.*`, `tuning.game.*` (except `force_stage`) | Applied immediately. Logged as a `state.stage`-adjacent event. |
 | **Warm** | `recorder.*` | Applied on next game start. Reload returns `ok: true` with a `pending: true` flag. |
-| **Cold** | `active_teams`, every `subsystems.*` value, `hardware.*` | Reload returns `ok: false, error: "requires_restart"`. Launcher restart needed. |
+| **Cold** | `active_teams`, every `subsystems.*` value | Reload returns `ok: false, error: "requires_restart"`. Launcher restart needed. |
 
 The launcher does not auto-restart on cold edits — the gamemaster must
 acknowledge and trigger it. This is deliberate (no surprise process
@@ -595,14 +548,12 @@ churn during a show).
 
 ## 7. Open items
 
-- COM port numbers and serial connection settings are now split into
-  `config/com_ports.yaml` so the launcher does not probe serial hardware
-  during normal startup. Discovery tools should update that file out of band.
-  Existing
-  `hardware.serial_ports` profile entries remain a compatibility fallback,
-  but the standalone file is authoritative when it contains a key, including
-  an empty list to mean "run disconnected; do not scan". Baud rates live under
-  `serial_settings` and are required by runtime serial code.
+- COM port numbers, serial connection settings, and robot RTDE endpoints
+  live in `config/device_ports_and_addr.yaml` so the launcher does not
+  probe serial hardware during normal startup. Discovery tools should
+  update that file out of band. Missing required hardware settings fail
+  explicitly; an empty haptic port list is the deliberate way to run that
+  team disconnected without scanning unrelated COM ports.
 - Whether profiles should compose (e.g. `extends: dev_keyboard`) once
   there are more than ~5 of them. Defer.
 - Whether `force_stage` in `tuning.game` is the right place for dev

@@ -11,8 +11,14 @@ if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 from core import bus  # noqa: E402
-from core.com_ports import load_serial_settings, resolve_serial_ports  # noqa: E402
 from core.config import default_runtime_setting, load as load_profile  # noqa: E402
+from core.device_connection import (  # noqa: E402
+    load_serial_settings,
+    require_serial_baudrate,
+    require_serial_float,
+    require_serial_int_list,
+    resolve_serial_ports,
+)
 from core.proc import Proc, banner, parse_proc_args  # noqa: E402
 from subsystems.safety_barrier.common import (  # noqa: E402
     SafetyBarrierConfig,
@@ -80,7 +86,7 @@ def _make_controller(impl_name: str, profile: Any):
 
 
 def _load_channel_config(profile: Any) -> SafetyBarrierConfig:
-    """Load channel labels from com_ports.yaml and bypass policy from the profile."""
+    """Load channel labels from device config and bypass policy from the profile."""
 
     settings = load_serial_settings().get(SERIAL_SETTINGS_KEY, {})
     channel_order = settings.get("channel_order")
@@ -99,19 +105,15 @@ def _load_channel_config(profile: Any) -> SafetyBarrierConfig:
 def _load_transport(profile: Any) -> RealSafetyBarrierTransport:
     """Load Modbus serial settings for the real safety barrier hardware."""
 
-    port_resolution = resolve_serial_ports(profile, "safety_barrier")
+    port_resolution = resolve_serial_ports("safety_barrier")
     if not port_resolution.ports:
         raise ValueError("serial_ports.safety_barrier must provide one COM port for real safety barrier")
-    settings = load_serial_settings().get(SERIAL_SETTINGS_KEY, {})
-    addresses = settings.get("slave_addresses")
-    if not isinstance(addresses, list) or not addresses:
-        raise ValueError("serial_settings.safety_barrier.slave_addresses must be a non-empty list")
     return RealSafetyBarrierTransport(
         port=port_resolution.ports[0],
-        baudrate=int(settings.get("baudrate", 115200)),
-        slave_addresses=tuple(int(address) for address in addresses),
-        read_timeout_s=float(settings.get("read_timeout_s", 0.070)),
-        inter_request_delay_s=float(settings.get("inter_request_delay_s", 0.006)),
+        baudrate=require_serial_baudrate(SERIAL_SETTINGS_KEY),
+        slave_addresses=require_serial_int_list(SERIAL_SETTINGS_KEY, "slave_addresses"),
+        read_timeout_s=require_serial_float(SERIAL_SETTINGS_KEY, "read_timeout_s", min_value=0.0),
+        inter_request_delay_s=require_serial_float(SERIAL_SETTINGS_KEY, "inter_request_delay_s", min_value=0.0),
     )
 
 

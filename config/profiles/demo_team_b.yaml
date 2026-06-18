@@ -94,13 +94,3 @@ tuning:
     duration_s: 3600
     sum_score_rate_unit_per_s: 100
     force_stage: play
-
-hardware:
-  serial_ports:
-    # Team B dial IDs expected by runtime: 21,22,23,24,25,26.
-    # Runtime discovers dial_id per port and maps automatically.
-    haptic_b: ["COM21", "COM22", "COM23", "COM27", "COM28", "COM29"]
-
-  robot:
-    # Matches the archived keyboard explorer's working default.
-    b: {host: "192.168.0.2", port: 30004}

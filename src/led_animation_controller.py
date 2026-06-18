@@ -54,8 +54,8 @@ class LEDAnimationController:
         Args:
             serial_port: RS485 port (auto-detected if None). Legacy single-bus.
             serial_ports: Explicit list of RS485 ports (multi-bus).
-            baudrate: Deprecated; configure serial_settings.light_columns.baudrate.
-            inter_command_delay_s: Deprecated; configure serial_settings.light_columns.inter_command_delay_s.
+            baudrate: Deprecated; configure config/device_ports_and_addr.yaml serial_settings.light_columns.baudrate.
+            inter_command_delay_s: Deprecated; configure config/device_ports_and_addr.yaml serial_settings.light_columns.inter_command_delay_s.
             debug_hex: If True, logs outgoing packet bytes
             auto_discover: If True, background-scan for RS485 adapters and probe
                            for LED controllers.

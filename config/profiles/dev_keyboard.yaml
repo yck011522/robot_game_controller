@@ -102,5 +102,3 @@ tuning:
     sim_bucket_values:
       a: [320, 240, 160]
     force_stage: play
-
-hardware: {}

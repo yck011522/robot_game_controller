@@ -54,7 +54,6 @@ class Profile:
     active_teams: tuple[str, ...]
     subsystems: dict[str, Any]
     tuning: dict[str, Any] = field(default_factory=dict)
-    hardware: dict[str, Any] = field(default_factory=dict)
     recorder: dict[str, Any] = field(default_factory=dict)
     path: Path | None = None
     raw: dict[str, Any] = field(default_factory=dict)
@@ -101,7 +100,6 @@ def load(path: str | Path) -> Profile:
         active_teams=tuple(data.get("active_teams") or ()),
         subsystems=dict(data.get("subsystems") or {}),
         tuning=dict(data.get("tuning") or {}),
-        hardware=dict(data.get("hardware") or {}),
         recorder=dict(data.get("recorder") or {}),
         path=p,
         raw=data,
@@ -157,15 +155,14 @@ def _validate(data: dict[str, Any], errors: list[str]) -> None:
     if _global_impl(subs.get("bus_broker")) != "real":
         errors.append("subsystems.bus_broker must be 'real' (no other impl exists)")
 
-    hardware = data.get("hardware") or {}
+    if "hardware" in data:
+        errors.append(
+            "'hardware' is no longer supported in profiles; "
+            "move ports and robot addresses to config/device_ports_and_addr.yaml"
+        )
+
     tuning = data.get("tuning") or {}
     robot_tune = tuning.get("robot") if isinstance(tuning, dict) else None
-    robot_hw = hardware.get("robot") if isinstance(hardware, dict) else None
-    serial_ports = hardware.get("serial_ports") if isinstance(hardware, dict) else None
-
-    if serial_ports is not None and not isinstance(serial_ports, dict):
-        errors.append("hardware.serial_ports must be a mapping when provided")
-        serial_ports = None
 
     needs_robot_limits = False
     for t in teams:
@@ -181,41 +178,6 @@ def _validate(data: dict[str, Any], errors: list[str]) -> None:
         else:
             _validate_robot_limit_array(robot_tune.get("q_limits_min_deg"), "tuning.robot.q_limits_min_deg", errors)
             _validate_robot_limit_array(robot_tune.get("q_limits_max_deg"), "tuning.robot.q_limits_max_deg", errors)
-
-    for t in VALID_TEAMS:
-        robot_impl = subs.get("robot_io", {}).get(t) if isinstance(subs.get("robot_io"), dict) else None
-        if robot_impl != "real_rtde":
-            continue
-        if not isinstance(robot_hw, dict):
-            errors.append(f"hardware.robot.{t}.host is required when subsystems.robot_io.{t} is 'real_rtde'")
-            continue
-        team_hw = robot_hw.get(t)
-        if not isinstance(team_hw, dict):
-            errors.append(f"hardware.robot.{t}.host is required when subsystems.robot_io.{t} is 'real_rtde'")
-            continue
-        host = team_hw.get("host")
-        if not isinstance(host, str) or not host.strip():
-            errors.append(f"hardware.robot.{t}.host must be a non-empty string when subsystems.robot_io.{t} is 'real_rtde'")
-        port = team_hw.get("port")
-        if port is not None:
-            try:
-                if int(port) <= 0:
-                    errors.append(f"hardware.robot.{t}.port must be > 0 when provided")
-            except (TypeError, ValueError):
-                errors.append(f"hardware.robot.{t}.port must be an integer when provided")
-
-    if isinstance(serial_ports, dict):
-        for t in VALID_TEAMS:
-            key = f"haptic_{t}"
-            ports = serial_ports.get(key)
-            if ports is None:
-                continue
-            if not isinstance(ports, list):
-                errors.append(f"hardware.serial_ports.{key} must be a list of COM ports")
-                continue
-            for idx, port_name in enumerate(ports):
-                if not isinstance(port_name, str) or not port_name.strip():
-                    errors.append(f"hardware.serial_ports.{key}[{idx}] must be a non-empty string")
 
 
 def _validate_robot_limit_array(value: Any, field: str, errors: list[str]) -> None:

@@ -370,7 +370,7 @@ AA BB
 
 ## 12. Validated Timing Constraints (Windows + RS485)
 
-These values are owned by `config/com_ports.yaml` under
+These values are owned by `config/device_ports_and_addr.yaml` under
 `serial_settings.light_columns`. The current show config uses:
 
 - `baudrate = 921600`
@@ -409,7 +409,7 @@ At `d = 2 ms`, command period is about `3.11 ms`, giving:
 
 Recommendation:
 
-- Keep LED serial timing in `config/com_ports.yaml`.
+- Keep LED serial timing in `config/device_ports_and_addr.yaml`.
 - Avoid assuming old 115200-baud timing limits after switching to 921600 baud.
 - Prefer updating only changed strips per frame where possible.
 
@@ -424,6 +424,6 @@ Reason: there are two pacing models:
 - **between-strips-only** (faster): delay was only enforced between A/B commands within one frame.
 
 The higher observed value matches the **between-strips-only** model.
-For production reliability, keep the active pacing values in `config/com_ports.yaml`
+For production reliability, keep the active pacing values in `config/device_ports_and_addr.yaml`
 and prefer **between-all-commands** unless additional testing proves long-run
 stability at a faster mode.

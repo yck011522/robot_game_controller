@@ -11,7 +11,6 @@ Example:
 from __future__ import annotations
 
 import argparse
-import re
 import sys
 import time
 from dataclasses import dataclass
@@ -24,15 +23,22 @@ try:
 except ImportError:  # pragma: no cover - exercised only on machines without pyserial.
     serial = None
 
-DEFAULT_PORT = "COM43"  # fallback COM port when config/com_ports.yaml has no safety_barrier entry
-DEFAULT_BAUD = 115200  # UART baud rate configured on the RS485 IO units
-DEFAULT_TIMEOUT_MS = 70.0  # read timeout per device; lower values raise max FPS but punish slow replies
-DEFAULT_ADDRESSES = (1, 2, 3, 4)  # Modbus slave addresses currently assigned to the four IO units
+REPO_ROOT = Path(__file__).resolve().parent.parent
+SRC = REPO_ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+from core.device_connection import (  # noqa: E402
+    require_serial_baudrate,
+    require_serial_float,
+    require_serial_int_list,
+    resolve_serial_ports,
+)
+
 MODBUS_READ_DISCRETE_INPUTS = 0x02  # Modbus function code used by the provided working frame
 DEFAULT_START_ADDRESS = 0  # first discrete input address to read from each module
 DEFAULT_INPUT_COUNT = 2  # number of input bits to read from each module
-DEFAULT_INTER_REQUEST_DELAY_MS = 6.0  # measured stable RS485 quiet gap between module polls on COM43
-COM_PORTS_PATH = Path(__file__).resolve().parent.parent / "config" / "com_ports.yaml"  # local serial map
+SERIAL_SETTINGS_KEY = "safety_barrier"  # config key for Modbus RTU transport settings
 
 
 @dataclass(frozen=True)
@@ -190,14 +196,12 @@ def read_module(
 
 
 def configured_safety_barrier_port() -> str:
-    """Return the configured safety_barrier COM port, or the probe fallback."""
+    """Return the configured safety_barrier COM port from device config."""
 
-    if COM_PORTS_PATH.exists():
-        config_text = COM_PORTS_PATH.read_text(encoding="utf-8")  # installation-local COM-port YAML text
-        match = re.search(r"^\s*safety_barrier:\s*[\"']?([^\"'\s#]+)", config_text, flags=re.MULTILINE)
-        if match:
-            return match.group(1).strip()
-    return DEFAULT_PORT
+    ports = resolve_serial_ports("safety_barrier").ports
+    if not ports:
+        raise ValueError("serial_ports.safety_barrier must provide one COM port for the probe")
+    return ports[0]
 
 
 def parse_addresses(values: Iterable[int]) -> list[int]:
@@ -247,10 +251,24 @@ def run_probe(args: argparse.Namespace) -> int:
         print("ERROR: pyserial is not installed. Install requirements.txt first.", file=sys.stderr)
         return 2
 
-    addresses = parse_addresses(args.addresses)  # ordered Modbus slave addresses to poll each cycle
-    timeout_s = max(0.001, args.timeout_ms / 1000.0)  # serial read timeout in seconds
-    write_timeout_s = max(0.001, args.write_timeout_ms / 1000.0)  # serial write timeout in seconds
-    inter_request_delay_s = max(0.0, args.inter_request_delay_ms / 1000.0)  # optional pause after each device
+    port = args.port or configured_safety_barrier_port()  # COM port selected by CLI or device config
+    baud = args.baud or require_serial_baudrate(SERIAL_SETTINGS_KEY)  # Modbus RTU baud rate
+    addresses_raw = args.addresses or list(require_serial_int_list(SERIAL_SETTINGS_KEY, "slave_addresses"))
+    addresses = parse_addresses(addresses_raw)  # ordered Modbus slave addresses to poll each cycle
+    timeout_ms = (
+        args.timeout_ms
+        if args.timeout_ms is not None
+        else require_serial_float(SERIAL_SETTINGS_KEY, "read_timeout_s", min_value=0.0) * 1000.0
+    )
+    write_timeout_ms = args.write_timeout_ms if args.write_timeout_ms is not None else timeout_ms
+    inter_request_delay_ms = (
+        args.inter_request_delay_ms
+        if args.inter_request_delay_ms is not None
+        else require_serial_float(SERIAL_SETTINGS_KEY, "inter_request_delay_s", min_value=0.0) * 1000.0
+    )
+    timeout_s = max(0.001, timeout_ms / 1000.0)  # serial read timeout in seconds
+    write_timeout_s = max(0.001, write_timeout_ms / 1000.0)  # serial write timeout in seconds
+    inter_request_delay_s = max(0.0, inter_request_delay_ms / 1000.0)  # optional pause after each device
     max_cycles = max(0, args.cycles)  # finite sweep count; 0 keeps polling until Ctrl+C
     rate = RateMeter()  # rolling FPS estimator for full four-device polling cycles
     cycles = 0  # number of complete address sweeps finished
@@ -259,15 +277,15 @@ def run_probe(args: argparse.Namespace) -> int:
 
     print(
         "Opening safety barrier probe "
-        f"port={args.port} baud={args.baud} addresses={addresses} "
-        f"timeout_ms={args.timeout_ms:g} inter_request_delay_ms={args.inter_request_delay_ms:g}",
+        f"port={port} baud={baud} addresses={addresses} "
+        f"timeout_ms={timeout_ms:g} inter_request_delay_ms={inter_request_delay_ms:g}",
         flush=True,
     )
     print("Press Ctrl+C to stop.", flush=True)
 
     with serial.Serial(
-        port=args.port,
-        baudrate=args.baud,
+        port=port,
+        baudrate=baud,
         bytesize=serial.EIGHTBITS,
         parity=serial.PARITY_NONE,
         stopbits=serial.STOPBITS_ONE,
@@ -316,17 +334,17 @@ def build_parser() -> argparse.ArgumentParser:
     """Build the CLI parser for the safety barrier probe."""
 
     parser = argparse.ArgumentParser(description="Poll Modbus RTU safety barrier input modules.")
-    parser.add_argument("--port", default=configured_safety_barrier_port(), help="Serial COM port.")
-    parser.add_argument("--baud", type=int, default=DEFAULT_BAUD, help="Serial baud rate.")
+    parser.add_argument("--port", default=None, help="Serial COM port; default comes from device config.")
+    parser.add_argument("--baud", type=int, default=None, help="Serial baud rate; default comes from device config.")
     parser.add_argument(
         "--addresses",
         nargs="+",
         type=int,
-        default=list(DEFAULT_ADDRESSES),
-        help="Modbus slave addresses to poll in order.",
+        default=None,
+        help="Modbus slave addresses to poll in order; default comes from device config.",
     )
-    parser.add_argument("--timeout-ms", type=float, default=DEFAULT_TIMEOUT_MS, help="Read timeout per module.")
-    parser.add_argument("--write-timeout-ms", type=float, default=DEFAULT_TIMEOUT_MS, help="Write timeout.")
+    parser.add_argument("--timeout-ms", type=float, default=None, help="Read timeout per module.")
+    parser.add_argument("--write-timeout-ms", type=float, default=None, help="Write timeout.")
     parser.add_argument("--start-address", type=int, default=DEFAULT_START_ADDRESS, help="First input address.")
     parser.add_argument("--input-count", type=int, default=DEFAULT_INPUT_COUNT, help="Input bits to read.")
     parser.add_argument("--cycles", type=int, default=0, help="Number of full polling cycles to run; 0 runs forever.")
@@ -334,8 +352,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--inter-request-delay-ms",
         type=float,
-        default=DEFAULT_INTER_REQUEST_DELAY_MS,
-        help="Optional delay after each module poll.",
+        default=None,
+        help="Optional delay after each module poll; default comes from device config.",
     )
     parser.add_argument(
         "--no-flush-per-request",

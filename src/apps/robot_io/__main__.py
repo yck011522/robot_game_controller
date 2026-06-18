@@ -14,6 +14,7 @@ import zmq  # noqa: E402
 
 from core import bus  # noqa: E402
 from core.config import default_runtime_setting, load as load_profile  # noqa: E402
+from core.device_connection import require_robot_endpoint  # noqa: E402
 from core.proc import Proc, banner, parse_proc_args  # noqa: E402
 from subsystems.robot.joint_limits import clamp_joint_target_rad, resolve_joint_limits_rad  # noqa: E402
 
@@ -44,8 +45,6 @@ def main(argv: list[str] | None = None) -> int:
     initial_pose_deg = proc.profile.tuning.get("robot", {}).get(
         "initial_pose_deg", [0.0, -90.0, 90.0, 0.0, 0.0, 0.0]
     )
-    robot_hw = proc.profile.hardware.get("robot", {}) or {}
-    robot_cfg = robot_hw.get(team, {}) or {}
     q_min, q_max = resolve_joint_limits_rad(proc.profile.tuning.get("robot", {}), axes=6)
     safety_enabled = proc.profile.subsystem_impl("safety_barrier_controller") is not None
     safety_telem_age_max_s = (
@@ -67,7 +66,6 @@ def main(argv: list[str] | None = None) -> int:
         team=team,
         headless=headless,
         initial_pose_rad=initial_pose_rad,
-        robot_cfg=robot_cfg,
         servo_hz=target_hz,
     )
     banner(proc.proc, f"impl={impl_name} headless={headless}")
@@ -178,21 +176,22 @@ def main(argv: list[str] | None = None) -> int:
     return proc.run(tick, teardown=teardown)
 
 
-def _make_impl(name: str, *, team: str, headless: bool,
-               initial_pose_rad=None, robot_cfg: dict | None = None,
-               servo_hz: float = DEFAULT_TICK_HZ):
+def _make_impl(
+    name: str,
+    *,
+    team: str,
+    headless: bool,
+    initial_pose_rad=None,
+    servo_hz: float = DEFAULT_TICK_HZ,
+):
     """Construct the configured robot backend for this process."""
     if name == "sim_pybullet":
         from subsystems.robot.robot_sim_pybullet import SimPybulletRobot
         return SimPybulletRobot(headless=headless, initial_pose_rad=initial_pose_rad)
     if name == "real_rtde":
         from subsystems.robot.robot_real_rtde import RealRtdeRobot
-        robot_cfg = robot_cfg or {}
-        host = robot_cfg.get("host")
-        if not isinstance(host, str) or not host:
-            raise ValueError(f"robot_io.{team} real_rtde requires hardware.robot.{team}.host")
-        port = robot_cfg.get("port")
-        return RealRtdeRobot(host=host, port=port, servo_hz=servo_hz)
+        endpoint = require_robot_endpoint(team)
+        return RealRtdeRobot(host=endpoint.host, port=endpoint.port, servo_hz=servo_hz)
     raise NotImplementedError(f"robot_io impl {name!r} not available yet")
 
 
