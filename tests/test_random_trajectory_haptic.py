@@ -58,9 +58,32 @@ def _make_profile() -> SimpleNamespace:
                 "speed_scale": 1.0,
                 "min_axis_speed_fraction": 0.2,
                 "path_turnaround_distance_deg": 3.0,
+                "proximity_flip_distance_deg": 3.0,
+                "proximity_stale_ticks": 12,
             },
         }
     )
+
+
+def _state_with_proximity(
+    *,
+    offsets_deg: list[float],
+    hits: list[list[bool]],
+    ages: list[int],
+) -> dict:
+    """Build a minimal state.full payload carrying proximity masks."""
+
+    return {
+        "teams": {
+            "b": {
+                "collision": {
+                    "prox_probe_offsets_deg": offsets_deg,
+                    "prox_hits": hits,
+                    "prox_age_ticks": ages,
+                }
+            }
+        }
+    }
 
 
 def test_paused_start_latches_robot_pose_once() -> None:
@@ -227,6 +250,77 @@ def test_path_collision_reroll_resets_to_planner_target() -> None:
     print("[test] random trajectory collision reroll target reset: OK")
 
 
+def test_proximity_bias_flips_away_from_near_positive_hit() -> None:
+    """A generated positive direction should flip if positive prox is tight."""
+
+    rig = RandomTrajectoryHaptic(team="b", profile=_make_profile(), now_fn=_Clock())
+    rig.update_state_full(
+        _state_with_proximity(
+            offsets_deg=[-3.0, -1.0, 1.0, 3.0],
+            hits=[
+                [False, False, True, False],
+                [False, False, False, False],
+                [False, False, False, False],
+                [False, False, False, False],
+                [False, False, False, False],
+                [False, False, False, False],
+            ],
+            ages=[0, 9999, 9999, 9999, 9999, 9999],
+        )
+    )
+
+    assert rig._proximity_biased_sign(0, 1.0) == -1.0
+    assert rig._proximity_biased_sign(0, -1.0) == -1.0
+    print("[test] random trajectory proximity flips away from positive hit: OK")
+
+
+def test_proximity_bias_ignores_stale_masks() -> None:
+    """Old proximity samples should not steer newly generated velocity."""
+
+    rig = RandomTrajectoryHaptic(team="b", profile=_make_profile(), now_fn=_Clock())
+    rig.update_state_full(
+        _state_with_proximity(
+            offsets_deg=[-3.0, -1.0, 1.0, 3.0],
+            hits=[
+                [False, False, True, False],
+                [False, False, False, False],
+                [False, False, False, False],
+                [False, False, False, False],
+                [False, False, False, False],
+                [False, False, False, False],
+            ],
+            ages=[13, 9999, 9999, 9999, 9999, 9999],
+        )
+    )
+
+    assert rig._proximity_biased_sign(0, 1.0) == 1.0
+    print("[test] random trajectory proximity stale mask ignored: OK")
+
+
+def test_proximity_bias_keeps_sign_when_both_sides_free() -> None:
+    """Free proximity masks should preserve the RNG-selected direction."""
+
+    rig = RandomTrajectoryHaptic(team="b", profile=_make_profile(), now_fn=_Clock())
+    rig.update_state_full(
+        _state_with_proximity(
+            offsets_deg=[-3.0, -1.0, 1.0, 3.0],
+            hits=[
+                [False, False, False, False],
+                [False, False, False, False],
+                [False, False, False, False],
+                [False, False, False, False],
+                [False, False, False, False],
+                [False, False, False, False],
+            ],
+            ages=[0, 0, 0, 0, 0, 0],
+        )
+    )
+
+    assert rig._proximity_biased_sign(0, 1.0) == 1.0
+    assert rig._proximity_biased_sign(0, -1.0) == -1.0
+    print("[test] random trajectory proximity free mask preserves sign: OK")
+
+
 def test_validation_profile_loads_requested_team_b_limits() -> None:
     """The launcher profile should select Team B real robot and requested limits."""
 
@@ -239,6 +333,8 @@ def test_validation_profile_loads_requested_team_b_limits() -> None:
     assert profile.tuning["robot"]["max_acceleration_deg_s2"] == [45, 65, 65, 115, 115, 115]
     assert profile.tuning["random_trajectory_validation"]["enabled_on_start"] is False
     assert profile.tuning["random_trajectory_validation"]["speed_scale"] == 1.0
+    assert profile.tuning["random_trajectory_validation"]["proximity_flip_distance_deg"] == 3.0
+    assert profile.tuning["random_trajectory_validation"]["proximity_stale_ticks"] == 12
     print("[test] random trajectory validation profile: OK")
 
 
@@ -252,6 +348,9 @@ def main() -> int:
     test_unchecking_before_robot_actual_cancels_pending_run()
     test_path_collision_distance_randomizes_vector()
     test_path_collision_reroll_resets_to_planner_target()
+    test_proximity_bias_flips_away_from_near_positive_hit()
+    test_proximity_bias_ignores_stale_masks()
+    test_proximity_bias_keeps_sign_when_both_sides_free()
     test_validation_profile_loads_requested_team_b_limits()
     print("\n[test] RANDOM TRAJECTORY HAPTIC TESTS PASSED\n")
     return 0

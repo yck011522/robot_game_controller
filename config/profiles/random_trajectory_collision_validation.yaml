@@ -75,6 +75,8 @@ tuning:
     speed_scale: 1.0                # 1.0 allows up to 100% of robot.max_velocity_deg_s.
     min_axis_speed_fraction: 0.2    # Minimum random axis speed as a fraction of max speed.
     path_turnaround_distance_deg: 3.0 # Randomize when forward-path hit is this close.
+    proximity_flip_distance_deg: 10.0 # Flip a random axis direction away from nearby prox hits.
+    proximity_stale_ticks: 12        # Ignore per-axis proximity masks older than this many ticks.
     limit_margin_deg: 3.0           # Force inward random directions near joint limits.
   safety_barrier:
     bypass_channels:

@@ -22,6 +22,8 @@ DEFAULT_SPEED_SCALE = 1.0
 DEFAULT_MIN_AXIS_SPEED_FRACTION = 0.2
 DEFAULT_PATH_TURNAROUND_DISTANCE_DEG = 3.0
 DEFAULT_LIMIT_MARGIN_DEG = 1.0
+DEFAULT_PROXIMITY_FLIP_DISTANCE_DEG = 3.0
+DEFAULT_PROXIMITY_STALE_TICKS = 12
 DEFAULT_WINDOW_SIZE = (430, 180)
 
 
@@ -71,6 +73,17 @@ class RandomTrajectoryHaptic:
         self._limit_margin_rad = math.radians(
             _positive_float(validation_cfg.get("limit_margin_deg"), DEFAULT_LIMIT_MARGIN_DEG)
         )
+        self._proximity_flip_distance_deg = _positive_float(
+            validation_cfg.get("proximity_flip_distance_deg"),
+            DEFAULT_PROXIMITY_FLIP_DISTANCE_DEG,
+        )
+        self._proximity_stale_ticks = max(
+            1,
+            _int_value(
+                validation_cfg.get("proximity_stale_ticks"),
+                DEFAULT_PROXIMITY_STALE_TICKS,
+            ),
+        )
 
         self._gear_ratio = _six_float_list(haptic_cfg.get("gear_ratio"), [1.0] * 6)
         self._q_min_rad = _six_deg_list(robot_cfg.get("q_limits_min_deg"), [-180.0] * 6)
@@ -90,6 +103,9 @@ class RandomTrajectoryHaptic:
         self._randomize_count = 0
         self._last_randomize_reason = "startup"
         self._last_path_distance_deg: float | None = None
+        self._prox_probe_offsets_deg: list[float] = []
+        self._prox_hits: list[list[bool]] = [[] for _ in range(6)]
+        self._prox_age_ticks: list[int] = [9999] * 6
 
         self._pygame = None
         self._screen = None
@@ -148,11 +164,16 @@ class RandomTrajectoryHaptic:
                 self._randomize_velocity(reason="startup_after_robot_actual")
 
     def update_state_full(self, body: dict[str, Any]) -> None:
-        """Randomize direction when forward-path collision is close enough."""
+        """Consume planner collision state and reroll blocked trajectories."""
 
         planner_target = _planner_target_rad(body, self._team)
         if planner_target is not None:
             self._latest_planner_target_rad = planner_target
+        proximity = _proximity_state(body, self._team)
+        if proximity is not None:
+            self._prox_probe_offsets_deg = proximity["offsets_deg"]
+            self._prox_hits = proximity["hits"]
+            self._prox_age_ticks = proximity["age_ticks"]
 
         distance_deg = _path_collision_distance_deg(body, self._team)
         self._last_path_distance_deg = distance_deg
@@ -329,6 +350,7 @@ class RandomTrajectoryHaptic:
                 continue
             speed = self._rng.uniform(min_speed, max_speed)
             sign = -1.0 if self._rng.random() < 0.5 else 1.0
+            sign = self._proximity_biased_sign(axis, sign)
             if self._robot_target_rad[axis] <= self._q_min_rad[axis] + self._limit_margin_rad:
                 sign = 1.0
             elif self._robot_target_rad[axis] >= self._q_max_rad[axis] - self._limit_margin_rad:
@@ -337,6 +359,52 @@ class RandomTrajectoryHaptic:
         self._robot_velocity_rad_s = velocity
         self._randomize_count += 1
         self._last_randomize_reason = reason
+
+    def _proximity_biased_sign(self, axis: int, sign: float) -> float:
+        """Flip sign if recent proximity probes say the chosen side is tight."""
+
+        side_clearance = self._axis_clearance_deg(axis)
+        if side_clearance is None:
+            return sign
+        chosen_key = "pos" if sign >= 0.0 else "neg"
+        opposite_key = "neg" if chosen_key == "pos" else "pos"
+        chosen_clearance = side_clearance.get(chosen_key)
+        opposite_clearance = side_clearance.get(opposite_key)
+        if chosen_clearance is None:
+            return sign
+        if chosen_clearance > self._proximity_flip_distance_deg:
+            return sign
+        if opposite_clearance is None or opposite_clearance > chosen_clearance:
+            return -sign
+        return sign
+
+    def _axis_clearance_deg(self, axis: int) -> dict[str, float | None] | None:
+        """Return nearest positive and negative proximity hit distances."""
+
+        if axis < 0 or axis >= 6:
+            return None
+        if axis >= len(self._prox_age_ticks):
+            return None
+        if self._prox_age_ticks[axis] > self._proximity_stale_ticks:
+            return None
+        if axis >= len(self._prox_hits):
+            return None
+        axis_hits = self._prox_hits[axis]
+        if len(axis_hits) != len(self._prox_probe_offsets_deg):
+            return None
+
+        nearest = {"pos": None, "neg": None}
+        for offset_deg, hit in zip(self._prox_probe_offsets_deg, axis_hits):
+            if not hit:
+                continue
+            distance_deg = abs(float(offset_deg))
+            if offset_deg > 0.0:
+                prev = nearest["pos"]
+                nearest["pos"] = distance_deg if prev is None else min(prev, distance_deg)
+            elif offset_deg < 0.0:
+                prev = nearest["neg"]
+                nearest["neg"] = distance_deg if prev is None else min(prev, distance_deg)
+        return nearest
 
 
 def _mapping(value: Any) -> dict[str, Any]:
@@ -447,6 +515,50 @@ def _planner_target_rad(body: dict[str, Any], team: str) -> list[float] | None:
         return [float(v) for v in target[:6]]
     except (TypeError, ValueError):
         return None
+
+
+def _proximity_state(body: dict[str, Any], team: str) -> dict[str, Any] | None:
+    """Extract proximity hit masks from a state.full payload."""
+
+    if not isinstance(body, dict):
+        return None
+    teams = body.get("teams")
+    if not isinstance(teams, dict):
+        return None
+    team_body = teams.get(team)
+    if not isinstance(team_body, dict):
+        return None
+    collision = team_body.get("collision")
+    if not isinstance(collision, dict):
+        return None
+    offsets_raw = collision.get("prox_probe_offsets_deg")
+    hits_raw = collision.get("prox_hits")
+    ages_raw = collision.get("prox_age_ticks")
+    if not isinstance(offsets_raw, list) or not isinstance(hits_raw, list):
+        return None
+    if not isinstance(ages_raw, list):
+        return None
+    try:
+        offsets = [float(v) for v in offsets_raw]
+        ages = [int(v) for v in ages_raw[:6]]
+    except (TypeError, ValueError):
+        return None
+    if len(ages) < 6:
+        ages.extend([9999] * (6 - len(ages)))
+
+    hits: list[list[bool]] = []
+    for axis_hits in hits_raw[:6]:
+        if not isinstance(axis_hits, list):
+            hits.append([])
+            continue
+        hits.append([bool(v) for v in axis_hits])
+    while len(hits) < 6:
+        hits.append([])
+    return {
+        "offsets_deg": offsets,
+        "hits": hits,
+        "age_ticks": ages[:6],
+    }
 
 
 def _robot_to_dial_rad(robot_rad: float, gear_ratio: float) -> float:
