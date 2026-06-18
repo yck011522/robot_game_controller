@@ -21,7 +21,7 @@ subsystems:
     a: null
     b: in_process
 
-  weight_sensor_io: null
+  weight_sensor_io: real
   light_column_1_3: null
   light_column_4_5: null
   light_column_6_8: null

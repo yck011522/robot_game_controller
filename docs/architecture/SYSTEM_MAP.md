@@ -141,7 +141,7 @@ active team (1 or 2), `×N` = pool of N workers.
 | `RobotIO` | ×team | UR10e RTDE bridge | 100 Hz | RTDE TCP over ethernet | PUB actuals, SUB targets |
 | `JoggingPlanner` | ×team | Unit conv, gearing, clamp, rate-limit, collision check | Follows GC 50 Hz | none | SUB targets, PUB planned, REQ collision |
 | `CollisionWorker` | ×16 | pybullet trajectory check (shared pool serves both teams; identical robot cells) | on demand | none | REP collision |
-| `WeightSensorIO` | 1 | RS-485 load cell reader (6 cells total, IDs 11/12/13 + 21/22/23) | 40–50 Hz | RS-485 over USB | PUB telemetry |
+| `WeightSensorIO` | 1 | RS-485 load cell reader (12 cells total, paired into A1..B3 buckets) | bus-limited | RS-485 over USB | PUB telemetry |
 | `LightColumnController` | 1 | LED column driver (global, not per-team) | 40–50 Hz | RS-485 over USB | SUB state (CONFLATE) |
 | `DisplayBroadcaster` | 1 | Bridges bus → UDP for RPi displays (both teams) | ~50 Hz | UDP out over ethernet | SUB state |
 | `ScoreboardBroadcaster` | 1 | RS-485 sender for LED scoreboard panels (both teams) | ~50 Hz | RS-485 over USB | SUB state |
@@ -174,7 +174,7 @@ Topic suffix `.<team>` is emitted once per active team (`a` and/or `b`).
 | 6 | GC ↔ JoggingPlanner | 2-way | 50 Hz | < 10 ms | PUB/SUB or in-process | see §6 |
 | 7 | JP ↔ CollisionWorker pool | request/reply | 10–50 Hz | 5–50 ms | REQ → ROUTER/DEALER → REP | 16 workers, shared by both teams, see §5 |
 | 8 | GC → LightColumnController | 1-way | 30–60 Hz | loose | PUB/SUB + CONFLATE | canonical slow-subscriber case |
-| 9 | WeightSensorIO → GC | 1-way | 40–50 Hz | loose | PUB/SUB | `telem.weight` (all 6 cells) |
+| 9 | WeightSensorIO → GC | 1-way | bus-limited | loose | PUB/SUB | `telem.weight` (all 12 cells) |
 | 10 | GC → DisplayBroadcaster → RPi | 1-way | 50 Hz | loose | PUB/SUB internally, UDP outward | RPi protocol unchanged |
 | 11 | GC → ScoreboardBroadcaster | 1-way | 50 Hz | loose | PUB/SUB + CONFLATE | RS-485 outward to LED panels |
 | 12 | GC ↔ BucketController | 2-way | on demand + 5 Hz telem | loose | PUB/SUB both dirs | `cmd.bucket`, `telem.bucket` |

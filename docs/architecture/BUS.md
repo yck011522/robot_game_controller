@@ -187,7 +187,7 @@ in-process inside GC, neither of those topics goes on the bus.
 |-------|----------|------|
 | `telem.haptic.<team>` | `HapticIO[.<team>]` | 50 Hz |
 | `telem.robot.actual.<team>` | `RobotIO[.<team>]` | 100 Hz |
-| `telem.weight` | `WeightSensorIO` | 40–50 Hz |
+| `telem.weight` | `WeightSensorIO` | as fast as the 12-cell Modbus cycle allows |
 | `telem.bucket` | `BucketController` | 5 Hz (state) |
 | `telem.buttons` | `ButtonController` | 50 Hz |
 | `telem.safety` | `SafetyBarrierController` | 50 Hz |
@@ -199,6 +199,7 @@ in-process inside GC, neither of those topics goes on the bus.
 | `cmd.haptic.<team>` | `GameController` | `HapticIO[.<team>]` | 50 Hz, CONFLATE |
 | `cmd.robot.target.<team>` | `JoggingPlanner[.<team>]` (or GC if JP is in-process) | `RobotIO[.<team>]` | 100 Hz |
 | `cmd.bucket` | `GameController` | `BucketController` | on demand |
+| `cmd.weight.tare` | `GameController` | `WeightSensorIO` | startup/reset |
 
 ### 5.4 Request / reply (collision check)
 
@@ -457,11 +458,37 @@ pose. This is separate from the high-rate `cmd.haptic.<team>` stream.
 ```jsonc
 {
   "ts_mono_ns": ...,
+  "ts_wall_ns": ...,
   "producer": "weight_sensor_io",
-  "cells_g": {"11": 32.1, "12": 50.7, "13": 60.0,
-              "21": 0.0,  "22": 0.0,  "23": 0.0},
-  "cell_ok": {"11": true, "12": true, "13": true,
-              "21": true, "22": true, "23": true}
+  "seq": 123,
+  "connected": true,
+  "cycle_seq": 45,
+  "tare_seq": 2,
+  "last_tare_reason": "conclusion_reset",
+  "slave_addresses": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+  "decimal_places": {"1": 0, "2": 0, "...": 0},
+  "tare_offsets_g": {"1": 770.0, "2": 4556.0, "...": 3314.0},
+  "cells_g": {"1": 0.0, "2": 0.0, "...": 0.0},
+  "raw_i32": {"1": 770, "2": 4556, "...": 3314},
+  "cell_ok": {"1": true, "2": true, "...": true},
+  "errors": {},
+  "last_cycle_duration_ms": 124.0,
+  "observed_cycle_hz": 8.0
+}
+```
+
+### 6.6.1 `cmd.weight.tare`
+
+Sparse command telling `weight_sensor_io` to collect its configured tare
+sample window and apply those offsets internally. Downstream consumers
+continue to receive already-tared `cells_g` values.
+
+```jsonc
+{
+  "ts_mono_ns": ...,
+  "producer": "game_controller",
+  "request_id": "weight-tare-3",
+  "reason": "conclusion_reset"
 }
 ```
 

@@ -40,6 +40,16 @@ serial_settings:
       - SBarr42 # address 4, input 2
     read_timeout_s: 0.070 # Per-module serial read timeout used during validation.
     inter_request_delay_s: 0.006 # Stable quiet gap: 6 ms gave 200/200 clean 8-input sweeps.
+  weight_sensor:
+    baudrate: 115200 # Modbus RTU speed for the 12 load-cell controllers on COM46.
+    slave_addresses: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] # Fixed load-cell Modbus addresses.
+    bucket_cells:
+      A1: [1, 2] # Team A bucket 1 uses load cells 1 and 2.
+      A2: [3, 4] # Team A bucket 2 uses load cells 3 and 4.
+      A3: [5, 6] # Team A bucket 3 uses load cells 5 and 6.
+      B1: [7, 8] # Team B bucket 1 uses load cells 7 and 8.
+      B2: [9, 10] # Team B bucket 2 uses load cells 9 and 10.
+      B3: [11, 12] # Team B bucket 3 uses load cells 11 and 12.
   bucket_motors:
     baudrate: 115200 # Modbus RTU speed for the six bucket motor controllers on COM41.
     addresses:

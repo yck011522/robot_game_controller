@@ -430,7 +430,7 @@ def main(argv: list[str] | None = None) -> int:
                 return exit_code
 
         # ---- tier 5: global IO -----------------------------------------
-        for pname in ("safety_barrier_controller", "bucket_controller"):
+        for pname in ("safety_barrier_controller", "weight_sensor_io", "bucket_controller"):
             if profile.is_enabled(pname):
                 children[pname] = _spawn(pname, profile_path,
                                           module_registry=module_registry)

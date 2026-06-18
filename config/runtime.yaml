@@ -33,6 +33,11 @@ subsystems:
     fps_min: 45.0
     heartbeat_age_max: 1100
 
+  weight_sensor_io:
+    fps_target: 1000.0
+    fps_min: 3.0
+    heartbeat_age_max: 1100
+
   safety_barrier_controller:
     fps_target: 18.0
     fps_min: 5.0
