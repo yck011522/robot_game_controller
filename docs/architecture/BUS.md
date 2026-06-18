@@ -520,6 +520,55 @@ Logical meaning:
 }
 ```
 
+### 6.8.1 `cmd.bucket` / `telem.bucket`
+
+`cmd.bucket` is sparse and accepted by the single shared
+`bucket_controller` process. Single-bucket commands use 1-based logical
+labels (`A1`..`A3`, `B1`..`B3`) or `team` + `bucket_number`.
+
+```jsonc
+{
+  "ts_mono_ns": ...,
+  "producer": "game_controller",
+  "action": "open",              // open | close | stop | open_all | close_all | stop_all
+  "team": "b",                   // optional for *_all commands
+  "bucket_number": 2,            // 1, 2, or 3; never zero-based
+  "bucket_label": "B2",          // optional explicit label
+  "request_id": "bucket-12",
+  "reason": "conclusion_bucket_counted"
+}
+```
+
+`telem.bucket` reports controller status, watchdog state, and observed
+status-scan timing for RS-485 saturation tuning.
+
+```jsonc
+{
+  "ts_mono_ns": ...,
+  "ts_wall_ns": ...,
+  "producer": "bucket_controller",
+  "seq": 123,
+  "connected": true,
+  "active_count": 1,
+  "status_poll_interval_s": 0.5,
+  "last_scan_duration_ms": 12.4,
+  "observed_status_scan_hz": 2.0,
+  "buckets": {
+    "B2": {
+      "address": 5,
+      "status": {"raw": 144, "state": "limit", "direction": "negative",
+                 "speed": 0, "is_moving": false, "at_limit": true,
+                 "description": "Negative limit reached"},
+      "active_command": null,
+      "last_result": {"ok": true, "label": "B2", "action": "open",
+                      "request_id": "bucket-12",
+                      "message": "open completed: Negative limit reached"},
+      "last_error": null
+    }
+  }
+}
+```
+
 ### 6.9 `heartbeat.<proc>`
 
 ```jsonc

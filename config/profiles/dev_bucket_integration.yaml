@@ -1,0 +1,101 @@
+# Development profile for Team B bucket-controller integration.
+# Based on demo_team_b.yaml with the real bucket controller enabled and a
+# shorter game timer so conclusion bucket opening can be tested quickly.
+
+profile_name: dev_bucket_integration
+description: "Team B real haptic/robot with real bucket motor integration"
+
+active_teams: [b]
+
+subsystems:
+  haptic_io:
+    a: null
+    b: real
+
+  robot_io:
+    a: null
+    b: real_rtde
+    # b: sim_pybullet
+
+  jogging_planner:
+    a: null
+    b: in_process
+
+  weight_sensor_io: null
+  light_column_1_3: null
+  light_column_4_5: null
+  light_column_6_8: null
+  display_broadcaster: null
+  scoreboard_broadcaster: null
+  bucket_controller: real
+  button_controller: null
+  safety_barrier_controller: null
+
+  collision_workers:
+    count: 8
+
+  collision_broker: null
+
+  event_recorder: null
+  gamemaster_ui: null
+  bus_broker:
+    impl: real
+
+tuning:
+  haptic:
+    gear_ratio: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+    # Robot-joint bounds in degrees; runtime converts these to dial-space
+    # C-frame min/max values using gear_ratio before sending the firmware.
+    bounds_deg_min: [-180, -180, -180, -180, -180, -180]
+    bounds_deg_max: [180, 180, 180, 180, 180, 180]
+    bounds_kp: 20.0             # Wall stiffness once a dial angle is outside min/max bounds; raise for a firmer boundary.
+    tracking_kp: 10.0           # Position tracking spring toward the robot-aligned target; raise carefully to reduce lag.
+    tracking_kd: 0.1            # Velocity damping for tracking; raise if the dial oscillates around the target.
+    tracking_max_torque: 5.0    # Torque cap for tracking force; lower for safer/lighter hand feel.
+    oob_kick:
+      enabled: true             # Enables pulsed corrective kicks while outside bounds; set false to disable kick pulses only.
+      amplitude: 2.0            # Kick pulse strength in firmware torque units; raise in small steps if kicks feel too weak.
+      pulse_interval_ms: 40     # Gap between kick pulses; lower for more frequent pulses.
+    telemetry_interval_ms: 10
+    # Real dials are absolute-position devices. Map dial angle to absolute
+    # robot joint target (via gear_ratio), not delta-velocity semantics.
+    input_mode: absolute
+  robot:
+    q_limits_min_deg: [-180, -180, -180, -180, -180, -180]
+    q_limits_max_deg: [180, 180, 180, 180, 180, 180]
+    max_velocity_deg_s: [15, 20, 30, 40, 50, 50]
+    max_acceleration_deg_s2: [45, 95, 95, 115, 115, 115]
+    headless: false
+    initial_pose_deg: [0.0, -90.0, 90.0, 0.0, 0.0, 0.0]
+  collision:
+    check_self: true
+    check_world: true
+    timeout_ms: 60
+    retries: 2
+    bundle_size: 1
+  jogging:
+    n_forward_steps: 16
+    forward_step_deg: 1.0
+    path_cutoff_deg: 3.0
+    forward_bundle_size: 1
+    probe_half_deg: 10
+    prox_floor: 0.6
+    forward_timeout_ms: 40
+  safety_barrier:
+    bypass_channels:
+      SBarr11: false
+      SBarr12: false
+      SBarr21: false
+      SBarr22: false
+      SBarr31: false
+      SBarr32: false
+      SBarr41: false
+      SBarr42: false
+  bucket_controller:
+    motor_speed: 8 # Bucket motor speed command, valid 1-15; tune during bucket bring-up.
+  game:
+    duration_s: 30
+    sum_score_rate_unit_per_s: 100
+    sim_bucket_values:
+      b: [120, 80, 40]
+    force_stage: play

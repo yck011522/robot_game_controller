@@ -40,6 +40,15 @@ serial_settings:
       - SBarr42 # address 4, input 2
     read_timeout_s: 0.070 # Per-module serial read timeout used during validation.
     inter_request_delay_s: 0.006 # Stable quiet gap: 6 ms gave 200/200 clean 8-input sweeps.
+  bucket_motors:
+    baudrate: 115200 # Modbus RTU speed for the six bucket motor controllers on COM41.
+    addresses:
+      A1: 1 # Team A left/front bucket motor address.
+      A2: 2 # Team A left/back bucket motor address.
+      A3: 3 # Team A right bucket motor address.
+      B1: 4 # Team B left/front bucket motor address.
+      B2: 5 # Team B left/back bucket motor address.
+      B3: 6 # Team B right bucket motor address.
 
 robot:
   # Team B UR10e RTDE endpoint. Port 30004 is the standard RTDE port.

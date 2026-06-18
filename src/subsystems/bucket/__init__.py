@@ -1,0 +1,2 @@
+"""Bucket motor controller subsystem."""
+

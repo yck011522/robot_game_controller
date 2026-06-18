@@ -39,6 +39,7 @@ CONCLUSION_INITIAL_PAUSE_S = 1.0
 CONCLUSION_BUCKET_EMPTY_PAUSE_S = 0.5
 CONCLUSION_ANNOUNCEMENT_PAUSE_S = 1.0
 UI_GAME_CONTROL_TOPIC = "cmd.ui.game_control"
+BUCKET_COMMAND_TOPIC = "cmd.bucket"
 RECOVERY_TIMEOUT_S = 4.0
 
 
@@ -51,6 +52,9 @@ def main(argv: list[str] | None = None) -> int:
     haptic_cfg = _haptic_config(proc.profile.tuning.get("haptic"))
     safety_enabled = (
         proc.profile.subsystem_impl("safety_barrier_controller") is not None
+    )
+    bucket_controller_enabled = (
+        proc.profile.subsystem_impl("bucket_controller") is not None
     )
     safety_telem_age_max_s = (
         default_runtime_setting(
@@ -159,6 +163,7 @@ def main(argv: list[str] | None = None) -> int:
     banner(proc.proc, f"teams={active_teams} collision_check={collision_enabled}")
 
     state_seq = 0
+    bucket_command_seq = 0
     # TODO(state-machine): once Idle/Tutorial are wired, start there instead
     # of jumping straight into Play on boot.
     stage_state = {
@@ -186,6 +191,35 @@ def main(argv: list[str] | None = None) -> int:
         "last_reply_by_source": {},
     }
     safety_state = _initial_safety_state(enabled=safety_enabled)
+
+    def _publish_bucket_command(
+        action: str,
+        *,
+        team: str | None = None,
+        bucket_number: int | None = None,
+        reason: str,
+    ) -> None:
+        """Publish one sparse command for the bucket_controller process."""
+
+        nonlocal bucket_command_seq
+        if not bucket_controller_enabled:
+            return
+        request_id = f"bucket-{bucket_command_seq}"
+        env = bus.make_envelope(proc.proc)
+        env.update(
+            {
+                "action": action,
+                "request_id": request_id,
+                "reason": reason,
+            }
+        )
+        if team is not None:
+            env["team"] = team
+        if bucket_number is not None:
+            env["bucket_number"] = bucket_number
+            env["bucket_label"] = f"{team.upper()}{bucket_number}" if team else None
+        bus.publish(pub, BUCKET_COMMAND_TOPIC, env)
+        bucket_command_seq += 1
 
     def tick(p: Proc) -> None:
         nonlocal state_seq
@@ -354,7 +388,12 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 _reset_haptic_bounds_to_static(st, haptic_cfg)
                 _tick_conclusion_team(
-                    st, dt, game_cfg, robot_show_poses.get(team, {}), stage_state
+                    st,
+                    dt,
+                    game_cfg,
+                    robot_show_poses.get(team, {}),
+                    stage_state,
+                    bucket_command_fn=_publish_bucket_command,
                 )
                 st["last_target"] = list(st["last_q"])
                 st["last_collision"] = False
@@ -475,8 +514,14 @@ def main(argv: list[str] | None = None) -> int:
         paused = bool(paused_teams) or soft_paused
 
         _update_stage_pause_tracking(stage_state, paused, now_ns)
+        stage_before_tick = stage_state["stage"]
         if not paused:
             _tick_stage_state(stage_state, teams, game_cfg, now_ns)
+        if stage_before_tick == "conclusion" and stage_state["stage"] == "play":
+            # TODO(conclusion-motion): when reset motion exists, send this
+            # close_all alongside the robot's return-to-initial trajectory
+            # instead of the temporary P4 play reset.
+            _publish_bucket_command("close_all", reason="conclusion_reset")
 
         countdown_s = _stage_countdown_s(stage_state, game_cfg, now_ns)
 
@@ -1370,7 +1415,11 @@ def _tick_conclusion_team(
     game_cfg: dict[str, float],
     pose_cfg: dict[str, list[float]],
     stage_state: dict[str, Any],
+    *,
+    bucket_command_fn=None,
 ) -> None:
+    """Advance one team's conclusion scoring sequence and bucket commands."""
+
     phase = state.get("conclusion_phase")
     if phase is None:
         return
@@ -1405,8 +1454,13 @@ def _tick_conclusion_team(
             state["conclusion_bucket_open_triggered"] = True
             state["conclusion_phase_started_mono_ns"] = now_ns
             state["conclusion_sum_remainder_units"] = 0.0
-            # TODO(bucket-controller): send the real bucket-open command
-            # once BucketController exists on the new runtime path.
+            if bucket_command_fn is not None:
+                bucket_command_fn(
+                    "open",
+                    team=state["team"],
+                    bucket_number=bucket_index + 1,
+                    reason="conclusion_bucket_counted",
+                )
         return
 
     if phase == "empty_bucket":
