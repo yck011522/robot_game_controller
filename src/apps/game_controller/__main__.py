@@ -98,6 +98,12 @@ def main(argv: list[str] | None = None) -> int:
             "sub_actual": actual_sub,
             "last_dial": [0.0] * 6,
             "last_dial_vel": [0.0] * 6,
+            "haptic_required": (
+                proc.profile.subsystems.get("haptic_io", {}).get(team) is not None
+                if isinstance(proc.profile.subsystems.get("haptic_io"), dict)
+                else False
+            ),
+            "haptic_seeded": False,
             "last_haptic_connected": [False] * 6,
             "last_haptic_loop_hz": [0.0] * 6,
             # Current assistive haptic bounds (dial space, rad) sent on
@@ -252,6 +258,13 @@ def main(argv: list[str] | None = None) -> int:
                 st["last_prox_hits"] = [[False] * 20 for _ in range(6)]
                 st["last_prox_age_ticks"] = [9999] * 6
                 st["score"] = int(sum(st["bucket_values"]))
+                continue
+
+            if bool(st.get("haptic_required", False)) and not bool(
+                st.get("haptic_seeded", False)
+            ):
+                _reset_haptic_bounds_to_static(st, haptic_cfg)
+                _publish_hold_current_pose(pub, p.proc, team, st)
                 continue
 
             if _startup_alignment_active(st):
@@ -653,7 +666,10 @@ def _update_actual_state(state: dict, body: dict) -> None:
 
 
 def _update_haptic_state(state: dict, body: dict) -> None:
-    state["last_dial"] = body.get("dial_pos_rad", state["last_dial"])
+    dial_pos = body.get("dial_pos_rad")
+    state["last_dial"] = dial_pos if isinstance(dial_pos, list) else state["last_dial"]
+    if isinstance(dial_pos, list) and len(dial_pos) >= 6:
+        state["haptic_seeded"] = True
     dial_vel = body.get("dial_vel_rad_s")
     if isinstance(dial_vel, list):
         state["last_dial_vel"] = [float(v) for v in dial_vel[:6]] + [0.0] * max(
@@ -672,6 +688,39 @@ def _update_haptic_state(state: dict, body: dict) -> None:
             0, 6 - len(loop_hz[:6])
         )
         state["last_haptic_loop_hz"] = state["last_haptic_loop_hz"][:6]
+
+
+def _publish_hold_current_pose(
+    pub: zmq.Socket, producer: str, team: str, state: dict[str, Any]
+) -> None:
+    """Publish a hold-at-actual robot command while required input is absent."""
+
+    q_actual = state.get("last_q")
+    if not isinstance(q_actual, list) or len(q_actual) < 6:
+        return
+    state["last_target"] = list(q_actual[:6])
+    state["last_collision"] = False
+    state["last_first_hit"] = None
+    state["last_path_scalar"] = 1.0
+    state["last_prox_scalar"] = 1.0
+    state["last_final_scalar"] = 1.0
+    state["last_prox_probe_offsets_deg"] = []
+    state["last_prox_hits"] = [[False] * 20 for _ in range(6)]
+    state["last_prox_age_ticks"] = [9999] * 6
+
+    env = bus.make_envelope(producer)
+    env.update(
+        {
+            "team": team,
+            "q_target_rad": list(q_actual[:6]),
+            "clamps": {
+                "path": 1.0,
+                "prox": 1.0,
+                "final": 1.0,
+            },
+        }
+    )
+    bus.publish(pub, f"cmd.robot.target.{team}", env)
 
 
 def _game_config(node: Any) -> dict[str, float]:

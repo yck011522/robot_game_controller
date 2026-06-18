@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import sys
 from pathlib import Path
@@ -10,6 +11,14 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from apps.game_controller import __main__ as gc  # noqa: E402
+
+
+class _FakePub:
+    def __init__(self) -> None:
+        self.frames = []
+
+    def send_multipart(self, frames) -> None:
+        self.frames.append(frames)
 
 
 def _base_haptic_cfg() -> dict:
@@ -85,6 +94,24 @@ def test_profile_static_bounds_convert_from_robot_to_dial_space() -> None:
         rel_tol=0.0,
         abs_tol=1e-9,
     )
+
+
+def test_hold_current_pose_publishes_measured_robot_target() -> None:
+    pub = _FakePub()
+    state = {
+        "last_q": [0.1, -0.2, 0.3, -0.4, 0.5, -0.6],
+    }
+
+    gc._publish_hold_current_pose(pub, "test_game_controller", "b", state)
+
+    assert state["last_target"] == state["last_q"]
+    assert state["last_path_scalar"] == 1.0
+    assert len(pub.frames) == 1
+    topic = pub.frames[0][0].decode("ascii")
+    body = json.loads(pub.frames[0][1].decode("utf-8"))
+    assert topic == "cmd.robot.target.b"
+    assert body["q_target_rad"] == state["last_q"]
+    assert body["clamps"] == {"path": 1.0, "prox": 1.0, "final": 1.0}
 
 
 def test_dynamic_bounds_fallback_when_axis_stale() -> None:

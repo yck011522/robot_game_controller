@@ -1,0 +1,92 @@
+# One-hour Team B real-robot validation for the collision-avoidance workflow.
+# The random trajectory haptic source starts paused; tick its UI checkbox to run.
+
+profile_name: random_trajectory_collision_validation
+description: "Team B real UR10e random trajectory collision validation"
+
+active_teams: [b]
+
+subsystems:
+  haptic_io:
+    a: null
+    b: random_trajectory
+
+  robot_io:
+    a: null
+    b: real_rtde
+
+  jogging_planner:
+    a: null
+    b: in_process
+
+  weight_sensor_io: null
+  light_column_1_3: null
+  light_column_4_5: null
+  light_column_6_8: null
+  display_broadcaster: null
+  scoreboard_broadcaster: null
+  bucket_controller: null
+  button_controller: null
+  safety_barrier_controller: null
+
+  collision_workers:
+    count: 8
+
+  collision_broker: null
+
+  event_recorder: null
+  gamemaster_ui: null
+  bus_broker:
+    impl: real
+
+tuning:
+  haptic:
+    gear_ratio: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+    bounds_deg_min: [-180, -180, -180, -180, -180, -180]
+    bounds_deg_max: [180, 180, 180, 180, 180, 180]
+    # The random generator publishes an absolute robot-space target converted
+    # to dial space; the planner turns target error into bounded motion.
+    input_mode: absolute
+  robot:
+    q_limits_min_deg: [-180, -180, -180, -180, -180, -180]
+    q_limits_max_deg: [180, 180, 180, 180, 180, 180]
+    max_velocity_deg_s: [15, 20, 30, 40, 50, 50]
+    max_acceleration_deg_s2: [45, 65, 65, 115, 115, 115]
+    headless: false
+    initial_pose_deg: [0.0, -90.0, 90.0, 0.0, 0.0, 0.0]
+  collision:
+    check_self: true
+    check_world: true
+    timeout_ms: 40
+    retries: 2
+    bundle_size: 1
+  jogging:
+    n_forward_steps: 12
+    forward_step_deg: 1.0
+    path_cutoff_deg: 3.0
+    forward_bundle_size: 1
+    probe_half_deg: 10
+    prox_floor: 0.6
+    forward_timeout_ms: 40
+  random_trajectory_validation:
+    seed: 20260618                  # Fixed RNG seed for repeatable validation paths.
+    enabled_on_start: false         # Start paused; the checkbox arms motion.
+    ui_enabled: true                # Show a tiny Pygame checkbox window for start/stop.
+    speed_scale: 1.0                # 1.0 allows up to 100% of robot.max_velocity_deg_s.
+    min_axis_speed_fraction: 0.2    # Minimum random axis speed as a fraction of max speed.
+    path_turnaround_distance_deg: 3.0 # Randomize when forward-path hit is this close.
+    limit_margin_deg: 1.0           # Force inward random directions near joint limits.
+  safety_barrier:
+    bypass_channels:
+      SBarr11: false
+      SBarr12: false
+      SBarr21: false
+      SBarr22: false
+      SBarr31: false
+      SBarr32: false
+      SBarr41: false
+      SBarr42: false
+  game:
+    duration_s: 3600
+    sum_score_rate_unit_per_s: 100
+    force_stage: play

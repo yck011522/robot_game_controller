@@ -34,6 +34,7 @@ def main(argv: list[str] | None = None) -> int:
     actual_sub = bus.make_sub(proc.ctx, topics=[f"telem.robot.actual.{team}"])
     cmd_sub = bus.make_sub(proc.ctx, topics=[f"cmd.haptic.{team}"])
     reseat_sub = bus.make_sub(proc.ctx, topics=[f"cmd.haptic.reseat.{team}"])
+    state_sub = bus.make_sub(proc.ctx, topics=["state.full"])
     # For sim-only impls that do one-time seeding, this guards against
     # repeatedly overwriting their internal dial position.
     seed_ref = {"done": False}
@@ -49,7 +50,10 @@ def main(argv: list[str] | None = None) -> int:
         _drain_latest(actual_sub, on_msg=lambda b: _handle_robot_actual(impl, b, seed_ref))
         _drain_latest(cmd_sub, on_msg=lambda b: _apply_command(impl, b))
         _drain_latest(reseat_sub, on_msg=lambda b: _apply_reseat_request(impl, b))
+        _drain_latest(state_sub, on_msg=lambda b: _apply_state_full(impl, b))
         sample = impl.sample()
+        if sample is None:
+            return
         env = bus.make_envelope(p.proc)
         env.update({"team": team, **sample})
         bus.publish(pub, topic, env)
@@ -58,6 +62,7 @@ def main(argv: list[str] | None = None) -> int:
         actual_sub.close(0)
         cmd_sub.close(0)
         reseat_sub.close(0)
+        state_sub.close(0)
         close = getattr(impl, "close", None)
         if callable(close):
             close()
@@ -73,6 +78,9 @@ def _make_impl(name: str, *, team: str, profile):
     if name == "sim_keyboard":
         from subsystems.haptic.sim_keyboard import KeyboardHaptic
         return KeyboardHaptic()
+    if name == "random_trajectory":
+        from subsystems.haptic.random_trajectory import RandomTrajectoryHaptic
+        return RandomTrajectoryHaptic(team=team, profile=profile)
     if name == "real":
         from subsystems.haptic.real import RealHaptic
         return RealHaptic(team=team, profile=profile)
@@ -118,6 +126,14 @@ def _apply_command(impl, body: dict) -> None:
     apply = getattr(impl, "apply_command", None)
     if callable(apply):
         apply(body)
+
+
+def _apply_state_full(impl, body: dict) -> None:
+    """Forward state.full payloads to impls that need controller state."""
+
+    update = getattr(impl, "update_state_full", None)
+    if callable(update):
+        update(body)
 
 
 def _apply_reseat_request(impl, body: dict) -> None:
