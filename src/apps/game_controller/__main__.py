@@ -22,26 +22,36 @@ from core.proc import Proc, banner  # noqa: E402
 from subsystems.jogging.in_process import InProcessPlanner  # noqa: E402
 from subsystems.weight_sensor.common import BUCKET_CELL_MAP  # noqa: E402
 
+# Shared constants + profile/config construction live in the context module;
+# the stage machine + conclusion scoring live in the stages module. Both are
+# imported here by name so existing call sites in main()/tick() stay unchanged.
+from apps.game_controller.context import (  # noqa: E402
+    DEFAULT_HAPTIC_BOUNDS_DEG_MAX,
+    DEFAULT_HAPTIC_BOUNDS_DEG_MIN,
+    DEFAULT_SAFETY_TELEM_AGE_MAX_MS,
+    TEAM_BUCKET_IDS,
+    _coerce_positive_float,
+    _game_config,
+    _load_robot_show_poses_deg,
+    _startup_alignment_active,
+)
+from apps.game_controller.context import (  # noqa: E402
+    DEFAULT_BUCKET_VALUES,
+)
+from apps.game_controller.stages import (  # noqa: E402
+    _enter_stage,
+    _stage_countdown_s,
+    _tick_conclusion_team,
+    _tick_stage_state,
+    _update_stage_pause_tracking,
+)
+
 # game_controller ticks at a fixed rate. Each tick blocks on the
 # forward-collision certify (~worker compute + ZMQ round-trip), then
 # publishes one cmd.robot.target.<team> per team and one state.full.
 # 60 Hz gives ~16 ms per tick, which is comfortably above the
 # forward_timeout_ms budget and keeps state.full at a recordable rate.
 TICK_HZ = 60.0
-TEAM_BUCKET_IDS = {
-    "a": [11, 12, 13],
-    "b": [21, 22, 23],
-}
-DEFAULT_BUCKET_VALUES = [0.0, 0.0, 0.0]
-DEFAULT_LOOK_POSE_DEG = [0.0, -90.0, 90.0, 0.0, 0.0, 0.0]
-DEFAULT_HAPTIC_BOUNDS_DEG_MIN = [-180.0] * 6
-DEFAULT_HAPTIC_BOUNDS_DEG_MAX = [180.0] * 6
-DEFAULT_SAFETY_TELEM_AGE_MAX_MS = 1100.0
-CONCLUSION_INITIAL_PAUSE_S = 1.0
-CONCLUSION_BUCKET_LOOK_MOTION_WAIT_S = 5.0
-CONCLUSION_BUCKET_EMPTY_PAUSE_S = 0.5
-CONCLUSION_CELEBRATION_MOTION_WAIT_S = 5.0
-CONCLUSION_ANNOUNCEMENT_PAUSE_S = 1.0
 UI_GAME_CONTROL_TOPIC = "cmd.ui.game_control"
 BUCKET_COMMAND_TOPIC = "cmd.bucket"
 WEIGHT_TARE_TOPIC = "cmd.weight.tare"
@@ -175,14 +185,22 @@ def main(argv: list[str] | None = None) -> int:
     state_seq = 0
     bucket_command_seq = 0
     weight_tare_seq = 0
-    # TODO(state-machine): once Idle/Tutorial are wired, start there instead
-    # of jumping straight into Play on boot.
+    # Game stage machine. The boot stage comes from tuning.game.start_stage
+    # (or the legacy force_stage), defaulting to "play" for back-compat.
+    # `_enter_stage` below runs the boot-stage entry effects + banner.
     stage_state = {
-        "stage": "play",
+        "stage": "(init)",
         "stage_entered_mono_ns": time.perf_counter_ns(),
         "winner_team": None,
         "pause_started_mono_ns": None,
         "paused_total_ns": 0,
+        # Movement-detection baselines (team -> [6] dial rad); captured on
+        # entering daydreaming / idle, cleared on every stage change.
+        "dial_baseline": {},
+        # Set by the UI / physical SKIP control; consumed in play & tutorial.
+        "skip_requested": False,
+        # Edge tracker so PAUSE banners only print on on/off transitions.
+        "prev_paused": False,
     }
     control_state = {
         "soft_pause": False,
@@ -203,6 +221,16 @@ def main(argv: list[str] | None = None) -> int:
     }
     safety_state = _initial_safety_state(enabled=safety_enabled)
     weight_state = _initial_weight_state(enabled=weight_sensor_enabled)
+
+    # Run the boot-stage entry effects (banner + seeding) once teams exist.
+    _enter_stage(
+        stage_state,
+        teams,
+        game_cfg["start_stage"],
+        game_cfg,
+        time.perf_counter_ns(),
+        reason="boot",
+    )
 
     def _publish_bucket_command(
         action: str,
@@ -417,15 +445,20 @@ def main(argv: list[str] | None = None) -> int:
             if stage_state["stage"] == "play":
                 st["score"] = int(sum(st["bucket_values"]))
             else:
+                # All non-play stages hold the robot at its measured pose.
+                # Only the conclusion stage additionally advances the scripted
+                # scoring sequence; daydreaming / idle / tutorial / reset just
+                # hold until their transition fires.
                 _reset_haptic_bounds_to_static(st, haptic_cfg)
-                _tick_conclusion_team(
-                    st,
-                    dt,
-                    game_cfg,
-                    robot_show_poses.get(team, {}),
-                    stage_state,
-                    bucket_command_fn=_publish_bucket_command,
-                )
+                if stage_state["stage"] == "conclusion":
+                    _tick_conclusion_team(
+                        st,
+                        dt,
+                        game_cfg,
+                        robot_show_poses.get(team, {}),
+                        stage_state,
+                        bucket_command_fn=_publish_bucket_command,
+                    )
                 st["last_target"] = list(st["last_q"])
                 st["last_collision"] = False
                 st["last_first_hit"] = None
@@ -544,18 +577,26 @@ def main(argv: list[str] | None = None) -> int:
 
         paused = bool(paused_teams) or soft_paused
 
+        if paused != bool(stage_state.get("prev_paused", False)):
+            print(
+                f"[game_controller] PAUSE {'ON' if paused else 'OFF'}"
+                + (f" reason={pause_reason}" if paused else ""),
+                flush=True,
+            )
+            stage_state["prev_paused"] = paused
+
         _update_stage_pause_tracking(stage_state, paused, now_ns)
         stage_before_tick = stage_state["stage"]
         if not paused:
             _tick_stage_state(stage_state, teams, game_cfg, now_ns)
-        if stage_before_tick == "conclusion" and stage_state["stage"] == "play":
-            # TODO(conclusion-motion): when reset motion exists, send this
-            # close_all alongside the robot's return-to-initial trajectory
-            # instead of the temporary P4 play reset.
+        if stage_before_tick == "conclusion" and stage_state["stage"] != "conclusion":
+            # Leaving conclusion (now conclusion -> idle): close any buckets
+            # opened during scoring and tare the load cells for the next game.
+            # TODO(conclusion-motion): coordinate close_all with the real
+            # return-to-start trajectory once that motion exists.
             _publish_bucket_command("close_all", reason="conclusion_reset")
-            # TODO(reset-flow): once bucket close completion is tracked by GC,
-            # send tare after close_all completes instead of immediately after
-            # the temporary conclusion->play reset.
+            # TODO(reset-flow): tare after close_all completes once bucket
+            # close completion is tracked by GC.
             _publish_weight_tare("conclusion_reset")
 
         countdown_s = _stage_countdown_s(stage_state, game_cfg, now_ns)
@@ -953,17 +994,6 @@ def _publish_hold_current_pose(
     bus.publish(pub, f"cmd.robot.target.{team}", env)
 
 
-def _game_config(node: Any) -> dict[str, float]:
-    data = node if isinstance(node, dict) else {}
-    return {
-        "duration_s": _coerce_positive_float(data.get("duration_s"), 240.0),
-        "sum_score_rate_unit_per_s": _coerce_positive_float(
-            data.get("sum_score_rate_unit_per_s"), 100.0
-        ),
-        "sim_bucket_values": _coerce_team_bucket_values(data.get("sim_bucket_values")),
-    }
-
-
 def _haptic_config(node: Any) -> dict[str, Any]:
     data = node if isinstance(node, dict) else {}
     gear_ratio = _coerce_float_list(data.get("gear_ratio"), [1.0] * 6)
@@ -1200,13 +1230,6 @@ def _publish_haptic_reseat(
     bus.publish(pub, f"cmd.haptic.reseat.{team}", env)
 
 
-def _startup_alignment_active(state: dict[str, Any]) -> bool:
-    align = state.get("startup_align") if isinstance(state, dict) else None
-    if not isinstance(align, dict):
-        return False
-    return bool(align.get("enabled", False)) and not bool(align.get("done", False))
-
-
 def _tick_startup_alignment(
     pub: zmq.Socket,
     producer: str,
@@ -1291,140 +1314,6 @@ def _haptic_settled_to_target(
         if err > max_err:
             max_err = err
     return max_err <= tol, max_err
-
-
-def _tick_stage_state(
-    stage_state: dict[str, Any],
-    teams: dict[str, dict],
-    game_cfg: dict[str, float],
-    now_ns: int,
-) -> None:
-    if stage_state["stage"] == "play":
-        elapsed_s = _stage_elapsed_s(stage_state, now_ns)
-        if elapsed_s >= game_cfg["duration_s"]:
-            _force_conclusion(stage_state, teams, now_ns)
-        return
-
-    if stage_state["stage"] != "conclusion":
-        return
-
-    announcement_ready = {"announcement_pose", "winner_pose"}
-    if stage_state["winner_team"] is None and all(
-        bool(st.get("conclusion_done", False))
-        or str(st.get("conclusion_phase")) in announcement_ready
-        for st in teams.values()
-    ):
-        stage_state["winner_team"] = _winner_team(teams)
-
-    if all(bool(st.get("conclusion_done", False)) for st in teams.values()):
-        # Temporary P4 short-circuit: once the conclusion sequence has
-        # fully finished for every team, jump straight back into play so
-        # repeated dev runs do not need an external reset path yet.
-        # TODO(state-machine): implement a proper Idle/Tutorial stage and transition
-        #                      to that instead of hard-resetting play on conclusion end.
-        _reset_for_play(stage_state, teams, game_cfg, now_ns)
-
-
-def _reset_for_play(
-    stage_state: dict[str, Any],
-    teams: dict[str, dict],
-    game_cfg: dict[str, float],
-    now_ns: int,
-) -> None:
-    stage_state["stage"] = "play"
-    stage_state["stage_entered_mono_ns"] = now_ns
-    stage_state["winner_team"] = None
-    stage_state["pause_started_mono_ns"] = None
-    stage_state["paused_total_ns"] = 0
-
-    sim_bucket_values = (
-        game_cfg.get("sim_bucket_values") if isinstance(game_cfg, dict) else {}
-    )
-    if not isinstance(sim_bucket_values, dict):
-        sim_bucket_values = {}
-
-    for team, st in teams.items():
-        seed_buckets = sim_bucket_values.get(team, DEFAULT_BUCKET_VALUES)
-        st["bucket_values"] = list(seed_buckets)
-        st["score"] = int(sum(st["bucket_values"]))
-        st["summed_score"] = 0
-        st["conclusion_phase"] = None
-        st["conclusion_active_bucket_index"] = None
-        st["conclusion_target_pose_name"] = None
-        st["conclusion_target_pose_deg"] = None
-        st["conclusion_bucket_open_triggered"] = False
-        st["conclusion_phase_started_mono_ns"] = None
-        st["conclusion_done"] = False
-        st["conclusion_sum_remainder_units"] = 0.0
-
-
-def _stage_countdown_s(
-    stage_state: dict[str, Any], game_cfg: dict[str, float], now_ns: int
-) -> int:
-    if stage_state["stage"] != "play":
-        return 0
-    remaining_s = game_cfg["duration_s"] - _stage_elapsed_s(stage_state, now_ns)
-    return max(0, int(math.ceil(remaining_s)))
-
-
-def _stage_elapsed_s(stage_state: dict[str, Any], now_ns: int) -> float:
-    pause_started_ns = stage_state.get("pause_started_mono_ns")
-    paused_total_ns = int(stage_state.get("paused_total_ns") or 0)
-    active_pause_ns = 0
-    if pause_started_ns is not None:
-        active_pause_ns = max(0, now_ns - int(pause_started_ns))
-    return max(
-        0.0,
-        (
-            now_ns
-            - int(stage_state["stage_entered_mono_ns"])
-            - paused_total_ns
-            - active_pause_ns
-        )
-        / 1e9,
-    )
-
-
-def _update_stage_pause_tracking(
-    stage_state: dict[str, Any], paused: bool, now_ns: int
-) -> None:
-    pause_started_ns = stage_state.get("pause_started_mono_ns")
-    if paused:
-        if pause_started_ns is None:
-            stage_state["pause_started_mono_ns"] = now_ns
-        return
-    if pause_started_ns is None:
-        return
-    stage_state["paused_total_ns"] = int(stage_state.get("paused_total_ns") or 0) + (
-        now_ns - int(pause_started_ns)
-    )
-    stage_state["pause_started_mono_ns"] = None
-
-
-def _enter_conclusion(state: dict[str, Any], now_ns: int) -> None:
-    state["bucket_values"] = [max(0, int(round(v))) for v in state["bucket_values"]]
-    state["conclusion_phase"] = "pause_before_sum"
-    state["conclusion_active_bucket_index"] = 0
-    state["conclusion_target_pose_name"] = None
-    state["conclusion_target_pose_deg"] = None
-    state["conclusion_bucket_open_triggered"] = False
-    state["conclusion_phase_started_mono_ns"] = now_ns
-    state["conclusion_done"] = False
-    state["summed_score"] = 0
-    state["score"] = int(sum(state["bucket_values"]))
-    state["conclusion_sum_remainder_units"] = 0.0
-
-
-def _force_conclusion(
-    stage_state: dict[str, Any], teams: dict[str, dict], now_ns: int
-) -> None:
-    if stage_state["stage"] == "conclusion":
-        return
-    stage_state["stage"] = "conclusion"
-    stage_state["stage_entered_mono_ns"] = now_ns
-    stage_state["winner_team"] = None
-    for st in teams.values():
-        _enter_conclusion(st, now_ns)
 
 
 def _handle_ui_game_control_request(
@@ -1521,12 +1410,20 @@ def _apply_ui_game_control(
         control_state["recovery_active"] = False
         control_state["recovery_pending_dispatch"] = False
         control_state["recovery_teams"] = []
-    elif action == "end_game":
-        control_state["soft_pause"] = False
-        control_state["recovery_active"] = False
-        control_state["recovery_pending_dispatch"] = False
-        control_state["recovery_teams"] = []
-        _force_conclusion(stage_state, teams, now_ns)
+    elif action in ("skip", "end_game"):
+        # SKIP / stop button. Stage-aware: shorten the current timed stage.
+        # play -> set the game timer to zero (flows play -> reset ->
+        # conclusion); tutorial -> jump straight to play. Every other stage
+        # is intentionally not skippable. SKIP does not touch the pause /
+        # e-stop overlay: if paused, the queued skip only fires on resume.
+        stage = stage_state.get("stage")
+        if stage not in ("play", "tutorial"):
+            return False, f"skip not allowed in stage '{stage}'", "skip"
+        stage_state["skip_requested"] = True
+        control_state["last_action"] = "skip"
+        control_state["last_action_ts_mono_ns"] = now_ns
+        print(f"[game_controller] SKIP requested in stage '{stage}'", flush=True)
+        return True, None, "skip"
     else:
         return False, f"unsupported action: {action}", action
     control_state["last_action"] = action
@@ -1573,262 +1470,6 @@ def _maybe_publish_recovery_request(
         )
         bus.publish(pub, f"cmd.robot.recover.{team}", env)
     control_state["recovery_pending_dispatch"] = False
-
-
-def _tick_conclusion_team(
-    state: dict[str, Any],
-    dt: float,
-    game_cfg: dict[str, float],
-    pose_cfg: dict[str, list[float]],
-    stage_state: dict[str, Any],
-    *,
-    bucket_command_fn=None,
-) -> None:
-    """Advance one team's conclusion scoring sequence and bucket commands."""
-
-    phase = state.get("conclusion_phase")
-    if phase is None:
-        return
-
-    now_ns = time.perf_counter_ns()
-    phase_started_ns = int(state.get("conclusion_phase_started_mono_ns") or now_ns)
-    phase_elapsed_s = (now_ns - phase_started_ns) / 1e9
-
-    if phase == "pause_before_sum":
-        if phase_elapsed_s >= CONCLUSION_INITIAL_PAUSE_S:
-            _set_bucket_pose_phase(state, now_ns, pose_cfg)
-        return
-
-    if phase == "move_to_bucket_pose":
-        # Temporary stand-in for the future conclusion robot motion that
-        # will move to the active bucket look pose. Do not block the GC
-        # loop here; this phase simply lets state.full keep publishing
-        # while we simulate waiting for that motion to finish.
-        # TODO(conclusion-motion): replace this timer with completion from
-        # the free-motion planner / robot trajectory executor.
-        if phase_elapsed_s >= CONCLUSION_BUCKET_LOOK_MOTION_WAIT_S:
-            state["conclusion_phase"] = "sum_bucket"
-            state["conclusion_phase_started_mono_ns"] = now_ns
-        return
-
-    if phase == "sum_bucket":
-        bucket_index = int(state.get("conclusion_active_bucket_index") or 0)
-        if bucket_index >= len(state["bucket_values"]):
-            _set_announcement_phase(state, now_ns, pose_cfg)
-            return
-
-        remaining = int(state["bucket_values"][bucket_index])
-        accumulated_units = float(state.get("conclusion_sum_remainder_units", 0.0)) + (
-            game_cfg["sum_score_rate_unit_per_s"] * dt
-        )
-        delta = min(remaining, int(accumulated_units))
-        state["conclusion_sum_remainder_units"] = accumulated_units - delta
-        state["bucket_values"][bucket_index] = max(0, remaining - delta)
-        state["summed_score"] = int(state.get("summed_score", 0)) + delta
-        state["score"] = int(sum(state["bucket_values"]))
-        if state["bucket_values"][bucket_index] <= 0:
-            state["bucket_values"][bucket_index] = 0
-            state["conclusion_phase"] = "empty_bucket"
-            state["conclusion_bucket_open_triggered"] = True
-            state["conclusion_phase_started_mono_ns"] = now_ns
-            state["conclusion_sum_remainder_units"] = 0.0
-            if bucket_command_fn is not None:
-                bucket_command_fn(
-                    "open",
-                    team=state["team"],
-                    bucket_number=bucket_index + 1,
-                    reason="conclusion_bucket_counted",
-                )
-        return
-
-    if phase == "empty_bucket":
-        if phase_elapsed_s >= CONCLUSION_BUCKET_EMPTY_PAUSE_S:
-            next_bucket_index = (
-                int(state.get("conclusion_active_bucket_index") or 0) + 1
-            )
-            state["conclusion_active_bucket_index"] = next_bucket_index
-            state["conclusion_bucket_open_triggered"] = False
-            if next_bucket_index >= len(state["bucket_values"]):
-                _set_celebration_phase(state, now_ns, pose_cfg)
-            else:
-                _set_bucket_pose_phase(state, now_ns, pose_cfg)
-        return
-
-    if phase == "celebration_motion":
-        # Temporary stand-in for the future celebration robot motion that
-        # happens after the final bucket opens. Keep this non-blocking so
-        # GameController continues publishing state while the fake motion
-        # duration elapses.
-        # TODO(conclusion-motion): replace this timer with completion from
-        # the celebration trajectory executor.
-        if phase_elapsed_s >= CONCLUSION_CELEBRATION_MOTION_WAIT_S:
-            _set_announcement_phase(state, now_ns, pose_cfg)
-        return
-
-    if phase == "announcement_pose":
-        if phase_elapsed_s >= CONCLUSION_ANNOUNCEMENT_PAUSE_S:
-            winner_team = stage_state.get("winner_team")
-            if winner_team is None:
-                return
-            state["conclusion_phase"] = "winner_pose"
-            if winner_team == "tie":
-                state["conclusion_target_pose_name"] = "robot_win_pose"
-            else:
-                state["conclusion_target_pose_name"] = (
-                    "robot_win_pose"
-                    if state["team"] == winner_team
-                    else "robot_lose_pose"
-                )
-            state["conclusion_target_pose_deg"] = pose_cfg.get(
-                state["conclusion_target_pose_name"], list(DEFAULT_LOOK_POSE_DEG)
-            )
-            state["conclusion_phase_started_mono_ns"] = now_ns
-            # TODO(conclusion-motion): replace this pose bookkeeping with a
-            # collision-free motion plan once the dedicated planner lands.
-        return
-
-    if phase == "winner_pose":
-        state["conclusion_done"] = True
-
-
-def _set_bucket_pose_phase(
-    state: dict[str, Any], now_ns: int, pose_cfg: dict[str, list[float]]
-) -> None:
-    bucket_index = int(state.get("conclusion_active_bucket_index") or 0)
-    pose_names = ["robot_lookb1_pose", "robot_lookb2_pose", "robot_lookb3_pose"]
-    pose_name = pose_names[min(bucket_index, len(pose_names) - 1)]
-    state["conclusion_phase"] = "move_to_bucket_pose"
-    state["conclusion_target_pose_name"] = pose_name
-    state["conclusion_target_pose_deg"] = pose_cfg.get(
-        pose_name, list(DEFAULT_LOOK_POSE_DEG)
-    )
-    state["conclusion_phase_started_mono_ns"] = now_ns
-    # TODO(conclusion-motion): send the collision-free move to this
-    # bucket-look pose here. Until that planner exists,
-    # move_to_bucket_pose waits for CONCLUSION_BUCKET_LOOK_MOTION_WAIT_S.
-
-
-def _set_celebration_phase(
-    state: dict[str, Any], now_ns: int, pose_cfg: dict[str, list[float]]
-) -> None:
-    """Enter the temporary post-bucket celebration phase."""
-
-    state["conclusion_phase"] = "celebration_motion"
-    state["conclusion_target_pose_name"] = "robot_celebration_pose"
-    state["conclusion_target_pose_deg"] = pose_cfg.get(
-        "robot_celebration_pose", list(DEFAULT_LOOK_POSE_DEG)
-    )
-    state["conclusion_phase_started_mono_ns"] = now_ns
-    # TODO(conclusion-motion): send the celebration trajectory here. Until
-    # that exists, celebration_motion waits for
-    # CONCLUSION_CELEBRATION_MOTION_WAIT_S.
-
-
-def _set_announcement_phase(
-    state: dict[str, Any], now_ns: int, pose_cfg: dict[str, list[float]]
-) -> None:
-    state["conclusion_phase"] = "announcement_pose"
-    state["conclusion_target_pose_name"] = "robot_announcement_pose"
-    state["conclusion_target_pose_deg"] = pose_cfg.get(
-        "robot_announcement_pose", list(DEFAULT_LOOK_POSE_DEG)
-    )
-    state["conclusion_phase_started_mono_ns"] = now_ns
-
-
-def _winner_team(teams: dict[str, dict]) -> str | None:
-    if not teams:
-        return None
-    ordered = sorted(
-        ((team, int(st.get("summed_score", 0) or 0)) for team, st in teams.items()),
-        key=lambda item: item[1],
-        reverse=True,
-    )
-    if len(ordered) >= 2 and ordered[0][1] == ordered[1][1]:
-        return "tie"
-    return ordered[0][0]
-
-
-def _coerce_team_bucket_values(value: Any) -> dict[str, list[int]]:
-    if not isinstance(value, dict):
-        return {}
-    out: dict[str, list[int]] = {}
-    for team, buckets in value.items():
-        if not isinstance(team, str):
-            continue
-        out[team] = _coerce_bucket_value_list(buckets)
-    return out
-
-
-def _coerce_bucket_value_list(value: Any) -> list[int]:
-    if not isinstance(value, list):
-        return [0, 0, 0]
-    out: list[int] = []
-    for item in value[:3]:
-        try:
-            out.append(max(0, int(round(float(item)))))
-        except (TypeError, ValueError):
-            out.append(0)
-    if len(out) < 3:
-        out.extend([0] * (3 - len(out)))
-    return out[:3]
-
-
-def _load_robot_show_poses_deg() -> dict[str, dict[str, list[float]]]:
-    default = {team: _default_pose_map() for team in TEAM_BUCKET_IDS}
-    path = _SRC.parent / "config" / "robot_show_poses.yaml"
-    if not path.exists():
-        return default
-    try:
-        body = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except (OSError, yaml.YAMLError):
-        return default
-    teams = body.get("teams") if isinstance(body, dict) else None
-    if not isinstance(teams, dict):
-        return default
-    out: dict[str, dict[str, list[float]]] = {}
-    for team, fallback in default.items():
-        node = teams.get(team)
-        if not isinstance(node, dict):
-            out[team] = fallback
-            continue
-        out[team] = {
-            name: _coerce_deg_pose(node.get(name), fallback[name]) for name in fallback
-        }
-    return out
-
-
-def _default_pose_map() -> dict[str, list[float]]:
-    return {
-        "robot_lookb1_pose": list(DEFAULT_LOOK_POSE_DEG),
-        "robot_lookb2_pose": list(DEFAULT_LOOK_POSE_DEG),
-        "robot_lookb3_pose": list(DEFAULT_LOOK_POSE_DEG),
-        "robot_celebration_pose": list(DEFAULT_LOOK_POSE_DEG),
-        "robot_announcement_pose": list(DEFAULT_LOOK_POSE_DEG),
-        "robot_win_pose": list(DEFAULT_LOOK_POSE_DEG),
-        "robot_lose_pose": list(DEFAULT_LOOK_POSE_DEG),
-    }
-
-
-def _coerce_deg_pose(value: Any, fallback: list[float]) -> list[float]:
-    if not isinstance(value, list):
-        return list(fallback)
-    out: list[float] = []
-    for item in value[:6]:
-        try:
-            out.append(float(item))
-        except (TypeError, ValueError):
-            out.append(0.0)
-    if len(out) < 6:
-        out.extend(fallback[len(out) : 6])
-    return out[:6]
-
-
-def _coerce_positive_float(value: Any, default: float) -> float:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return default
-    return number if number > 0.0 else default
 
 
 def _coerce_float_list(value: Any, fallback: list[float]) -> list[float]:

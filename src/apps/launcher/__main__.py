@@ -503,9 +503,12 @@ def main(argv: list[str] | None = None) -> int:
                     stop["flag"] = True
                     break
 
+            # Periodic status table temporarily disabled to keep the console
+            # clear for game_controller state-transition diagnostics. Re-enable
+            # by uncommenting the block below.
             if time.perf_counter() >= next_status:
-                _print_status(children, last_recv_mono_ns, last_loop_hz,
-                              last_heartbeat_body, recv_window)
+                # _print_status(children, last_recv_mono_ns, last_loop_hz,
+                #               last_heartbeat_body, recv_window)
                 next_status = time.perf_counter() + 5.0
 
     finally:

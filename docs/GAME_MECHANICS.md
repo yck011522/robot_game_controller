@@ -45,7 +45,9 @@ Because the user can rotate the dial manually very fast, while the robot can onl
 
 A small size (10 to 14 inch) high-resolution (e.g. half HD) display will be mounted next to each of the 12 dials.
 
-During the idle (waiting for player) stage, they display a message that invites the player to start the game by moving the controller.
+During the daydreaming (attract) stage, they show ambient, varied visuals while the robot plays an animation. This is the "screensaver" of the installation and runs when nobody has touched a controller for a while.
+
+During the idle (ready / waiting for player) stage, they display a message that invites the player to start the game by moving the controller upwards. There is no countdown in this stage.
 
 During teaching stage, they show animation and interactive display with the dial to explain how the controller is used.
 
@@ -83,21 +85,74 @@ During game play, a real-time scoreboard will present the real-time score of bot
 
 ## **4. Game Match Details**
 
-### **Stage 1: Idle / Wait for player**
+The match runs as a state machine. Two **independent** state variables describe the system at all times:
 
-**Purpose:** Keep the system doing something visually interesting even when no one is around. Invites players to play, demonstrating to the audience that the robotic arm movement, the display guage and the dials are synchronised.
+1. **Game stage** — where we are in the lifecycle (Daydreaming, Idle, Tutorial, Game On, Reset, Conclusion).
+2. **Pause / E-stop state** — an overlay that can be active in *any* stage. It is separate from the game stage and never replaces it.
+
+### **Stage flow**
+
+```
+Daydreaming  ⇄  Idle  →  Tutorial  →  Game On  →  Reset  →  Conclusion  →  (back to Idle)
+     ▲___________│
+   (idle timeout / movement)
+```
+
+- `Daydreaming ⇄ Idle` is a two-way edge: Idle drops to Daydreaming on an inactivity timeout, and any significant controller movement brings it back to Idle.
+- Every other edge is one-way and ends by returning to Idle after Conclusion.
+
+### **Pause / E-stop overlay (applies to every stage)**
+
+The game can be paused at any time by the E-stop (software E-stop, the hardwired physical E-stop, a safety-barrier break, or a robot protective stop). The pause state is tracked by its **own variable**, independent of the game stage:
+
+- If the current stage has a **countdown timer**, the timer **stops counting** while paused and resumes from where it left off.
+- If the current stage has **no timer**, the input dials (haptic devices) simply keep **tracking their current position unchanged**, and the robot **stops moving**.
+- Resuming is never automatic: once the blocking condition is clear, an operator must acknowledge (resume button / UI command) before motion continues.
+- The game stage itself is preserved across a pause; only the overlay changes.
+
+------
+
+### **Stage 0: Daydreaming (attract mode)**
+
+**Purpose:** Keep the installation visually alive when nobody is around. The robots play back an animation and the multi-function displays cycle through varied ambient visuals to draw an audience.
 **Actions:**
 
-- Monitor the dials for user input.
+- Robots run an idle animation track.
+- Multi-function displays show ambient / attract visuals.
+- Monitor the dials for any significant movement.
 
-**Exit:** At least one (of the twelve) dial is moved beyond a certain threshold distance (e.g. 180 degrees) . Changes to stage 2.
+**Exit:** If any controller is moved significantly, the robots return to the ready position and we enter **Idle**.
+
+------
+
+### **Stage 1: Idle / Ready (wait for player)**
+
+**Purpose:** The robots sit at a known ready position and the displays invite a player to start. This is the "ready to play" resting state.
+**Actions:**
+
+- Robots held at the ready position.
+- Displays show a message prompting the player to move their controller **upwards** to begin. (Message UI not yet implemented.)
+- There is **no countdown** and no on-screen counter in this stage.
+- The dials keep tracking but rest near the zero position.
+
+**Exit:**
+
+- **To Tutorial:** if a player moves any one dial upwards by a set amount (e.g. ~360° on the controller), on either team.
+- **To Daydreaming:** if Idle persists for too long without significant controller movement (e.g. ~1 minute), drop back to Daydreaming.
 
 ------
 
 ### **Stage 2: Tutorial**
 
-**Purpose:** Show users some instructions on how to play (control the robot). It may involve asking the user to perform a task on rotating the dial, and then they would also observe the position gauge moving. We also show the effects of the kicking feeling on the dial representing a collision zone or a no-go zone. Explain game time and game goal (move balls).
-**Duration:** ~30 second
+**Purpose:** Show users how to play (how to control the robot). Explain the position gauge, the catch-up behaviour, the collision / out-of-bound kick feel, the game time, and the goal of moving balls.
+**Duration:** ~30 second countdown.
+**Actions:**
+
+- A countdown timer (e.g. 30 s) is shown and runs down.
+- The robot does **not** move during the tutorial.
+- The haptic dial becomes a **scroll control** for the tutorial pages: it scrolls from a zero position up to a maximum (e.g. ~10 turns) with a dynamically changing **detent** feel, snapping to a few detents that correspond to tutorial pages.
+- Multi-function displays show the how-to-play pages that the player scrolls through.
+
 **Messages:**
 
 - **How to control joint with controller**
@@ -106,61 +161,58 @@ During game play, a real-time scoreboard will present the real-time score of bot
     - Left marker relates to current robot position.
     - Right marker relates to dial position.
   - The robot position will slowly catch up with the dial position.
-  - Collision avoidance warning Out-of-bound kick haptic feel
+  - Collision avoidance warning / out-of-bound kick haptic feel.
 - **Goal**
-  - Move balls into three buckets to score, time is 2 or 3 minutes.
+  - Move balls into the buckets to score; time is 2 to 4 minutes.
 - **Important safety info** (physical interaction rules, emergency stop).
-  - Don’t go over safety barrier
+  - Don't go over the safety barrier.
 
-**Basic game mechanics explained on the multi-function screen.**
+**Exit:**
 
-**Exit:** A timer should appear and start counting down, maybe for 45 seconds or 30 seconds, and Flair is expected to go through the tutorial phase within this time. A player Is considered ready when he / she completes all the mini-tasks. After the countdown, if at least one player completes the tutorial, then we move out of this phase and the other players are assumed to be ready as well. If no player completes the tutorial, then we move back to the previous stage, assuming that visitors have left the game.
-
-
+- When the countdown reaches zero, advance to **Game On**.
+- (Intended, not yet implemented) The countdown can be cut short if **all** dials have been scrolled to the end (bottom/top) of the scrollable tutorial.
 
 ------
-
-
 
 ### **Stage 3: Game On**
 
 **Actions:**
 
-- Start **round timer** (2 to 3 minutes).
+- Start **round timer** (≈3 to 4 minutes).
 - Players control robotic arm joints collaboratively.
-- Real-time jog motion planner running with collision avoidance algorithm
--
-- Scoring based on **total weight of balls in bucket** at time expiry.
+- Real-time jog motion planner running with the collision avoidance algorithm.
+- Scoring based on **total weight of balls in the buckets**.
 
-**Exit:** A timer should appear on the multipurpose screen and count down.
+**Exit:** A countdown timer is shown on the multi-purpose screen. Advance to **Reset** when:
 
-------
-
-
-
-### **Stage 4: Game Conclusion**
-
-**Actions:**
-
-- When timer ends:
-  - Animation to add up the weight of balls in all three buckets. Announce **winner** based on scoring rules.
-  - Lighting effects and robot animation to congratulate the winning team.
-  - Show all-time high score on the multi-purpose screen.
-- Transition to **Stage 5**
-
-
+- the round timer reaches zero, **or**
+- the **end-game button** is pressed (currently a GUI button; a physical button is planned) to cut the game short.
 
 ------
 
+### **Stage 4: Reset (return to known position)**
 
-
-### **Stage 5: Reset**
-
+**Purpose:** Bring the robots from wherever they ended up back to a **known starting position** *before* scoring is counted. Scoring (Conclusion) relies on the robot starting from this known pose.
 **Actions:**
 
-- Reset the entire game setup to **default state**.
-- Reset **robotic arm position** to starting position with a collision free motion
-- Reset **all balls** back into the shared pool.
-- Clear buckets and score counters.
+- Each robot drives back to its initial/known position via a collision-free motion.
 
-**Exit:** After a set amount of time. (e.g. 30 secs)
+**Exit:** When **all active robots** have arrived at the known start position, advance to **Conclusion**.
+
+------
+
+### **Stage 5: Conclusion (score counting)**
+
+**Purpose:** Count and announce the score with the robot performing a scoring animation.
+**Actions:**
+
+- The robot performs a (largely pre-recorded) animation track, moving to **look at each scoring bucket in turn**.
+- Count down / sum the score from each bucket and combine into a team total.
+- Announce the **winner** (the team with the higher score), with lighting effects and a congratulatory robot animation.
+- Show the all-time high score on the multi-purpose screen.
+
+**Exit:** When the scoring animation completes, automatically return to **Idle**.
+
+> Note: physical cleanup of the play field (tilting buckets to return balls to the
+> shared pool, taring the load cells) happens as part of the Reset/Conclusion
+> cleanup; the exact placement of the bucket-empty step is being finalised.

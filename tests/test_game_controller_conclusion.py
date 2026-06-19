@@ -11,6 +11,26 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from apps.game_controller import __main__ as game_controller  # noqa: E402
+from apps.game_controller import stages as game_controller_stages  # noqa: E402
+
+# The conclusion scoring sequence (and its CONCLUSION_* timing constants) moved
+# from __main__ into the stages module during the P7 refactor. Re-bind the
+# moved names onto the ``game_controller`` alias so the call sites below keep
+# exercising the real (now relocated) functions / constants.
+game_controller._tick_conclusion_team = game_controller_stages._tick_conclusion_team
+game_controller.CONCLUSION_INITIAL_PAUSE_S = (
+    game_controller_stages.CONCLUSION_INITIAL_PAUSE_S
+)
+game_controller.CONCLUSION_BUCKET_LOOK_MOTION_WAIT_S = (
+    game_controller_stages.CONCLUSION_BUCKET_LOOK_MOTION_WAIT_S
+)
+game_controller.CONCLUSION_BUCKET_EMPTY_PAUSE_S = (
+    game_controller_stages.CONCLUSION_BUCKET_EMPTY_PAUSE_S
+)
+game_controller.CONCLUSION_CELEBRATION_MOTION_WAIT_S = (
+    game_controller_stages.CONCLUSION_CELEBRATION_MOTION_WAIT_S
+)
+
 
 
 def test_conclusion_uses_one_based_bucket_command() -> None:
