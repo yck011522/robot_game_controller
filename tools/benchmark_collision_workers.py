@@ -19,6 +19,9 @@ Run from the repo root, ideally inside the `game` conda environment:
 
     conda activate game
     python tools/benchmark_collision_workers.py
+
+Generated benchmark artifacts are written under
+`tools/runs/collision_benchmark/` by default.
 """
 
 from __future__ import annotations
@@ -45,7 +48,7 @@ DEFAULT_PROFILE = REPO_ROOT / "config" / "profiles" / "dev_keyboard.yaml"
 DEFAULT_WORKER_COUNTS = [14, 16, 18, 20, 22, 24]
 DEFAULT_BUNDLE_SIZES = [1, 2]
 DEFAULT_ROBOTS = 2
-DEFAULT_OUT_DIR = Path(__file__).resolve().parent
+DEFAULT_OUT_DIR = Path(__file__).resolve().parent / "runs" / "collision_benchmark"
 
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))

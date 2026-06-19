@@ -18,3 +18,13 @@ env/
 venv/
 
 interface_design/Font_Roboto/*
+
+# Generated free-motion planner and benchmark artifacts
+tools/runs/
+tools/free_motion_planner_validation_*.json
+tools/free_motion_case_generation_*.json
+tools/benchmark_collision_workers_*.csv
+tools/benchmark_collision_workers_*.json
+tools/benchmark_collision_workers_*.svg
+tools/benchmark_collision_workers_run.log
+tools/benchmark_collision_workers_run.err
