@@ -31,3 +31,6 @@ tools/benchmark_collision_workers_run.err
 
 # Generated high-rate diagnostic bus captures
 logs/trace/*.jsonl
+
+# Generated virtual rewind-shortcut validation reports
+logs/rewind_shortcut_validation*.log

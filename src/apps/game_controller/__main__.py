@@ -19,6 +19,7 @@ from core.config import default_runtime_setting  # noqa: E402
 from core.proc import Proc, banner  # noqa: E402
 from subsystems.jogging.in_process import InProcessPlanner  # noqa: E402
 from subsystems.rewind.in_process import RewindController  # noqa: E402
+from subsystems.rewind.shortcut import ShortcutSettings  # noqa: E402
 
 # Shared constants + profile/config construction live in the context module;
 # the stage machine + conclusion scoring live in the stages module; runtime
@@ -29,6 +30,7 @@ from apps.game_controller.context import (  # noqa: E402
     TEAM_BUCKET_IDS,
     _game_config,
     _load_robot_show_poses_deg,
+    _rewind_shortcut_config,
     _startup_alignment_active,
 )
 from apps.game_controller.context import (  # noqa: E402
@@ -92,6 +94,9 @@ def main(argv: list[str] | None = None) -> int:
 
     active_teams = list(proc.profile.active_teams)
     game_cfg = _game_config(proc.profile.tuning.get("game"))
+    shortcut_cfg = _rewind_shortcut_config(
+        proc.profile.tuning.get("rewind_shortcut")
+    )
     haptic_cfg = _haptic_config(proc.profile.tuning.get("haptic"))
     safety_enabled = (
         proc.profile.subsystem_impl("safety_barrier_controller") is not None
@@ -135,14 +140,31 @@ def main(argv: list[str] | None = None) -> int:
             proc.proc, "no active teams; will only emit heartbeat + skeleton state.full"
         )
 
+    collision_worker_count = (
+        int(proc.profile.subsystems["collision_workers"].get("count", 0))
+        if isinstance(proc.profile.subsystems.get("collision_workers"), dict)
+        else 0
+    )
     collision_enabled = (
         isinstance(proc.profile.subsystems.get("collision_workers"), dict)
-        and int(proc.profile.subsystems["collision_workers"].get("count", 0)) > 0
+        and collision_worker_count > 0
     )
 
     # Per-team state. P2 builds only `a`; the structure generalizes.
     teams: dict[str, dict] = {}
-    for team in active_teams:
+    team_count = max(1, len(active_teams))
+    workers_per_team = collision_worker_count // team_count
+    extra_workers = collision_worker_count % team_count
+    for team_index, team in enumerate(active_teams):
+        # One team receives the entire collision pool. With multiple teams,
+        # bounded in-flight request counts divide broker capacity evenly.
+        shortcut_worker_limit = workers_per_team + (
+            1 if team_index < extra_workers else 0
+        )
+        configured_seed = shortcut_cfg["random_seed"]
+        team_seed = (
+            configured_seed + team_index if configured_seed is not None else None
+        )
         planner = InProcessPlanner(
             ctx=proc.ctx,
             profile=proc.profile,
@@ -161,6 +183,21 @@ def main(argv: list[str] | None = None) -> int:
                 speed_fraction=game_cfg["rewind_speed_fraction"],
                 arrival_tolerance_rad=math.radians(
                     game_cfg["rewind_arrival_tolerance_deg"]
+                ),
+                team=team,
+                shortcut_settings=ShortcutSettings(
+                    enabled=(
+                        shortcut_cfg["enabled"]
+                        and collision_enabled
+                        and shortcut_worker_limit > 0
+                    ),
+                    optimization_budget_s=shortcut_cfg["optimization_budget_s"],
+                    collision_step_rad=math.radians(
+                        shortcut_cfg["collision_step_deg"]
+                    ),
+                    collision_batch_size=shortcut_cfg["collision_batch_size"],
+                    worker_limit=max(1, shortcut_worker_limit),
+                    random_seed=team_seed,
                 ),
             ),
             "team": team,
@@ -679,6 +716,7 @@ def main(argv: list[str] | None = None) -> int:
 
     def teardown(_: Proc) -> None:
         for st in teams.values():
+            st["rewind"].close()
             st["planner"].close()
             st["sub_haptic"].close(0)
             st["sub_actual"].close(0)

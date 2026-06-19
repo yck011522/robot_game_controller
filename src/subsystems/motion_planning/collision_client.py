@@ -63,6 +63,21 @@ class CollisionBatchResult:
     compute_ms: float
 
 
+@dataclass(frozen=True)
+class ParallelEdgeCheckResult:
+    """Results from checking several discretized shortcut edges concurrently.
+
+    ``free`` contains ``True`` for certified edges, ``False`` for edges where
+    any sampled configuration collided, and ``None`` for edges unresolved when
+    the shared wall-clock deadline expired.
+    """
+
+    free: list[bool | None]
+    configs_sent: int
+    batches_sent: int
+    compute_ms: float
+
+
 class CollisionWorkerClient:
     """Small DEALER client for `req.collision_check` bundles.
 
@@ -266,6 +281,128 @@ class CollisionWorkerClient:
             raise
 
         return True, configs_sent, batches_sent
+
+    def check_edges_parallel_until_collision(
+        self,
+        edges_rad: Iterable[Iterable[Iterable[float]]],
+        *,
+        batch_size: int,
+        max_in_flight: int,
+        deadline_s: float,
+    ) -> ParallelEdgeCheckResult:
+        """Check multiple edges with bounded global fan-out and fail-fast edges.
+
+        Chunks are dispatched round-robin across candidate edges so one long
+        edge cannot monopolize the worker pool. Once a reply finds a collision,
+        no further chunks for that edge are sent. Already-issued requests are
+        allowed to return normally and are simply ignored for that invalid edge.
+
+        Args:
+            edges_rad: Ordered collision samples for each candidate shortcut.
+            batch_size: Maximum configurations evaluated by one worker request.
+            max_in_flight: Global outstanding request limit across all edges.
+            deadline_s: Absolute ``time.perf_counter()`` deadline.
+        """
+
+        edges = [
+            [[float(value) for value in q] for q in edge]
+            for edge in edges_rad
+        ]
+        batch_size = max(1, int(batch_size))
+        max_in_flight = max(1, int(max_in_flight))
+        chunks = [
+            [edge[start : start + batch_size] for start in range(0, len(edge), batch_size)]
+            for edge in edges
+        ]
+        results: list[bool | None] = [None] * len(edges)
+        next_chunk = [0] * len(edges)
+        pending_by_edge = [0] * len(edges)
+        pending: dict[int, tuple[int, int]] = {}
+        configs_sent = 0
+        batches_sent = 0
+        compute_ms = 0.0
+        dispatch_cursor = 0
+
+        for edge_index, edge_chunks in enumerate(chunks):
+            if not edge_chunks:
+                results[edge_index] = True
+
+        try:
+            while any(result is None for result in results):
+                if time.perf_counter() >= deadline_s:
+                    if pending:
+                        self._reset_socket()
+                    break
+
+                made_progress = True
+                while len(pending) < max_in_flight and made_progress:
+                    made_progress = False
+                    for offset in range(len(edges)):
+                        edge_index = (dispatch_cursor + offset) % max(1, len(edges))
+                        if results[edge_index] is not None:
+                            continue
+                        if next_chunk[edge_index] >= len(chunks[edge_index]):
+                            continue
+                        chunk = chunks[edge_index][next_chunk[edge_index]]
+                        request_id = self._send_request(chunk)
+                        pending[request_id] = (edge_index, len(chunk))
+                        pending_by_edge[edge_index] += 1
+                        next_chunk[edge_index] += 1
+                        configs_sent += len(chunk)
+                        batches_sent += 1
+                        dispatch_cursor = (edge_index + 1) % max(1, len(edges))
+                        made_progress = True
+                        break
+
+                for edge_index in range(len(edges)):
+                    if (
+                        results[edge_index] is None
+                        and next_chunk[edge_index] >= len(chunks[edge_index])
+                        and pending_by_edge[edge_index] == 0
+                    ):
+                        results[edge_index] = True
+
+                if not pending:
+                    continue
+                remaining_ms = max(1, int((deadline_s - time.perf_counter()) * 1000))
+                if self._sock.poll(remaining_ms) == 0:
+                    self._reset_socket()
+                    break
+                reply = self._recv_reply()
+                request_id = reply.get("request_id")
+                if not isinstance(request_id, int) or request_id not in pending:
+                    continue
+                edge_index, expected_count = pending.pop(request_id)
+                pending_by_edge[edge_index] -= 1
+                if not reply.get("ok"):
+                    raise RuntimeError(str(reply.get("error") or "collision worker error"))
+                items = reply.get("results") or []
+                if len(items) != expected_count:
+                    raise RuntimeError(
+                        f"collision worker returned {len(items)} results; "
+                        f"expected {expected_count}"
+                    )
+                compute_ms += float(reply.get("compute_ms") or 0.0)
+                if results[edge_index] is None and any(
+                    bool(item.get("collision")) for item in items
+                ):
+                    results[edge_index] = False
+        except BaseException:
+            self._reset_socket()
+            raise
+
+        if pending:
+            # Failed edges may still have fast worker replies in flight. A new
+            # DEALER identity prevents those stale replies entering the next
+            # shortcut round without attempting worker-side cancellation.
+            self._reset_socket()
+
+        return ParallelEdgeCheckResult(
+            free=results,
+            configs_sent=configs_sent,
+            batches_sent=batches_sent,
+            compute_ms=compute_ms,
+        )
 
     def is_config_free(self, q_rad: Iterable[float]) -> bool:
         """Return True when one six-axis configuration is collision-free."""

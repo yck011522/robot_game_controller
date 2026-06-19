@@ -110,6 +110,21 @@ def _team_state_full_payload(
         "progress": 0.0,
         "initial_q_rad": None,
         "max_error_deg": None,
+        "shortcut": {
+            "enabled": False,
+            "status": "idle",
+            "seed": None,
+            "original_point_count": 0,
+            "shortened_point_count": 0,
+            "attempts": 0,
+            "accepted_shortcuts": 0,
+            "collision_rejections": 0,
+            "configurations_sent": 0,
+            "elapsed_s": 0.0,
+            "original_duration_s": None,
+            "shortened_duration_s": None,
+            "error": None,
+        },
     }
 
     return {

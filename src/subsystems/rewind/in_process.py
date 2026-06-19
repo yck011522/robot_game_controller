@@ -14,11 +14,19 @@ from __future__ import annotations
 
 import bisect
 import math
+import secrets
+import threading
 from typing import Any
 
 from compas_fab.robots import Duration, JointTrajectory, JointTrajectoryPoint
 from compas_robots.model import Joint
 
+from subsystems.motion_planning.collision_client import CollisionWorkerClient
+from subsystems.rewind.shortcut import (
+    JointTrajectoryShortcutter,
+    ShortcutResult,
+    ShortcutSettings,
+)
 from subsystems.robot.shared_compas_scene import UR10E_JOINT_NAMES
 
 
@@ -49,11 +57,15 @@ class RewindController:
         max_velocity_rad_s: list[float],
         speed_fraction: float,
         arrival_tolerance_rad: float,
+        team: str = "a",
+        shortcut_settings: ShortcutSettings | None = None,
     ) -> None:
         self.enabled = bool(enabled)
         self.max_velocity_rad_s = _six_floats(max_velocity_rad_s, 1.0)
         self.speed_fraction = max(1e-6, min(1.0, float(speed_fraction)))
         self.arrival_tolerance_rad = max(0.0, float(arrival_tolerance_rad))
+        self.team = str(team)
+        self.shortcut_settings = shortcut_settings or ShortcutSettings()
 
         # The recorded trajectory keeps gameplay-relative timestamps for later
         # offline analysis; rewind_trajectory owns newly generated timing.
@@ -66,6 +78,13 @@ class RewindController:
         self._status = "disabled" if not self.enabled else "idle"
         self._current_index = 0
         self._max_error_rad: float | None = None
+        self._raw_rewind_path: list[list[float]] = []
+        self._shortcut_lock = threading.Lock()
+        self._shortcut_cancel = threading.Event()
+        self._shortcut_thread: threading.Thread | None = None
+        self._shortcut_result: ShortcutResult | None = None
+        self._shortcut_error: str | None = None
+        self._shortcut_seed: int | None = None
 
     def start_recording(
         self, initial_q_rad: list[float] | None, *, now_s: float
@@ -87,6 +106,12 @@ class RewindController:
         self._rewind_elapsed_s = 0.0
         self._current_index = 0
         self._max_error_rad = None
+        self._raw_rewind_path = []
+        self._stop_shortcut_thread()
+        with self._shortcut_lock:
+            self._shortcut_result = None
+            self._shortcut_error = None
+            self._shortcut_seed = None
         self._status = "awaiting_initial_pose"
         self.ensure_recording_started(initial_q_rad, now_s=now_s)
 
@@ -145,6 +170,22 @@ class RewindController:
         if reversed_q[-1] != self._initial_q_rad:
             reversed_q.append(list(self._initial_q_rad))
 
+        self._raw_rewind_path = [list(q) for q in reversed_q]
+        if self.shortcut_settings.enabled and len(reversed_q) > 2:
+            self._start_shortcut_thread(reversed_q)
+            return True
+
+        self._install_rewind_path(reversed_q)
+        return True
+
+    def close(self) -> None:
+        """Stop any background shortcut job during process teardown."""
+
+        self._stop_shortcut_thread()
+
+    def _install_rewind_path(self, path_rad: list[list[float]]) -> None:
+        """Velocity-retime and activate one geometric rewind path."""
+
         points: list[JointTrajectoryPoint] = []
         elapsed_s = 0.0
         previous_q: list[float] | None = None
@@ -152,7 +193,7 @@ class RewindController:
             max(1e-9, velocity * self.speed_fraction)
             for velocity in self.max_velocity_rad_s
         ]
-        for q in reversed_q:
+        for q in path_rad:
             if previous_q is not None:
                 elapsed_s += max(
                     abs(q[axis] - previous_q[axis]) / rewind_limits[axis]
@@ -172,7 +213,143 @@ class RewindController:
         # Robot actual may lag the final gameplay command. Hold that certified
         # endpoint first, then start moving backward only after measured arrival.
         self._status = "aligning_start" if elapsed_s > 0.0 else "settling"
+
+    def _start_shortcut_thread(self, path_rad: list[list[float]]) -> None:
+        """Launch one thread-owned collision client and bounded optimizer."""
+
+        self._stop_shortcut_thread()
+        self._shortcut_cancel = threading.Event()
+        seed = (
+            int(self.shortcut_settings.random_seed)
+            if self.shortcut_settings.random_seed is not None
+            else secrets.randbits(64)
+        )
+        settings = ShortcutSettings(
+            enabled=True,
+            optimization_budget_s=self.shortcut_settings.optimization_budget_s,
+            collision_step_rad=self.shortcut_settings.collision_step_rad,
+            collision_batch_size=self.shortcut_settings.collision_batch_size,
+            worker_limit=self.shortcut_settings.worker_limit,
+            random_seed=seed,
+        )
+        self._shortcut_seed = seed
+        self._status = "optimizing"
+        print(
+            f"[rewind-shortcut] team={self.team} start points={len(path_rad)} "
+            f"workers={settings.worker_limit} seed={seed}",
+            flush=True,
+        )
+        self._shortcut_thread = threading.Thread(
+            target=self._run_shortcut,
+            args=([list(q) for q in path_rad], settings, self._shortcut_cancel),
+            name=f"rewind_shortcut.{self.team}",
+            daemon=True,
+        )
+        self._shortcut_thread.start()
+
+    def _run_shortcut(
+        self,
+        path_rad: list[list[float]],
+        settings: ShortcutSettings,
+        cancel_event: threading.Event,
+    ) -> None:
+        """Run shortcut collision traffic entirely inside its owning thread."""
+
+        client: CollisionWorkerClient | None = None
+        try:
+            client = CollisionWorkerClient(
+                producer=f"rewind_shortcut.{self.team}",
+                timeout_s=max(1.0, settings.optimization_budget_s + 1.0),
+            )
+
+            def check_edges(
+                edges: list[list[list[float]]],
+                batch_size: int,
+                max_in_flight: int,
+                deadline_s: float,
+            ):
+                """Forward one optimizer round to the shared worker pool."""
+
+                return client.check_edges_parallel_until_collision(
+                    edges,
+                    batch_size=batch_size,
+                    max_in_flight=max_in_flight,
+                    deadline_s=deadline_s,
+                )
+
+            optimizer = JointTrajectoryShortcutter(
+                settings=settings,
+                max_velocity_rad_s=self.max_velocity_rad_s,
+                speed_fraction=self.speed_fraction,
+                edge_check_fn=check_edges,
+            )
+            result = optimizer.optimize(
+                path_rad,
+                cancel_event=cancel_event,
+                progress_fn=self._update_shortcut_progress,
+            )
+            with self._shortcut_lock:
+                self._shortcut_result = result
+        except Exception as exc:  # noqa: BLE001
+            with self._shortcut_lock:
+                self._shortcut_error = str(exc)
+        finally:
+            if client is not None:
+                client.close()
+
+    def _update_shortcut_progress(self, result: ShortcutResult) -> None:
+        """Publish an immutable progress snapshot across the thread boundary."""
+
+        with self._shortcut_lock:
+            self._shortcut_result = result
+
+    def _finish_shortcut_if_ready(self) -> bool:
+        """Install completed shortcut output, or raw fallback on worker error."""
+
+        thread = self._shortcut_thread
+        if thread is not None and thread.is_alive():
+            return False
+        with self._shortcut_lock:
+            result = self._shortcut_result
+            error = self._shortcut_error
+        path = (
+            [list(q) for q in result.path_rad]
+            if error is None and result is not None and result.status != "cancelled"
+            else [list(q) for q in self._raw_rewind_path]
+        )
+        if error:
+            print(
+                f"[rewind-shortcut] team={self.team} error={error}; using raw path",
+                flush=True,
+            )
+        elif result is not None:
+            reduction = (
+                100.0
+                * (result.original_point_count - result.shortened_point_count)
+                / max(1, result.original_point_count)
+            )
+            print(
+                f"[rewind-shortcut] team={self.team} done "
+                f"points={result.original_point_count}->{result.shortened_point_count} "
+                f"reduction={reduction:.1f}% duration="
+                f"{result.original_duration_s:.2f}s->{result.shortened_duration_s:.2f}s "
+                f"attempts={result.attempts} accepted={result.accepted_shortcuts} "
+                f"checks={result.configurations_sent} elapsed={result.elapsed_s:.3f}s",
+                flush=True,
+            )
+        self._install_rewind_path(path)
+        self._shortcut_thread = None
         return True
+
+    def _stop_shortcut_thread(self) -> None:
+        """Request optimizer cancellation and briefly join its daemon thread."""
+
+        thread = self._shortcut_thread
+        if thread is None:
+            return
+        self._shortcut_cancel.set()
+        thread.join(timeout=1.0)
+        self._shortcut_thread = None
 
     def next_target(
         self, *, dt_s: float, q_actual_rad: list[float] | None
@@ -184,6 +361,8 @@ class RewindController:
         owned by the surrounding game controller.
         """
 
+        if self._status == "optimizing" and not self._finish_shortcut_if_ready():
+            return None
         points = list(self.rewind_trajectory.points)
         if self._status not in {
             "aligning_start",
@@ -237,6 +416,54 @@ class RewindController:
             progress = 1.0
         elif duration_s > 0.0:
             progress = min(1.0, self._rewind_elapsed_s / duration_s)
+        with self._shortcut_lock:
+            shortcut_result = self._shortcut_result
+            shortcut_error = self._shortcut_error
+        shortcut = {
+            "enabled": bool(self.shortcut_settings.enabled),
+            "status": (
+                "error"
+                if shortcut_error
+                else shortcut_result.status
+                if shortcut_result is not None
+                else "optimizing"
+                if self._status == "optimizing"
+                else "idle"
+            ),
+            "seed": (
+                shortcut_result.seed
+                if shortcut_result is not None
+                else self._shortcut_seed
+            ),
+            "original_point_count": (
+                shortcut_result.original_point_count
+                if shortcut_result is not None
+                else len(self._raw_rewind_path)
+            ),
+            "shortened_point_count": (
+                shortcut_result.shortened_point_count
+                if shortcut_result is not None
+                else len(self._raw_rewind_path)
+            ),
+            "attempts": shortcut_result.attempts if shortcut_result else 0,
+            "accepted_shortcuts": (
+                shortcut_result.accepted_shortcuts if shortcut_result else 0
+            ),
+            "collision_rejections": (
+                shortcut_result.collision_rejections if shortcut_result else 0
+            ),
+            "configurations_sent": (
+                shortcut_result.configurations_sent if shortcut_result else 0
+            ),
+            "elapsed_s": shortcut_result.elapsed_s if shortcut_result else 0.0,
+            "original_duration_s": (
+                shortcut_result.original_duration_s if shortcut_result else None
+            ),
+            "shortened_duration_s": (
+                shortcut_result.shortened_duration_s if shortcut_result else None
+            ),
+            "error": shortcut_error,
+        }
         return {
             "enabled": self.enabled,
             "status": self._status,
@@ -252,6 +479,7 @@ class RewindController:
                 if self._max_error_rad is not None
                 else None
             ),
+            "shortcut": shortcut,
         }
 
     def _sample(self, elapsed_s: float) -> list[float]:

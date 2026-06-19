@@ -183,6 +183,37 @@ def _game_config(node: Any) -> dict[str, Any]:
     }
 
 
+def _rewind_shortcut_config(node: Any) -> dict[str, Any]:
+    """Normalize the optional geometric rewind-shortcut tuning block.
+
+    ``random_seed: null`` selects a fresh production seed for every rewind.
+    Validation profiles and tests may set an integer seed for reproducibility.
+    """
+
+    data = node if isinstance(node, dict) else {}
+    raw_seed = data.get("random_seed")
+    try:
+        random_seed = int(raw_seed) if raw_seed is not None else None
+    except (TypeError, ValueError):
+        random_seed = None
+    return {
+        "enabled": bool(data.get("enabled", False)),
+        # Wall-clock search budget. There is intentionally no iteration cap.
+        "optimization_budget_s": _coerce_positive_float(
+            data.get("optimization_budget_s"), 3.0
+        ),
+        # Maximum joint-space increment between collision samples.
+        "collision_step_deg": _coerce_positive_float(
+            data.get("collision_step_deg"), 1.0
+        ),
+        # Number of configurations placed in each collision worker request.
+        "collision_batch_size": max(
+            1, int(_coerce_positive_float(data.get("collision_batch_size"), 8.0))
+        ),
+        "random_seed": random_seed,
+    }
+
+
 # --- Robot show-pose loading -----------------------------------------------
 
 
