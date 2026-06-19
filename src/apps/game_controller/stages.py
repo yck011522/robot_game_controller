@@ -117,14 +117,26 @@ def _tick_stage_state(
         return
 
     if stage == "reset":
-        # Robots return to a known start pose before scoring. Not skippable.
-        # Placeholder fixed timer until the real return-to-start motion and an
-        # "arrived" signal exist.
-        # TODO(reset-motion): replace this timer with a real arrived check.
-        if _stage_elapsed_s(stage_state, now_ns) >= float(game_cfg["reset_duration_s"]):
+        # Enabled rewind profiles wait for measured arrival from every robot.
+        # Other profiles retain the placeholder fixed timer for compatibility.
+        rewind_enabled = bool(game_cfg.get("rewind_enabled", False))
+        rewind_complete = bool(teams) and all(
+            bool(getattr(st.get("rewind"), "complete", False))
+            for st in teams.values()
+        )
+        timer_complete = _stage_elapsed_s(stage_state, now_ns) >= float(
+            game_cfg["reset_duration_s"]
+        )
+        if (rewind_enabled and rewind_complete) or (
+            not rewind_enabled and timer_complete
+        ):
             _enter_stage(
                 stage_state, teams, "conclusion", game_cfg, now_ns,
-                reason="robots returned to start (placeholder timer)",
+                reason=(
+                    "rewind arrived at play-entry pose"
+                    if rewind_enabled
+                    else "robots returned to start (placeholder timer)"
+                ),
             )
         return
 
@@ -181,6 +193,25 @@ def _enter_stage(
     if new_stage == "play":
         stage_state["winner_team"] = None
         _seed_play_teams(teams, game_cfg)
+        for st in teams.values():
+            play_sync = st.get("play_sync")
+            if isinstance(play_sync, dict) and bool(
+                play_sync.get("enabled", False)
+            ):
+                play_sync["requested"] = True
+                play_sync["pending"] = False
+                play_sync["settled_streak"] = 0
+                play_sync["attempts"] = 0
+            rewind = st.get("rewind")
+            if rewind is not None:
+                rewind.start_recording(
+                    st.get("last_q"), now_s=float(now_ns) / 1e9
+                )
+    elif new_stage == "reset" and bool(game_cfg.get("rewind_enabled", False)):
+        for st in teams.values():
+            rewind = st.get("rewind")
+            if rewind is not None:
+                rewind.start_rewind()
     elif new_stage == "conclusion":
         stage_state["winner_team"] = None
         for st in teams.values():
@@ -365,6 +396,8 @@ def _stage_countdown_s(
     elif stage == "tutorial":
         duration_s = float(game_cfg["tutorial_duration_s"])
     elif stage == "reset":
+        if bool(game_cfg.get("rewind_enabled", False)):
+            return 0
         duration_s = float(game_cfg["reset_duration_s"])
     else:
         return 0

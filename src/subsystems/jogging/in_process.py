@@ -192,11 +192,50 @@ class InProcessPlanner:
         return list(self._q_cur)
 
     def seed(self, q_actual: list[float] | None) -> None:
+        """Seed the planner once from the first measured robot position."""
+
         if self._seeded or q_actual is None or len(q_actual) < 6:
             return
+        self.reseed(q_actual)
+
+    def reseed(
+        self,
+        q_actual: list[float] | None,
+        *,
+        dial_pos_rad: list[float] | None = None,
+    ) -> bool:
+        """Reset all motion-integrator state around a measured robot pose.
+
+        ``game_controller`` calls this after a haptic coordinate reseat when a
+        new play stage begins. Unlike :meth:`seed`, this method is deliberately
+        repeatable so a prior game, rewind, or recovery cannot leave stale
+        joint position, velocity, or delta-input history in the planner.
+
+        Parameters
+        ----------
+        q_actual:
+            Latest measured six-joint robot position in radians.
+        dial_pos_rad:
+            Optional synchronized six-dial position. Supplying it prevents a
+            delta-input profile from interpreting reseating as user motion.
+
+        Returns
+        -------
+        bool
+            ``True`` when valid state was applied, otherwise ``False``.
+        """
+
+        if q_actual is None or len(q_actual) < 6:
+            return False
         self._q_cur = [float(v) for v in q_actual[:6]]
         self._v_cur = [0.0] * 6
+        self._prev_dial_pos = (
+            [float(v) for v in dial_pos_rad[:6]]
+            if isinstance(dial_pos_rad, list) and len(dial_pos_rad) >= 6
+            else None
+        )
         self._seeded = True
+        return True
 
     def plan(self, *, dial_pos_rad: list[float],
              dt: float) -> tuple[list[float], dict]:

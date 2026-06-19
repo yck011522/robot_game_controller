@@ -340,6 +340,117 @@ def _publish_haptic_reseat(
     bus.publish(pub, f"cmd.haptic.reseat.{team}", env)
 
 
+def _begin_play_sync(
+    pub: zmq.Socket,
+    producer: str,
+    team: str,
+    state: dict[str, Any],
+    haptic_cfg: dict[str, Any],
+    *,
+    now: float,
+) -> bool:
+    """Start a play-entry haptic reseat around measured robot position.
+
+    Called on the exact stage-transition tick when possible, and retried on
+    the first play tick if robot telemetry was not available at transition.
+    The function sends the firmware ``R`` command, which changes the logical
+    dial coordinate without commanding physical dial movement.
+    """
+
+    sync = state.get("play_sync")
+    q_robot = state.get("last_q")
+    if not isinstance(sync, dict):
+        return False
+    if not bool(sync.get("enabled", False)):
+        sync["requested"] = False
+        sync["pending"] = False
+        return False
+    if not isinstance(q_robot, list) or len(q_robot) < 6:
+        sync["requested"] = True
+        return False
+
+    gear = list(haptic_cfg.get("gear_ratio", [1.0] * 6))[:6]
+    while len(gear) < 6:
+        gear.append(1.0)
+    q_dial = [
+        float(q_robot[axis])
+        / (float(gear[axis]) if abs(float(gear[axis])) > 1e-9 else 1.0)
+        for axis in range(6)
+    ]
+    _publish_haptic_reseat(
+        pub,
+        producer,
+        team,
+        current_pos_robot_rad=[float(v) for v in q_robot[:6]],
+        current_pos_dial_rad=q_dial,
+    )
+    sync["requested"] = False
+    sync["pending"] = True
+    sync["target_dial_rad"] = q_dial
+    sync["last_reseat_mono_s"] = float(now)
+    sync["settled_streak"] = 0
+    sync["attempts"] = int(sync.get("attempts", 0)) + 1
+    print(
+        f"[game_controller] play-sync reseat team={team} attempt={sync['attempts']}",
+        flush=True,
+    )
+    return True
+
+
+def _tick_play_sync(
+    pub: zmq.Socket,
+    producer: str,
+    team: str,
+    state: dict[str, Any],
+    haptic_cfg: dict[str, Any],
+    *,
+    now: float,
+) -> bool:
+    """Advance play-entry synchronization and report when jogging may start.
+
+    The caller holds the robot at measured position for every tick handled by
+    this function. A short settled streak proves the haptic process applied the
+    reseat before the planner is allowed to consume absolute dial positions.
+    """
+
+    sync = state.get("play_sync")
+    if not isinstance(sync, dict) or not bool(sync.get("pending", False)):
+        return True
+
+    target_dial = sync.get("target_dial_rad")
+    if not isinstance(target_dial, list) or len(target_dial) < 6:
+        return False
+    settled, max_err = _startup_alignment_is_settled(
+        state, target_dial, haptic_cfg
+    )
+    if settled:
+        sync["settled_streak"] = int(sync.get("settled_streak", 0)) + 1
+    else:
+        sync["settled_streak"] = 0
+
+    required_ticks = int(haptic_cfg.get("startup_settle_streak_ticks", 3))
+    if int(sync.get("settled_streak", 0)) >= max(1, required_ticks):
+        sync["pending"] = False
+        print(
+            f"[game_controller] play-sync done team={team} max_err_rad={max_err:.4f}",
+            flush=True,
+        )
+        return True
+
+    last_reseat_s = float(sync.get("last_reseat_mono_s", 0.0) or 0.0)
+    retry_s = float(haptic_cfg.get("startup_reseat_timeout_s", 1.0))
+    if (float(now) - last_reseat_s) >= retry_s:
+        _begin_play_sync(
+            pub,
+            producer,
+            team,
+            state,
+            haptic_cfg,
+            now=now,
+        )
+    return False
+
+
 def _tick_startup_alignment(
     pub: zmq.Socket,
     producer: str,

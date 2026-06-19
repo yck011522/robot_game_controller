@@ -100,6 +100,18 @@ def _team_state_full_payload(
 ) -> dict[str, Any]:
     """Build one team's nested block inside the published state.full payload."""
 
+    rewind = team_state.get("rewind")
+    rewind_state = rewind.snapshot() if rewind is not None else {
+        "enabled": False,
+        "status": "disabled",
+        "recorded_point_count": 0,
+        "point_count": 0,
+        "current_index": 0,
+        "progress": 0.0,
+        "initial_q_rad": None,
+        "max_error_deg": None,
+    }
+
     return {
         "robot": {
             "q_target_rad": team_state["last_target"],
@@ -121,6 +133,23 @@ def _team_state_full_payload(
                 team_state.get("current_haptic_bounds_max_rad")
                 or haptic_cfg["bounds_max_rad"]
             ),
+            "play_sync": {
+                "enabled": bool(
+                    team_state.get("play_sync", {}).get("enabled", False)
+                ),
+                "requested": bool(
+                    team_state.get("play_sync", {}).get("requested", False)
+                ),
+                "pending": bool(
+                    team_state.get("play_sync", {}).get("pending", False)
+                ),
+                "settled_streak": int(
+                    team_state.get("play_sync", {}).get("settled_streak", 0)
+                ),
+                "attempts": int(
+                    team_state.get("play_sync", {}).get("attempts", 0)
+                ),
+            },
         },
         "collision": {
             "in_collision": team_state["last_collision"],
@@ -133,6 +162,7 @@ def _team_state_full_payload(
             "prox_age_ticks": team_state["last_prox_age_ticks"],
         },
         "planner": _state_full_planner(team_state.get("last_planner_info")),
+        "rewind": rewind_state,
         "score": team_state["score"],
         "summed_score": team_state["summed_score"],
         "bucket_labels": list(team_state.get("bucket_labels", [])),

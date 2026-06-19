@@ -183,7 +183,7 @@ def main() -> int:
     assert sent_q == target, f"servoJ sent wrong target: {sent_q}"
     assert math.isclose(speed, 0.5)
     assert math.isclose(accel, 0.5)
-    assert dt >= 1.0 / 200.0, f"servo dt too small: {dt}"
+    assert math.isclose(dt, 1.0 / 200.0), f"servo dt changed after gap: {dt}"
     assert math.isclose(lookahead, DEFAULT_LOOKAHEAD_TIME)
     assert gain == DEFAULT_SERVO_GAIN
 

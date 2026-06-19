@@ -86,8 +86,7 @@ class RealRtdeRobot:
         self._actual_q = self._wait_for_initial_actual_q(float(startup_timeout_s))
         self._actual_qd = [0.0] * len(self._actual_q)
         self._target_q = list(self._actual_q)
-        self._last_send_t = time.perf_counter()
-        self._next_control_attempt_t = self._last_send_t
+        self._next_control_attempt_t = time.perf_counter()
         self._rtde_c = self._rtde_helpers.connect_control(host, frequency_hz=self._servo_hz)
         self._receive_ok = True
         self._control_ok = True
@@ -260,7 +259,6 @@ class RealRtdeRobot:
         self._actual_q = self._wait_for_initial_actual_q(2.0)
         self._actual_qd = [0.0] * len(self._actual_q)
         self._target_q = list(self._actual_q)
-
         # Reopen control with bounded retries inside the recovery window.
         # Always make at least one attempt even if the deadline already
         # elapsed, so we never leave a disconnected control interface behind.
@@ -484,9 +482,11 @@ class RealRtdeRobot:
             self._next_control_attempt_t = now + CONTROL_RETRY_BACKOFF_S
             return
 
-        dt = now - self._last_send_t
-        self._last_send_t = now
-        servo_time = max(self._servo_dt, dt)
+        # ur_rtde documents servoJ's `time` as a blocking command duration.
+        # Passing elapsed wall time here made the first post-recovery command
+        # block for the entire protective-stop interval. The control contract
+        # is periodic, so every call must use the configured fixed period.
+        servo_time = self._servo_dt
         try:
             self._rtde_c.servoJ(
                 list(self._target_q),

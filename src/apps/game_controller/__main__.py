@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import sys
 import time
 from pathlib import Path
@@ -17,6 +18,7 @@ from core import bus  # noqa: E402
 from core.config import default_runtime_setting  # noqa: E402
 from core.proc import Proc, banner  # noqa: E402
 from subsystems.jogging.in_process import InProcessPlanner  # noqa: E402
+from subsystems.rewind.in_process import RewindController  # noqa: E402
 
 # Shared constants + profile/config construction live in the context module;
 # the stage machine + conclusion scoring live in the stages module; runtime
@@ -33,12 +35,14 @@ from apps.game_controller.context import (  # noqa: E402
     DEFAULT_BUCKET_VALUES,
 )
 from apps.game_controller.haptics import (  # noqa: E402
+    _begin_play_sync,
     _haptic_config,
     _publish_haptic_command,
     _publish_hold_current_pose,
     _reset_haptic_bounds_to_static,
     _reset_team_motion_outputs,
     _tick_startup_alignment,
+    _tick_play_sync,
     _update_dynamic_haptic_bounds_from_prox,
     _update_haptic_state,
 )
@@ -105,6 +109,15 @@ def main(argv: list[str] | None = None) -> int:
         or DEFAULT_SAFETY_TELEM_AGE_MAX_MS
     ) / 1000.0
     robot_show_poses = _load_robot_show_poses_deg()
+    robot_tuning = proc.profile.tuning.get("robot", {})
+    max_velocity_deg_s = robot_tuning.get(
+        "max_velocity_deg_s", [20.0, 20.0, 20.0, 30.0, 30.0, 30.0]
+    )
+    max_velocity_rad_s = [
+        math.radians(float(value)) for value in list(max_velocity_deg_s)[:6]
+    ]
+    while len(max_velocity_rad_s) < 6:
+        max_velocity_rad_s.append(math.radians(20.0))
     pub = bus.make_pub(proc.ctx)
     operator_input_rep = bus.make_rep(proc.ctx)
     safety_sub = (
@@ -140,6 +153,16 @@ def main(argv: list[str] | None = None) -> int:
         actual_sub = bus.make_sub(proc.ctx, topics=[f"telem.robot.actual.{team}"])
         teams[team] = {
             "planner": planner,
+            # In-process geometric recorder/rewinder. It returns targets only;
+            # this game-controller loop remains the owner of all bus routing.
+            "rewind": RewindController(
+                enabled=game_cfg["rewind_enabled"],
+                max_velocity_rad_s=max_velocity_rad_s,
+                speed_fraction=game_cfg["rewind_speed_fraction"],
+                arrival_tolerance_rad=math.radians(
+                    game_cfg["rewind_arrival_tolerance_deg"]
+                ),
+            ),
             "team": team,
             "sub_haptic": sub,
             "sub_actual": actual_sub,
@@ -202,6 +225,21 @@ def main(argv: list[str] | None = None) -> int:
                 "attempts": 0,
                 "last_reseat_mono_s": 0.0,
                 "settled_streak": 0,
+            },
+            # Per-game logical dial reseat. The stage machine requests it on
+            # play entry; this runtime loop owns publishing and settle gating.
+            "play_sync": {
+                "enabled": (
+                    proc.profile.subsystems.get("haptic_io", {}).get(team) == "real"
+                    if isinstance(proc.profile.subsystems.get("haptic_io"), dict)
+                    else False
+                ),
+                "requested": False,
+                "pending": False,
+                "target_dial_rad": None,
+                "last_reseat_mono_s": 0.0,
+                "settled_streak": 0,
+                "attempts": 0,
             },
         }
     banner(proc.proc, f"teams={active_teams} collision_check={collision_enabled}")
@@ -370,6 +408,9 @@ def main(argv: list[str] | None = None) -> int:
 
             if stage_state["stage"] == "play":
                 _apply_weight_bucket_values(st, weight_state)
+                st["rewind"].ensure_recording_started(
+                    st["last_q"], now_s=float(now_ns) / 1e9
+                )
 
             if st["last_q"] is None:
                 _reset_haptic_bounds_to_static(st, haptic_cfg)
@@ -397,6 +438,40 @@ def main(argv: list[str] | None = None) -> int:
                 _publish_hold_current_pose(pub, p.proc, team, st)
                 continue
 
+            play_sync = st.get("play_sync", {})
+            if stage_state["stage"] == "play" and (
+                bool(play_sync.get("requested", False))
+                or bool(play_sync.get("pending", False))
+            ):
+                sync_now_s = time.perf_counter()
+                if bool(play_sync.get("requested", False)):
+                    _begin_play_sync(
+                        pub,
+                        p.proc,
+                        team,
+                        st,
+                        haptic_cfg,
+                        now=sync_now_s,
+                    )
+                _reset_haptic_bounds_to_static(st, haptic_cfg)
+                _publish_haptic_command(pub, p.proc, team, st, haptic_cfg)
+                sync_ready = _tick_play_sync(
+                    pub,
+                    p.proc,
+                    team,
+                    st,
+                    haptic_cfg,
+                    now=sync_now_s,
+                )
+                if sync_ready:
+                    planner.reseed(st["last_q"], dial_pos_rad=st["last_dial"])
+                _publish_hold_current_pose(pub, p.proc, team, st)
+                continue
+
+            if stage_state["stage"] == "reset":
+                # Rewind keeps position tracking active but discards stale
+                # proximity-derived bounds from the final gameplay tick.
+                _reset_haptic_bounds_to_static(st, haptic_cfg)
             _publish_haptic_command(pub, p.proc, team, st, haptic_cfg)
 
             robot_status = st.get("robot_status", {})
@@ -414,12 +489,41 @@ def main(argv: list[str] | None = None) -> int:
                 soft_paused = True
             fault_prev_by_team[team] = robot_fault_active
             if robot_fault_active or soft_paused:
+                # Keep the planner anchored to measured robot state while no
+                # motion can execute. This prevents target position and
+                # velocity from surviving a protective stop and jumping on
+                # the first resumed tick.
+                planner.reseed(st["last_q"], dial_pos_rad=st["last_dial"])
                 _reset_haptic_bounds_to_static(st, haptic_cfg)
                 _publish_hold_current_pose(pub, p.proc, team, st)
                 continue
 
             if stage_state["stage"] == "play":
                 st["score"] = int(sum(st["bucket_values"]))
+            elif stage_state["stage"] == "reset" and bool(
+                game_cfg.get("rewind_enabled", False)
+            ):
+                # Reset ignores haptic input and collision/proximity checks.
+                # The haptic command published above still tracks measured q.
+                _reset_haptic_bounds_to_static(st, haptic_cfg)
+                q_target = st["rewind"].next_target(
+                    dt_s=dt,
+                    q_actual_rad=st["last_q"],
+                )
+                if q_target is None:
+                    _publish_hold_current_pose(pub, p.proc, team, st)
+                    continue
+                _reset_team_motion_outputs(st, q_target_rad=q_target)
+                env = bus.make_envelope(p.proc)
+                env.update(
+                    {
+                        "team": team,
+                        "q_target_rad": q_target,
+                        "clamps": {"path": 1.0, "prox": 1.0, "final": 1.0},
+                    }
+                )
+                bus.publish(pub, f"cmd.robot.target.{team}", env)
+                continue
             else:
                 # All non-play stages hold the robot at its measured pose.
                 # Only the conclusion stage additionally advances the scripted
@@ -485,6 +589,10 @@ def main(argv: list[str] | None = None) -> int:
                 }
             )
             bus.publish(pub, f"cmd.robot.target.{team}", env)
+            st["rewind"].record_target(
+                q_target,
+                now_s=float(now_ns) / 1e9,
+            )
 
         if bool(control_state.get("recovery_active", False)):
             recovery_teams = [
@@ -526,6 +634,19 @@ def main(argv: list[str] | None = None) -> int:
         stage_before_tick = stage_state["stage"]
         if not paused:
             _tick_stage_state(stage_state, teams, game_cfg, now_ns)
+        if stage_before_tick != "play" and stage_state["stage"] == "play":
+            # Stage transitions happen after the per-team motion loop. Issue
+            # the coordinate-reset command now, on that same transition tick;
+            # the following ticks hold until haptic telemetry confirms it.
+            for team, st in teams.items():
+                _begin_play_sync(
+                    pub,
+                    p.proc,
+                    team,
+                    st,
+                    haptic_cfg,
+                    now=time.perf_counter(),
+                )
         if stage_before_tick == "conclusion" and stage_state["stage"] != "conclusion":
             # Leaving conclusion (now conclusion -> idle): close any buckets
             # opened during scoring and tare the load cells for the next game.
