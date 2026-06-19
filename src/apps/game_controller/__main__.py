@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 import sys
 import time
 from pathlib import Path
@@ -12,25 +11,20 @@ _SRC = Path(__file__).resolve().parents[2]
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-import yaml  # noqa: E402
 import zmq  # noqa: E402
 
 from core import bus  # noqa: E402
 from core.config import default_runtime_setting  # noqa: E402
-from core.device_connection import load_serial_settings  # noqa: E402
 from core.proc import Proc, banner  # noqa: E402
 from subsystems.jogging.in_process import InProcessPlanner  # noqa: E402
-from subsystems.weight_sensor.common import BUCKET_CELL_MAP  # noqa: E402
 
 # Shared constants + profile/config construction live in the context module;
-# the stage machine + conclusion scoring live in the stages module. Both are
-# imported here by name so existing call sites in main()/tick() stay unchanged.
+# the stage machine + conclusion scoring live in the stages module; runtime
+# helpers are grouped by domain in the sibling safety/weight/haptics modules.
+# Everything is imported here by name so main()/tick() remain orchestration-only.
 from apps.game_controller.context import (  # noqa: E402
-    DEFAULT_HAPTIC_BOUNDS_DEG_MAX,
-    DEFAULT_HAPTIC_BOUNDS_DEG_MIN,
     DEFAULT_SAFETY_TELEM_AGE_MAX_MS,
     TEAM_BUCKET_IDS,
-    _coerce_positive_float,
     _game_config,
     _load_robot_show_poses_deg,
     _startup_alignment_active,
@@ -38,12 +32,37 @@ from apps.game_controller.context import (  # noqa: E402
 from apps.game_controller.context import (  # noqa: E402
     DEFAULT_BUCKET_VALUES,
 )
+from apps.game_controller.haptics import (  # noqa: E402
+    _coerce_float_list,
+    _haptic_config,
+    _publish_haptic_command,
+    _publish_hold_current_pose,
+    _reset_haptic_bounds_to_static,
+    _reset_team_motion_outputs,
+    _tick_startup_alignment,
+    _update_dynamic_haptic_bounds_from_prox,
+    _update_haptic_state,
+)
+from apps.game_controller.safety import (  # noqa: E402
+    _initial_safety_state,
+    _refresh_safety_block,
+    _safety_pause_reason,
+    _state_full_safety_barrier,
+    _update_safety_state,
+)
 from apps.game_controller.stages import (  # noqa: E402
     _enter_stage,
     _stage_countdown_s,
     _tick_conclusion_team,
     _tick_stage_state,
     _update_stage_pause_tracking,
+)
+from apps.game_controller.weight import (  # noqa: E402
+    _apply_weight_bucket_values,
+    _initial_weight_state,
+    _state_full_weight_sensor,
+    _team_bucket_labels,
+    _update_weight_state,
 )
 
 # game_controller ticks at a fixed rate. Each tick blocks on the
@@ -342,16 +361,7 @@ def main(argv: list[str] | None = None) -> int:
 
             if st["last_q"] is None:
                 _reset_haptic_bounds_to_static(st, haptic_cfg)
-                st["last_target"] = None
-                st["last_collision"] = False
-                st["last_first_hit"] = None
-                st["last_path_scalar"] = 1.0
-                st["last_prox_scalar"] = 1.0
-                st["last_final_scalar"] = 1.0
-                st["last_planner_info"] = {}
-                st["last_prox_probe_offsets_deg"] = []
-                st["last_prox_hits"] = [[False] * 20 for _ in range(6)]
-                st["last_prox_age_ticks"] = [9999] * 6
+                _reset_team_motion_outputs(st, q_target_rad=None)
                 st["score"] = int(sum(st["bucket_values"]))
                 continue
 
@@ -372,30 +382,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
 
                 # Hold robot at measured pose until haptic settles to avoid startup jerk.
-                st["last_target"] = list(st["last_q"])
-                st["last_collision"] = False
-                st["last_first_hit"] = None
-                st["last_path_scalar"] = 1.0
-                st["last_prox_scalar"] = 1.0
-                st["last_final_scalar"] = 1.0
-                st["last_planner_info"] = {}
-                st["last_prox_probe_offsets_deg"] = []
-                st["last_prox_hits"] = [[False] * 20 for _ in range(6)]
-                st["last_prox_age_ticks"] = [9999] * 6
-
-                env = bus.make_envelope(p.proc)
-                env.update(
-                    {
-                        "team": team,
-                        "q_target_rad": list(st["last_q"]),
-                        "clamps": {
-                            "path": 1.0,
-                            "prox": 1.0,
-                            "final": 1.0,
-                        },
-                    }
-                )
-                bus.publish(pub, f"cmd.robot.target.{team}", env)
+                _publish_hold_current_pose(pub, p.proc, team, st)
                 continue
 
             _publish_haptic_command(pub, p.proc, team, st, haptic_cfg)
@@ -416,30 +403,7 @@ def main(argv: list[str] | None = None) -> int:
             fault_prev_by_team[team] = robot_fault_active
             if robot_fault_active or soft_paused:
                 _reset_haptic_bounds_to_static(st, haptic_cfg)
-                st["last_target"] = list(st["last_q"])
-                st["last_collision"] = False
-                st["last_first_hit"] = None
-                st["last_path_scalar"] = 1.0
-                st["last_prox_scalar"] = 1.0
-                st["last_final_scalar"] = 1.0
-                st["last_planner_info"] = {}
-                st["last_prox_probe_offsets_deg"] = []
-                st["last_prox_hits"] = [[False] * 20 for _ in range(6)]
-                st["last_prox_age_ticks"] = [9999] * 6
-
-                env = bus.make_envelope(p.proc)
-                env.update(
-                    {
-                        "team": team,
-                        "q_target_rad": list(st["last_q"]),
-                        "clamps": {
-                            "path": 1.0,
-                            "prox": 1.0,
-                            "final": 1.0,
-                        },
-                    }
-                )
-                bus.publish(pub, f"cmd.robot.target.{team}", env)
+                _publish_hold_current_pose(pub, p.proc, team, st)
                 continue
 
             if stage_state["stage"] == "play":
@@ -459,30 +423,7 @@ def main(argv: list[str] | None = None) -> int:
                         stage_state,
                         bucket_command_fn=_publish_bucket_command,
                     )
-                st["last_target"] = list(st["last_q"])
-                st["last_collision"] = False
-                st["last_first_hit"] = None
-                st["last_path_scalar"] = 1.0
-                st["last_prox_scalar"] = 1.0
-                st["last_final_scalar"] = 1.0
-                st["last_planner_info"] = {}
-                st["last_prox_probe_offsets_deg"] = []
-                st["last_prox_hits"] = [[False] * 20 for _ in range(6)]
-                st["last_prox_age_ticks"] = [9999] * 6
-
-                env = bus.make_envelope(p.proc)
-                env.update(
-                    {
-                        "team": team,
-                        "q_target_rad": list(st["last_q"]),
-                        "clamps": {
-                            "path": 1.0,
-                            "prox": 1.0,
-                            "final": 1.0,
-                        },
-                    }
-                )
-                bus.publish(pub, f"cmd.robot.target.{team}", env)
+                _publish_hold_current_pose(pub, p.proc, team, st)
                 continue
 
             q_target, info = planner.plan(
@@ -701,208 +642,6 @@ def _drain_latest(sub: zmq.Socket, *, on_msg) -> None:
         on_msg(last)
 
 
-def _initial_safety_state(*, enabled: bool) -> dict[str, Any]:
-    """Return the GameController's local safety barrier cache."""
-
-    return {
-        "enabled": enabled,
-        "ok": True if not enabled else False,
-        "channels": [],
-        "errors": [],
-        "last_recv_mono_s": None,
-        "stale": enabled,
-    }
-
-
-def _update_safety_state(state: dict[str, Any], body: dict[str, Any]) -> None:
-    """Store the latest `telem.safety` payload and local receipt time."""
-
-    state["ok"] = bool(body.get("ok", False))
-    channels = body.get("channels")
-    state["channels"] = (
-        [bool(value) for value in channels] if isinstance(channels, list) else []
-    )
-    errors = body.get("errors")
-    state["errors"] = (
-        [str(value) for value in errors] if isinstance(errors, list) else []
-    )
-    state["last_recv_mono_s"] = time.perf_counter()
-    state["stale"] = False
-
-
-def _refresh_safety_block(
-    control_state: dict[str, Any],
-    safety_state: dict[str, Any],
-    telem_age_max_s: float,
-) -> None:
-    """Update safety pause flags from the latest barrier sample and age budget."""
-
-    if not bool(safety_state.get("enabled", False)):
-        control_state["safety_blocked"] = False
-        safety_state["stale"] = False
-        return
-
-    last_recv = safety_state.get("last_recv_mono_s")
-    stale = (
-        not isinstance(last_recv, float)
-        or (time.perf_counter() - last_recv) > telem_age_max_s
-    )
-    safety_state["stale"] = stale
-    blocked = stale or not bool(safety_state.get("ok", False))
-    control_state["safety_blocked"] = blocked
-    if blocked:
-        control_state["soft_pause"] = True
-        control_state["safety_pause_latched"] = True
-
-
-def _safety_pause_reason(safety_state: dict[str, Any]) -> str:
-    """Return the pause reason string for the current safety block."""
-
-    if bool(safety_state.get("stale", False)):
-        return "barrier_stale"
-    return "barrier_open"
-
-
-def _state_full_safety_barrier(safety_state: dict[str, Any]) -> dict[str, Any]:
-    """Build the `state.full.safety.barrier` block for UI and RobotIO consumers."""
-
-    return {
-        "enabled": bool(safety_state.get("enabled", False)),
-        "ok": bool(safety_state.get("ok", True))
-        and not bool(safety_state.get("stale", False)),
-        "channels": list(safety_state.get("channels", [])),
-        "stale": bool(safety_state.get("stale", False)),
-        "errors": list(safety_state.get("errors", [])),
-    }
-
-
-def _initial_weight_state(*, enabled: bool) -> dict[str, Any]:
-    """Return the GameController's local weight-sensor cache."""
-
-    return {
-        "enabled": enabled,
-        "cells_g": {},
-        "cell_ok": {},
-        "errors": {},
-        "bucket_cell_map": _load_weight_bucket_cell_map(),
-        "last_recv_mono_s": None,
-        "tare_seq": 0,
-        "cycle_seq": 0,
-    }
-
-
-def _update_weight_state(state: dict[str, Any], body: dict[str, Any]) -> None:
-    """Store the latest twelve-cell `telem.weight` payload."""
-
-    cells = body.get("cells_g") if isinstance(body, dict) else None
-    ok = body.get("cell_ok") if isinstance(body, dict) else None
-    errors = body.get("errors") if isinstance(body, dict) else None
-    state["cells_g"] = _coerce_number_map(cells)
-    state["cell_ok"] = _coerce_bool_map(ok)
-    state["errors"] = {str(k): str(v) for k, v in errors.items()} if isinstance(errors, dict) else {}
-    state["tare_seq"] = _coerce_int(body.get("tare_seq"), int(state.get("tare_seq", 0) or 0))
-    state["cycle_seq"] = _coerce_int(body.get("cycle_seq"), int(state.get("cycle_seq", 0) or 0))
-    state["last_recv_mono_s"] = time.perf_counter()
-
-
-def _apply_weight_bucket_values(team_state: dict[str, Any], weight_state: dict[str, Any]) -> None:
-    """Update one team's bucket values from live load-cell sums during play."""
-
-    if not bool(weight_state.get("enabled", False)):
-        return
-    values = _bucket_values_from_weight(team_state["team"], weight_state)
-    if values is None:
-        return
-    team_state["bucket_values"] = values
-
-
-def _bucket_values_from_weight(team: str, weight_state: dict[str, Any]) -> list[float] | None:
-    """Return three 1-based bucket sums for a team from the latest 12 cells."""
-
-    cells_g = weight_state.get("cells_g")
-    if not isinstance(cells_g, dict) or not cells_g:
-        return None
-    bucket_cell_map = weight_state.get("bucket_cell_map")
-    if not isinstance(bucket_cell_map, dict):
-        return None
-    values: list[float] = []
-    for label in _team_bucket_labels(team):
-        cell_ids = bucket_cell_map.get(label, [])
-        total_g = 0.0
-        for cell_id in cell_ids:
-            total_g += max(0.0, float(cells_g.get(str(cell_id), 0.0)))
-        values.append(total_g)
-    return values[:3]
-
-
-def _state_full_weight_sensor(weight_state: dict[str, Any]) -> dict[str, Any]:
-    """Build the compact `state.full.weight_sensor` block."""
-
-    return {
-        "enabled": bool(weight_state.get("enabled", False)),
-        "cells_g": dict(weight_state.get("cells_g", {})),
-        "cell_ok": dict(weight_state.get("cell_ok", {})),
-        "bucket_cell_map": dict(weight_state.get("bucket_cell_map", {})),
-        "errors": dict(weight_state.get("errors", {})),
-        "tare_seq": int(weight_state.get("tare_seq", 0) or 0),
-        "cycle_seq": int(weight_state.get("cycle_seq", 0) or 0),
-        "last_recv_mono_s": weight_state.get("last_recv_mono_s"),
-    }
-
-
-def _load_weight_bucket_cell_map() -> dict[str, list[int]]:
-    """Load physical load-cell to logical-bucket wiring from device config."""
-
-    settings = load_serial_settings().get("weight_sensor", {})
-    raw = settings.get("bucket_cells") if isinstance(settings, dict) else None
-    source = raw if isinstance(raw, dict) else BUCKET_CELL_MAP
-    out: dict[str, list[int]] = {}
-    for label, fallback_cells in BUCKET_CELL_MAP.items():
-        cells = source.get(label, fallback_cells) if isinstance(source, dict) else fallback_cells
-        if not isinstance(cells, (list, tuple)):
-            cells = fallback_cells
-        out[label] = [int(cell) for cell in list(cells)[:2]]
-    return out
-
-
-def _team_bucket_labels(team: str) -> list[str]:
-    """Return 1-based logical bucket labels for a team."""
-
-    prefix = "A" if str(team).lower() == "a" else "B"
-    return [f"{prefix}1", f"{prefix}2", f"{prefix}3"]
-
-
-def _coerce_number_map(value: Any) -> dict[str, float]:
-    """Coerce a JSON object of numeric values into a string-keyed float map."""
-
-    if not isinstance(value, dict):
-        return {}
-    out: dict[str, float] = {}
-    for key, item in value.items():
-        try:
-            out[str(key)] = float(item)
-        except (TypeError, ValueError):
-            out[str(key)] = 0.0
-    return out
-
-
-def _coerce_bool_map(value: Any) -> dict[str, bool]:
-    """Coerce a JSON object into a string-keyed bool map."""
-
-    if not isinstance(value, dict):
-        return {}
-    return {str(key): bool(item) for key, item in value.items()}
-
-
-def _coerce_int(value: Any, default: int) -> int:
-    """Coerce one value to int with a fallback."""
-
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return int(default)
-
-
 def _state_full_planner(info: Any) -> dict[str, Any]:
     """Build the compact planner diagnostics block for state.full traces."""
 
@@ -929,391 +668,13 @@ def _drain_ui_game_control_requests(rep: zmq.Socket, *, on_msg) -> None:
         bus.send_json(rep, on_msg(body))
 
 
-def _update_actual_state(state: dict, body: dict) -> None:
+def _update_actual_state(state: dict[str, Any], body: dict[str, Any]) -> None:
+    """Cache the latest measured robot joints and status for one team."""
+
     state["last_q"] = body.get("q_rad", state["last_q"])
     robot_status = body.get("robot_status")
     if isinstance(robot_status, dict):
         state["robot_status"] = robot_status
-
-
-def _update_haptic_state(state: dict, body: dict) -> None:
-    dial_pos = body.get("dial_pos_rad")
-    state["last_dial"] = dial_pos if isinstance(dial_pos, list) else state["last_dial"]
-    if isinstance(dial_pos, list) and len(dial_pos) >= 6:
-        state["haptic_seeded"] = True
-    dial_vel = body.get("dial_vel_rad_s")
-    if isinstance(dial_vel, list):
-        state["last_dial_vel"] = [float(v) for v in dial_vel[:6]] + [0.0] * max(
-            0, 6 - len(dial_vel[:6])
-        )
-        state["last_dial_vel"] = state["last_dial_vel"][:6]
-    connected = body.get("board_connected")
-    if isinstance(connected, list):
-        state["last_haptic_connected"] = [bool(v) for v in connected[:6]] + [
-            False
-        ] * max(0, 6 - len(connected[:6]))
-        state["last_haptic_connected"] = state["last_haptic_connected"][:6]
-    loop_hz = body.get("board_loop_hz")
-    if isinstance(loop_hz, list):
-        state["last_haptic_loop_hz"] = [float(v) for v in loop_hz[:6]] + [0.0] * max(
-            0, 6 - len(loop_hz[:6])
-        )
-        state["last_haptic_loop_hz"] = state["last_haptic_loop_hz"][:6]
-
-
-def _publish_hold_current_pose(
-    pub: zmq.Socket, producer: str, team: str, state: dict[str, Any]
-) -> None:
-    """Publish a hold-at-actual robot command while required input is absent."""
-
-    q_actual = state.get("last_q")
-    if not isinstance(q_actual, list) or len(q_actual) < 6:
-        return
-    state["last_target"] = list(q_actual[:6])
-    state["last_collision"] = False
-    state["last_first_hit"] = None
-    state["last_path_scalar"] = 1.0
-    state["last_prox_scalar"] = 1.0
-    state["last_final_scalar"] = 1.0
-    state["last_prox_probe_offsets_deg"] = []
-    state["last_prox_hits"] = [[False] * 20 for _ in range(6)]
-    state["last_prox_age_ticks"] = [9999] * 6
-
-    env = bus.make_envelope(producer)
-    env.update(
-        {
-            "team": team,
-            "q_target_rad": list(q_actual[:6]),
-            "clamps": {
-                "path": 1.0,
-                "prox": 1.0,
-                "final": 1.0,
-            },
-        }
-    )
-    bus.publish(pub, f"cmd.robot.target.{team}", env)
-
-
-def _haptic_config(node: Any) -> dict[str, Any]:
-    data = node if isinstance(node, dict) else {}
-    gear_ratio = _coerce_float_list(data.get("gear_ratio"), [1.0] * 6)
-    gear = [(v if abs(v) > 1e-9 else 1.0) for v in gear_ratio]
-    bounds_min_robot_rad = [
-        math.radians(v)
-        for v in _coerce_float_list(
-            data.get("bounds_deg_min"), DEFAULT_HAPTIC_BOUNDS_DEG_MIN
-        )
-    ]
-    bounds_max_robot_rad = [
-        math.radians(v)
-        for v in _coerce_float_list(
-            data.get("bounds_deg_max"), DEFAULT_HAPTIC_BOUNDS_DEG_MAX
-        )
-    ]
-    bounds_min_dial_rad, bounds_max_dial_rad = _robot_bounds_to_dial_bounds_rad(
-        bounds_min_robot_rad, bounds_max_robot_rad, gear
-    )
-    return {
-        "gear_ratio": gear,
-        "bounds_min_rad": bounds_min_dial_rad,
-        "bounds_max_rad": bounds_max_dial_rad,
-        "prox_bounds_stale_ticks": max(
-            1, int(_coerce_positive_float(data.get("prox_bounds_stale_ticks"), 12.0))
-        ),
-        "startup_settle_tol_rad": math.radians(
-            _coerce_positive_float(data.get("startup_settle_tolerance_deg"), 10.0)
-        ),
-        "startup_reseat_timeout_s": _coerce_positive_float(
-            data.get("startup_reseat_timeout_s"), 1.0
-        ),
-        "startup_settle_streak_ticks": max(
-            1, int(_coerce_positive_float(data.get("startup_settle_streak_ticks"), 3.0))
-        ),
-    }
-
-
-def _publish_haptic_command(
-    pub: zmq.Socket,
-    producer: str,
-    team: str,
-    state: dict[str, Any],
-    haptic_cfg: dict[str, Any],
-) -> None:
-    gear = list(haptic_cfg.get("gear_ratio", [1.0] * 6))
-    while len(gear) < 6:
-        gear.append(1.0)
-    tracking_target_dial_rad = [
-        float(state["last_q"][i]) / float(gear[i]) for i in range(6)
-    ]
-    bounds_min_rad = state.get("current_haptic_bounds_min_rad")
-    bounds_max_rad = state.get("current_haptic_bounds_max_rad")
-    if not isinstance(bounds_min_rad, list) or len(bounds_min_rad) < 6:
-        bounds_min_rad = list(haptic_cfg["bounds_min_rad"])
-    if not isinstance(bounds_max_rad, list) or len(bounds_max_rad) < 6:
-        bounds_max_rad = list(haptic_cfg["bounds_max_rad"])
-    env = bus.make_envelope(producer)
-    env.update(
-        {
-            "team": team,
-            "tracking_target_rad": tracking_target_dial_rad,
-            "bounds_min_rad": [float(v) for v in bounds_min_rad[:6]],
-            "bounds_max_rad": [float(v) for v in bounds_max_rad[:6]],
-        }
-    )
-    bus.publish(pub, f"cmd.haptic.{team}", env)
-
-
-def _reset_haptic_bounds_to_static(
-    state: dict[str, Any], haptic_cfg: dict[str, Any]
-) -> None:
-    """Set current assistive haptic bounds to the static profile defaults."""
-    state["current_haptic_bounds_min_rad"] = [
-        float(v) for v in haptic_cfg.get("bounds_min_rad", [-math.pi] * 6)[:6]
-    ]
-    state["current_haptic_bounds_max_rad"] = [
-        float(v) for v in haptic_cfg.get("bounds_max_rad", [math.pi] * 6)[:6]
-    ]
-
-
-def _update_dynamic_haptic_bounds_from_prox(
-    state: dict[str, Any], haptic_cfg: dict[str, Any]
-) -> None:
-    """Update current haptic bounds from proximity-hit masks (assistive only).
-
-    Proximity checks are sampled in robot-joint space around the current pose.
-    This function converts nearest-hit offsets into dial-space bounds and
-    falls back to static bounds when axis data is stale or malformed.
-    """
-    static_min = [
-        float(v) for v in haptic_cfg.get("bounds_min_rad", [-math.pi] * 6)[:6]
-    ]
-    static_max = [float(v) for v in haptic_cfg.get("bounds_max_rad", [math.pi] * 6)[:6]]
-    while len(static_min) < 6:
-        static_min.append(-math.pi)
-    while len(static_max) < 6:
-        static_max.append(math.pi)
-
-    q_robot = state.get("last_q")
-    offsets_deg = state.get("last_prox_probe_offsets_deg")
-    prox_hits = state.get("last_prox_hits")
-    prox_age_ticks = state.get("last_prox_age_ticks")
-    if not isinstance(q_robot, list) or len(q_robot) < 6:
-        _reset_haptic_bounds_to_static(state, haptic_cfg)
-        return
-    if not isinstance(offsets_deg, list) or not offsets_deg:
-        _reset_haptic_bounds_to_static(state, haptic_cfg)
-        return
-    if not isinstance(prox_hits, list) or len(prox_hits) < 6:
-        _reset_haptic_bounds_to_static(state, haptic_cfg)
-        return
-    if not isinstance(prox_age_ticks, list) or len(prox_age_ticks) < 6:
-        _reset_haptic_bounds_to_static(state, haptic_cfg)
-        return
-
-    gear = [float(v) for v in haptic_cfg.get("gear_ratio", [1.0] * 6)[:6]]
-    while len(gear) < 6:
-        gear.append(1.0)
-
-    offsets_rad: list[float] = []
-    for value in offsets_deg:
-        try:
-            offsets_rad.append(math.radians(float(value)))
-        except (TypeError, ValueError):
-            _reset_haptic_bounds_to_static(state, haptic_cfg)
-            return
-
-    stale_ticks = int(haptic_cfg.get("prox_bounds_stale_ticks", 12) or 12)
-    stale_ticks = max(1, stale_ticks)
-
-    out_min: list[float] = []
-    out_max: list[float] = []
-    for axis in range(6):
-        lo_static = float(static_min[axis])
-        hi_static = float(static_max[axis])
-        if lo_static > hi_static:
-            lo_static, hi_static = hi_static, lo_static
-
-        age = prox_age_ticks[axis]
-        axis_hits = prox_hits[axis]
-        if (not isinstance(age, int) and not isinstance(age, float)) or float(
-            age
-        ) > float(stale_ticks):
-            out_min.append(lo_static)
-            out_max.append(hi_static)
-            continue
-        if not isinstance(axis_hits, list) or len(axis_hits) != len(offsets_rad):
-            out_min.append(lo_static)
-            out_max.append(hi_static)
-            continue
-
-        q_dial = _robot_to_dial_rad(float(q_robot[axis]), float(gear[axis]))
-        neg_hit_dial: float | None = None
-        pos_hit_dial: float | None = None
-        for off_rad, hit in zip(offsets_rad, axis_hits):
-            if not bool(hit):
-                continue
-            off_dial = _robot_to_dial_rad(float(off_rad), float(gear[axis]))
-            if off_dial < 0.0 and (neg_hit_dial is None or off_dial > neg_hit_dial):
-                neg_hit_dial = off_dial
-            if off_dial > 0.0 and (pos_hit_dial is None or off_dial < pos_hit_dial):
-                pos_hit_dial = off_dial
-
-        min_dial = (
-            lo_static
-            if neg_hit_dial is None
-            else _clamp(q_dial + neg_hit_dial, lo_static, hi_static)
-        )
-        max_dial = (
-            hi_static
-            if pos_hit_dial is None
-            else _clamp(q_dial + pos_hit_dial, lo_static, hi_static)
-        )
-        if min_dial > max_dial:
-            min_dial, max_dial = lo_static, hi_static
-        out_min.append(float(min_dial))
-        out_max.append(float(max_dial))
-
-    state["current_haptic_bounds_min_rad"] = out_min
-    state["current_haptic_bounds_max_rad"] = out_max
-
-
-def _robot_to_dial_rad(robot_rad: float, gear_ratio: float) -> float:
-    ratio = float(gear_ratio)
-    if abs(ratio) < 1e-9:
-        ratio = 1.0
-    return float(robot_rad) / ratio
-
-
-def _robot_bounds_to_dial_bounds_rad(
-    bounds_min_robot_rad: list[float],
-    bounds_max_robot_rad: list[float],
-    gear_ratio: list[float],
-) -> tuple[list[float], list[float]]:
-    """Convert profile robot-joint bounds into dial-space firmware bounds.
-
-    Called by `_haptic_config` while loading profile tuning. The haptic
-    firmware receives dial-space `C,<target>,<min>,<max>` values, while the
-    profile stores bounds in robot-joint degrees beside the robot limits.
-    """
-
-    out_min: list[float] = []
-    out_max: list[float] = []
-    for axis in range(6):
-        # Each axis may use a different dial-to-joint gear ratio; convert
-        # both endpoints and sort so negative gearing still yields lo <= hi.
-        gear = float(gear_ratio[axis]) if axis < len(gear_ratio) else 1.0
-        lo_robot = float(bounds_min_robot_rad[axis])
-        hi_robot = float(bounds_max_robot_rad[axis])
-        lo_dial = _robot_to_dial_rad(lo_robot, gear)
-        hi_dial = _robot_to_dial_rad(hi_robot, gear)
-        out_min.append(min(lo_dial, hi_dial))
-        out_max.append(max(lo_dial, hi_dial))
-    return out_min, out_max
-
-
-def _publish_haptic_reseat(
-    pub: zmq.Socket,
-    producer: str,
-    team: str,
-    *,
-    current_pos_robot_rad: list[float],
-    current_pos_dial_rad: list[float],
-) -> None:
-    env = bus.make_envelope(producer)
-    env.update(
-        {
-            "team": team,
-            "current_pos_rad": list(current_pos_robot_rad),
-            "current_pos_dial_rad": list(current_pos_dial_rad),
-        }
-    )
-    bus.publish(pub, f"cmd.haptic.reseat.{team}", env)
-
-
-def _tick_startup_alignment(
-    pub: zmq.Socket,
-    producer: str,
-    team: str,
-    state: dict[str, Any],
-    haptic_cfg: dict[str, Any],
-    *,
-    now: float,
-) -> None:
-    align = (
-        state.get("startup_align")
-        if isinstance(state.get("startup_align"), dict)
-        else {}
-    )
-    q_robot = list(state.get("last_q") or [0.0] * 6)[:6]
-    gear = list(haptic_cfg.get("gear_ratio", [1.0] * 6))[:6]
-    while len(gear) < 6:
-        gear.append(1.0)
-    q_dial = [
-        float(q_robot[i]) / (float(gear[i]) if abs(float(gear[i])) > 1e-9 else 1.0)
-        for i in range(6)
-    ]
-
-    settled, max_err = _haptic_settled_to_target(state, q_dial, haptic_cfg)
-    if settled:
-        align["settled_streak"] = int(align.get("settled_streak", 0)) + 1
-    else:
-        align["settled_streak"] = 0
-
-    if int(align.get("settled_streak", 0)) >= int(
-        haptic_cfg.get("startup_settle_streak_ticks", 3)
-    ):
-        align["done"] = True
-        print(
-            f"[game_controller] startup-align done team={team} attempts={int(align.get('attempts', 0))} max_err_rad={max_err:.4f}",
-            flush=True,
-        )
-        return
-
-    attempts = int(align.get("attempts", 0))
-    last_send = float(align.get("last_reseat_mono_s", 0.0) or 0.0)
-    timeout_s = float(haptic_cfg.get("startup_reseat_timeout_s", 1.0))
-    should_send = attempts == 0 or ((now - last_send) >= timeout_s)
-    if not should_send:
-        return
-
-    _publish_haptic_reseat(
-        pub,
-        producer,
-        team,
-        current_pos_robot_rad=q_robot,
-        current_pos_dial_rad=q_dial,
-    )
-    align["attempts"] = attempts + 1
-    align["last_reseat_mono_s"] = now
-    align["settled_streak"] = 0
-    print(
-        f"[game_controller] startup-align reseat team={team} attempt={align['attempts']} "
-        f"j6_robot={q_robot[5]:.4f} j6_dial={q_dial[5]:.4f} max_err_rad={max_err:.4f}",
-        flush=True,
-    )
-
-
-def _haptic_settled_to_target(
-    state: dict[str, Any], target_dial_rad: list[float], haptic_cfg: dict[str, Any]
-) -> tuple[bool, float]:
-    dial = list(state.get("last_dial") or [0.0] * 6)[:6]
-    conn = list(state.get("last_haptic_connected") or [False] * 6)[:6]
-    while len(dial) < 6:
-        dial.append(0.0)
-    while len(conn) < 6:
-        conn.append(False)
-
-    # Require all six dials connected before declaring startup settled.
-    if not all(bool(v) for v in conn[:6]):
-        return False, float("inf")
-
-    tol = float(haptic_cfg.get("startup_settle_tol_rad", math.radians(10.0)))
-    max_err = 0.0
-    for i in range(6):
-        err = abs(float(dial[i]) - float(target_dial_rad[i]))
-        if err > max_err:
-            max_err = err
-    return max_err <= tol, max_err
 
 
 def _handle_ui_game_control_request(
@@ -1470,24 +831,6 @@ def _maybe_publish_recovery_request(
         )
         bus.publish(pub, f"cmd.robot.recover.{team}", env)
     control_state["recovery_pending_dispatch"] = False
-
-
-def _coerce_float_list(value: Any, fallback: list[float]) -> list[float]:
-    if not isinstance(value, list):
-        return list(fallback)
-    out: list[float] = []
-    for idx, item in enumerate(value[:6]):
-        try:
-            out.append(float(item))
-        except (TypeError, ValueError):
-            out.append(float(fallback[idx]))
-    if len(out) < 6:
-        out.extend(float(v) for v in fallback[len(out) : 6])
-    return out[:6]
-
-
-def _clamp(value: float, lo: float, hi: float) -> float:
-    return lo if value < lo else hi if value > hi else value
 
 
 if __name__ == "__main__":

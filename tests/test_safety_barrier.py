@@ -15,7 +15,15 @@ from core.config import load as load_profile  # noqa: E402
 from subsystems.safety_barrier.common import apply_bypass, resolve_safety_barrier_config  # noqa: E402
 from subsystems.safety_barrier.sim import SimOpenSafetyBarrier  # noqa: E402
 from apps.game_controller import __main__ as game_controller  # noqa: E402
+from apps.game_controller import safety as game_controller_safety  # noqa: E402
 from apps.robot_io import __main__ as robot_io  # noqa: E402
+
+game_controller._initial_safety_state = game_controller_safety._initial_safety_state
+game_controller._refresh_safety_block = game_controller_safety._refresh_safety_block
+game_controller._state_full_safety_barrier = (
+    game_controller_safety._state_full_safety_barrier
+)
+game_controller._update_safety_state = game_controller_safety._update_safety_state
 
 
 LABELS = ["SBarr11", "SBarr12", "SBarr21", "SBarr22", "SBarr31", "SBarr32", "SBarr41", "SBarr42"]

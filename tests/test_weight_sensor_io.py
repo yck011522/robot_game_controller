@@ -14,6 +14,11 @@ from core.config import load as load_profile  # noqa: E402
 from subsystems.weight_sensor.common import BUCKET_CELL_MAP, WeightSensorConfig  # noqa: E402
 from subsystems.weight_sensor.runtime import WeightSensorRuntime  # noqa: E402
 from apps.game_controller import __main__ as game_controller  # noqa: E402
+from apps.game_controller import weight as game_controller_weight  # noqa: E402
+
+game_controller._bucket_values_from_weight = (
+    game_controller_weight._bucket_values_from_weight
+)
 
 
 class _FakeLoadCellBus:

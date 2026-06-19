@@ -11,6 +11,13 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from apps.game_controller import __main__ as gc  # noqa: E402
+from apps.game_controller import haptics as gc_haptics  # noqa: E402
+
+gc._haptic_config = gc_haptics._haptic_config
+gc._publish_hold_current_pose = gc_haptics._publish_hold_current_pose
+gc._update_dynamic_haptic_bounds_from_prox = (
+    gc_haptics._update_dynamic_haptic_bounds_from_prox
+)
 
 
 class _FakePub:
