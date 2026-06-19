@@ -12,9 +12,11 @@ if str(SRC) not in sys.path:
 
 from apps.game_controller import __main__ as gc  # noqa: E402
 from apps.game_controller import haptics as gc_haptics  # noqa: E402
+from apps.game_controller import published_states as gc_published_states  # noqa: E402
 
 gc._haptic_config = gc_haptics._haptic_config
 gc._publish_hold_current_pose = gc_haptics._publish_hold_current_pose
+gc._state_full_planner = gc_published_states._state_full_planner
 gc._update_dynamic_haptic_bounds_from_prox = (
     gc_haptics._update_dynamic_haptic_bounds_from_prox
 )

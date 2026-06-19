@@ -15,10 +15,14 @@ from core.config import load as load_profile  # noqa: E402
 from subsystems.safety_barrier.common import apply_bypass, resolve_safety_barrier_config  # noqa: E402
 from subsystems.safety_barrier.sim import SimOpenSafetyBarrier  # noqa: E402
 from apps.game_controller import __main__ as game_controller  # noqa: E402
+from apps.game_controller import operator_inputs as game_controller_operator_inputs  # noqa: E402
 from apps.game_controller import safety as game_controller_safety  # noqa: E402
 from apps.robot_io import __main__ as robot_io  # noqa: E402
 
 game_controller._initial_safety_state = game_controller_safety._initial_safety_state
+game_controller._handle_operator_input_request = (
+    game_controller_operator_inputs._handle_operator_input_request
+)
 game_controller._refresh_safety_block = game_controller_safety._refresh_safety_block
 game_controller._state_full_safety_barrier = (
     game_controller_safety._state_full_safety_barrier
@@ -83,15 +87,17 @@ def test_game_controller_latches_barrier_pause_until_resume() -> None:
     assert control_state["safety_blocked"] is True
     assert control_state["safety_pause_latched"] is True
 
-    ok, error, _ = game_controller._apply_ui_game_control(
+    reply = game_controller._handle_operator_input_request(
         control_state,
         {"stage": "play"},
         {},
         {"action": "play_resume"},
         time.perf_counter_ns(),
+        producer="test_safety_barrier",
+        recovery_timeout_s=game_controller.RECOVERY_TIMEOUT_S,
     )
-    assert ok is False
-    assert "safety barrier" in str(error)
+    assert reply["ok"] is False
+    assert "safety barrier" in str(reply["error"])
 
     game_controller._update_safety_state(
         safety_state,
@@ -108,15 +114,17 @@ def test_game_controller_latches_barrier_pause_until_resume() -> None:
     assert control_state["safety_blocked"] is False
     assert control_state["soft_pause"] is True
 
-    ok, error, _ = game_controller._apply_ui_game_control(
+    reply = game_controller._handle_operator_input_request(
         control_state,
         {"stage": "play"},
         {},
         {"action": "play_resume"},
         time.perf_counter_ns(),
+        producer="test_safety_barrier",
+        recovery_timeout_s=game_controller.RECOVERY_TIMEOUT_S,
     )
-    assert ok is True
-    assert error is None
+    assert reply["ok"] is True
+    assert reply["error"] is None
     assert control_state["soft_pause"] is False
     assert control_state["safety_pause_latched"] is False
 

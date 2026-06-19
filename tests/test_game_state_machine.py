@@ -25,14 +25,16 @@ if str(SRC) not in sys.path:
 
 from apps.game_controller import __main__ as gc  # noqa: E402
 from apps.game_controller import context as gc_context  # noqa: E402
+from apps.game_controller import operator_inputs as gc_operator_inputs  # noqa: E402
 from apps.game_controller import stages as gc_stages  # noqa: E402
 
 # The stage machine + game-config construction moved out of __main__ into the
 # stages / context modules during the P7 refactor. Re-bind the moved names onto
 # the ``gc`` alias so the existing ``gc.*`` call sites below keep exercising the
-# real (now relocated) functions. ``gc._apply_ui_game_control`` still lives in
-# __main__ and is used directly.
+# real (now relocated) functions. Operator-input handling now lives in its own
+# sibling module and is rebound the same way for the focused tests below.
 gc._game_config = gc_context._game_config
+gc._handle_operator_input_request = gc_operator_inputs._handle_operator_input_request
 gc._enter_stage = gc_stages._enter_stage
 gc._tick_stage_state = gc_stages._tick_stage_state
 gc._stage_countdown_s = gc_stages._stage_countdown_s
@@ -263,36 +265,54 @@ def _control_state() -> dict:
 def test_skip_rejected_outside_play_or_tutorial() -> None:
     teams = _make_teams()
     ss = _enter("idle", teams)
-    ok, err, action = gc._apply_ui_game_control(
-        _control_state(), ss, teams, {"action": "skip"}, now_ns=0
+    reply = gc._handle_operator_input_request(
+        _control_state(),
+        ss,
+        teams,
+        {"action": "skip"},
+        0,
+        producer="test_game_state_machine",
+        recovery_timeout_s=gc.RECOVERY_TIMEOUT_S,
     )
-    assert ok is False
-    assert action == "skip"
+    assert reply["ok"] is False
+    assert reply["result"]["action"] == "skip"
     assert ss["skip_requested"] is False
-    assert "idle" in (err or "")
+    assert "idle" in str(reply["error"] or "")
 
 
 def test_skip_accepted_in_play_and_tutorial() -> None:
     teams = _make_teams()
     for stage in ("play", "tutorial"):
         ss = _enter(stage, teams)
-        ok, err, action = gc._apply_ui_game_control(
-            _control_state(), ss, teams, {"action": "skip"}, now_ns=0
+        reply = gc._handle_operator_input_request(
+            _control_state(),
+            ss,
+            teams,
+            {"action": "skip"},
+            0,
+            producer="test_game_state_machine",
+            recovery_timeout_s=gc.RECOVERY_TIMEOUT_S,
         )
-        assert ok is True, stage
-        assert err is None
-        assert action == "skip"
+        assert reply["ok"] is True, stage
+        assert reply["error"] is None
+        assert reply["result"]["action"] == "skip"
         assert ss["skip_requested"] is True
 
 
 def test_end_game_is_alias_for_skip() -> None:
     teams = _make_teams()
     ss = _enter("play", teams)
-    ok, _err, action = gc._apply_ui_game_control(
-        _control_state(), ss, teams, {"action": "end_game"}, now_ns=0
+    reply = gc._handle_operator_input_request(
+        _control_state(),
+        ss,
+        teams,
+        {"action": "end_game"},
+        0,
+        producer="test_game_state_machine",
+        recovery_timeout_s=gc.RECOVERY_TIMEOUT_S,
     )
-    assert ok is True
-    assert action == "skip"
+    assert reply["ok"] is True
+    assert reply["result"]["action"] == "skip"
     assert ss["skip_requested"] is True
 
 

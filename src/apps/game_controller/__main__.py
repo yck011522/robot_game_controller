@@ -33,7 +33,6 @@ from apps.game_controller.context import (  # noqa: E402
     DEFAULT_BUCKET_VALUES,
 )
 from apps.game_controller.haptics import (  # noqa: E402
-    _coerce_float_list,
     _haptic_config,
     _publish_haptic_command,
     _publish_hold_current_pose,
@@ -43,11 +42,19 @@ from apps.game_controller.haptics import (  # noqa: E402
     _update_dynamic_haptic_bounds_from_prox,
     _update_haptic_state,
 )
+from apps.game_controller.operator_inputs import (  # noqa: E402
+    _drain_operator_input_requests,
+    _handle_operator_input_request,
+    _is_robot_status_recovered,
+    _publish_pending_recovery_requests,
+)
+from apps.game_controller.published_states import (  # noqa: E402
+    _build_state_full_payload,
+    _pause_state_summary,
+)
 from apps.game_controller.safety import (  # noqa: E402
     _initial_safety_state,
     _refresh_safety_block,
-    _safety_pause_reason,
-    _state_full_safety_barrier,
     _update_safety_state,
 )
 from apps.game_controller.stages import (  # noqa: E402
@@ -60,7 +67,6 @@ from apps.game_controller.stages import (  # noqa: E402
 from apps.game_controller.weight import (  # noqa: E402
     _apply_weight_bucket_values,
     _initial_weight_state,
-    _state_full_weight_sensor,
     _team_bucket_labels,
     _update_weight_state,
 )
@@ -71,7 +77,6 @@ from apps.game_controller.weight import (  # noqa: E402
 # 60 Hz gives ~16 ms per tick, which is comfortably above the
 # forward_timeout_ms budget and keeps state.full at a recordable rate.
 TICK_HZ = 60.0
-UI_GAME_CONTROL_TOPIC = "cmd.ui.game_control"
 BUCKET_COMMAND_TOPIC = "cmd.bucket"
 WEIGHT_TARE_TOPIC = "cmd.weight.tare"
 RECOVERY_TIMEOUT_S = 4.0
@@ -101,7 +106,7 @@ def main(argv: list[str] | None = None) -> int:
     ) / 1000.0
     robot_show_poses = _load_robot_show_poses_deg()
     pub = bus.make_pub(proc.ctx)
-    control_rep = bus.make_rep(proc.ctx)
+    operator_input_rep = bus.make_rep(proc.ctx)
     safety_sub = (
         bus.make_sub(proc.ctx, topics=["telem.safety"]) if safety_enabled else None
     )
@@ -295,7 +300,7 @@ def main(argv: list[str] | None = None) -> int:
     def tick(p: Proc) -> None:
         nonlocal state_seq
         # Tick flow summary:
-        # 1) Ingest UI control + safety + latest telem from haptic/robot.
+        # 1) Ingest operator inputs + safety + latest telem from haptic/robot.
         # 2) Publish assistive haptic command (cmd.haptic.<team>) with the
         #    latest computed bounds (stale by <=1 tick in normal play).
         # 3) Plan robot target (collision-aware) and publish
@@ -303,17 +308,24 @@ def main(argv: list[str] | None = None) -> int:
         # 4) Publish one authoritative state.full snapshot for UIs and
         #    downstream process consumers.
         now_ns = time.perf_counter_ns()
-        _drain_ui_game_control_requests(
-            control_rep,
-            on_msg=lambda body: _handle_ui_game_control_request(
+        _drain_operator_input_requests(
+            operator_input_rep,
+            on_msg=lambda body: _handle_operator_input_request(
                 control_state,
                 stage_state,
                 teams,
                 body,
                 time.perf_counter_ns(),
+                producer=p.proc,
+                recovery_timeout_s=RECOVERY_TIMEOUT_S,
             ),
         )
-        _maybe_publish_recovery_request(pub, p.proc, control_state)
+        _publish_pending_recovery_requests(
+            pub,
+            p.proc,
+            control_state,
+            recovery_timeout_s=RECOVERY_TIMEOUT_S,
+        )
 
         if safety_sub is not None:
             _drain_latest(
@@ -481,7 +493,7 @@ def main(argv: list[str] | None = None) -> int:
                 if team in teams
             ]
             recovered = bool(recovery_teams) and all(
-                _robot_status_recovered(teams[team].get("robot_status", {}))
+                _is_robot_status_recovered(teams[team].get("robot_status", {}))
                 for team in recovery_teams
             )
             if recovered:
@@ -495,28 +507,12 @@ def main(argv: list[str] | None = None) -> int:
                     control_state["last_action_ts_mono_ns"] = now_ns
                     soft_paused = False
 
-        # Emit a (very small) state.full snapshot per BUS.md 禮6.1.
-        paused_teams = [
-            team
-            for team, st in teams.items()
-            if bool(st.get("robot_status", {}).get("fault_active", False))
-        ]
-        pause_reason = None
-        for team in paused_teams:
-            reason = teams[team].get("robot_status", {}).get("fault_reason")
-            if isinstance(reason, str) and reason:
-                pause_reason = f"{team}:{reason}"
-                break
-        if bool(control_state.get("recovery_active", False)):
-            pause_reason = "recovery"
-        elif bool(control_state.get("safety_blocked", False)):
-            pause_reason = _safety_pause_reason(safety_state)
-        elif bool(control_state.get("safety_pause_latched", False)):
-            pause_reason = "barrier_ack_required"
-        elif soft_paused:
-            pause_reason = "soft_estop"
-
-        paused = bool(paused_teams) or soft_paused
+        paused, pause_reason = _pause_state_summary(
+            control_state,
+            safety_state,
+            teams,
+            soft_paused=soft_paused,
+        )
 
         if paused != bool(stage_state.get("prev_paused", False)):
             print(
@@ -544,73 +540,18 @@ def main(argv: list[str] | None = None) -> int:
 
         env = bus.make_envelope(p.proc, with_wall=True, seq=state_seq)
         env.update(
-            {
-                "stage": "paused" if paused else stage_state["stage"],
-                "active_stage": stage_state["stage"],
-                "paused": paused,
-                "pause_reason": pause_reason,
-                "soft_estop": soft_paused,
-                "safety": {
-                    "barrier": _state_full_safety_barrier(safety_state),
-                },
-                "weight_sensor": _state_full_weight_sensor(weight_state),
-                "countdown_s": countdown_s,
-                "game_duration_s": game_cfg["duration_s"],
-                "sum_score_rate_unit_per_s": game_cfg["sum_score_rate_unit_per_s"],
-                "stage_entered_mono_ns": stage_state["stage_entered_mono_ns"],
-                "tutorial_entered_wall_ns": None,
-                "teams": {
-                    team: {
-                        "robot": {
-                            "q_target_rad": st["last_target"],
-                            "q_rad": (
-                                st["last_q"] if st["last_q"] is not None else [0.0] * 6
-                            ),
-                            "status": st.get("robot_status", {}),
-                        },
-                        "haptic": {
-                            "dial_pos_rad": st["last_dial"],
-                            "dial_vel_rad_s": st["last_dial_vel"],
-                            "connected": st["last_haptic_connected"],
-                            "board_loop_hz": st["last_haptic_loop_hz"],
-                            "bounds_min_rad": list(
-                                st.get("current_haptic_bounds_min_rad")
-                                or haptic_cfg["bounds_min_rad"]
-                            ),
-                            "bounds_max_rad": list(
-                                st.get("current_haptic_bounds_max_rad")
-                                or haptic_cfg["bounds_max_rad"]
-                            ),
-                        },
-                        "collision": {
-                            "in_collision": st["last_collision"],
-                            "first_hit": st["last_first_hit"],
-                            "path_scalar": st["last_path_scalar"],
-                            "prox_scalar": st["last_prox_scalar"],
-                            "final_scalar": st["last_final_scalar"],
-                            "prox_probe_offsets_deg": st["last_prox_probe_offsets_deg"],
-                            "prox_hits": st["last_prox_hits"],
-                            "prox_age_ticks": st["last_prox_age_ticks"],
-                        },
-                        "planner": _state_full_planner(st.get("last_planner_info")),
-                        "score": st["score"],
-                        "summed_score": st["summed_score"],
-                        "bucket_labels": list(st.get("bucket_labels", [])),
-                        "buckets": list(st["bucket_values"]),
-                        "conclusion": {
-                            "phase": st["conclusion_phase"],
-                            "active_bucket_index": st["conclusion_active_bucket_index"],
-                            "target_pose_name": st["conclusion_target_pose_name"],
-                            "target_pose_deg": st["conclusion_target_pose_deg"],
-                            "bucket_open_triggered": st[
-                                "conclusion_bucket_open_triggered"
-                            ],
-                            "done": st["conclusion_done"],
-                        },
-                    }
-                    for team, st in teams.items()
-                },
-            }
+            _build_state_full_payload(
+                stage_state,
+                safety_state,
+                weight_state,
+                teams,
+                game_cfg,
+                haptic_cfg,
+                paused=paused,
+                pause_reason=pause_reason,
+                soft_paused=soft_paused,
+                countdown_s=countdown_s,
+            )
         )
         bus.publish(pub, "state.full", env)
         state_seq += 1
@@ -624,7 +565,7 @@ def main(argv: list[str] | None = None) -> int:
             safety_sub.close(0)
         if weight_sub is not None:
             weight_sub.close(0)
-        control_rep.close(0)
+        operator_input_rep.close(0)
 
     return proc.run(tick, teardown=teardown)
 
@@ -642,32 +583,6 @@ def _drain_latest(sub: zmq.Socket, *, on_msg) -> None:
         on_msg(last)
 
 
-def _state_full_planner(info: Any) -> dict[str, Any]:
-    """Build the compact planner diagnostics block for state.full traces."""
-
-    data = info if isinstance(info, dict) else {}
-    return {
-        "input_mode": data.get("input_mode"),
-        "forward_certified": data.get("forward_certified"),
-        "v_cmd_rad_s": _coerce_float_list(data.get("v_cmd_rad_s"), [0.0] * 6),
-        "v_out_rad_s": _coerce_float_list(data.get("v_out_rad_s"), [0.0] * 6),
-    }
-
-
-def _drain_ui_game_control_requests(rep: zmq.Socket, *, on_msg) -> None:
-    """Drain pending UI admin requests and reply to each one.
-
-    The GC owns the bind-side REP socket, so every received request must
-    produce exactly one reply before the next request can be received.
-    """
-    while True:
-        try:
-            body = bus.recv_json(rep, flags=zmq.NOBLOCK)
-        except zmq.Again:
-            break
-        bus.send_json(rep, on_msg(body))
-
-
 def _update_actual_state(state: dict[str, Any], body: dict[str, Any]) -> None:
     """Cache the latest measured robot joints and status for one team."""
 
@@ -675,162 +590,6 @@ def _update_actual_state(state: dict[str, Any], body: dict[str, Any]) -> None:
     robot_status = body.get("robot_status")
     if isinstance(robot_status, dict):
         state["robot_status"] = robot_status
-
-
-def _handle_ui_game_control_request(
-    control_state: dict[str, Any],
-    stage_state: dict[str, Any],
-    teams: dict[str, dict],
-    body: dict[str, Any],
-    now_ns: int,
-) -> dict[str, Any]:
-    """Apply one UI request with request-id dedupe and envelope formatting."""
-    request = body if isinstance(body, dict) else {}
-    source = (
-        request.get("source") if isinstance(request.get("source"), str) else "unknown"
-    )
-    request_id = (
-        request.get("request_id")
-        if isinstance(request.get("request_id"), (int, str))
-        else None
-    )
-
-    last_request_id_by_source = control_state.setdefault(
-        "last_request_id_by_source", {}
-    )
-    last_reply_by_source = control_state.setdefault("last_reply_by_source", {})
-    if request_id is not None and last_request_id_by_source.get(source) == request_id:
-        cached = last_reply_by_source.get(source)
-        if isinstance(cached, dict):
-            return dict(cached)
-
-    ok, error, action = _apply_ui_game_control(
-        control_state, stage_state, teams, request, now_ns
-    )
-    reply = bus.make_envelope("game_controller", with_wall=True)
-    reply.update(
-        {
-            "ok": ok,
-            "error": error,
-            "request_id": request_id,
-            "source": source,
-            "result": {
-                "action": action,
-                "soft_estop": bool(control_state.get("soft_pause", False)),
-                "active_stage": stage_state["stage"],
-                "last_action": control_state.get("last_action"),
-            },
-        }
-    )
-    if request_id is not None:
-        last_request_id_by_source[source] = request_id
-        last_reply_by_source[source] = dict(reply)
-    return reply
-
-
-def _apply_ui_game_control(
-    control_state: dict[str, Any],
-    stage_state: dict[str, Any],
-    teams: dict[str, dict],
-    body: dict[str, Any],
-    now_ns: int,
-) -> tuple[bool, str | None, str | None]:
-    """Apply one UI control request and update pause/recovery state."""
-    action = body.get("action") if isinstance(body, dict) else None
-    if not isinstance(action, str):
-        return False, "missing action", None
-    if action == "play_resume":
-        if bool(control_state.get("safety_blocked", False)):
-            control_state["soft_pause"] = True
-            return False, "safety barrier is not clear", action
-        recovery_teams = [
-            team
-            for team, st in teams.items()
-            if _robot_status_needs_recovery(st.get("robot_status", {}))
-        ]
-        if recovery_teams:
-            control_state["soft_pause"] = True
-            control_state["safety_pause_latched"] = False
-            control_state["recovery_active"] = True
-            control_state["recovery_deadline_mono_ns"] = now_ns + int(
-                RECOVERY_TIMEOUT_S * 1e9
-            )
-            control_state["recovery_pending_dispatch"] = True
-            control_state["recovery_request_id"] = (
-                int(control_state.get("recovery_request_id", 0)) + 1
-            )
-            control_state["recovery_teams"] = list(recovery_teams)
-        else:
-            control_state["soft_pause"] = False
-            control_state["safety_pause_latched"] = False
-            control_state["recovery_active"] = False
-            control_state["recovery_pending_dispatch"] = False
-            control_state["recovery_teams"] = []
-    elif action == "soft_estop":
-        control_state["soft_pause"] = True
-        control_state["recovery_active"] = False
-        control_state["recovery_pending_dispatch"] = False
-        control_state["recovery_teams"] = []
-    elif action in ("skip", "end_game"):
-        # SKIP / stop button. Stage-aware: shorten the current timed stage.
-        # play -> set the game timer to zero (flows play -> reset ->
-        # conclusion); tutorial -> jump straight to play. Every other stage
-        # is intentionally not skippable. SKIP does not touch the pause /
-        # e-stop overlay: if paused, the queued skip only fires on resume.
-        stage = stage_state.get("stage")
-        if stage not in ("play", "tutorial"):
-            return False, f"skip not allowed in stage '{stage}'", "skip"
-        stage_state["skip_requested"] = True
-        control_state["last_action"] = "skip"
-        control_state["last_action_ts_mono_ns"] = now_ns
-        print(f"[game_controller] SKIP requested in stage '{stage}'", flush=True)
-        return True, None, "skip"
-    else:
-        return False, f"unsupported action: {action}", action
-    control_state["last_action"] = action
-    control_state["last_action_ts_mono_ns"] = now_ns
-    return True, None, action
-
-
-def _robot_status_needs_recovery(status: dict[str, Any]) -> bool:
-    """Return whether a robot status still needs an explicit recovery request."""
-    if bool(status.get("fault_active", False)):
-        return True
-    if status.get("program_running") is False:
-        return True
-    return not bool(status.get("control_ok", True))
-
-
-def _robot_status_recovered(status: dict[str, Any]) -> bool:
-    """Return whether a robot status is good enough to clear recovery pause."""
-    if bool(status.get("fault_active", False)):
-        return False
-    if not bool(status.get("control_ok", False)):
-        return False
-    return status.get("program_running") is not False
-
-
-def _maybe_publish_recovery_request(
-    pub: zmq.Socket, producer: str, control_state: dict[str, Any]
-) -> None:
-    """Publish one recovery command per requested team, once per resume attempt."""
-    if not bool(control_state.get("recovery_active", False)):
-        return
-    if not bool(control_state.get("recovery_pending_dispatch", False)):
-        return
-
-    request_id = int(control_state.get("recovery_request_id", 0))
-    for team in list(control_state.get("recovery_teams", [])):
-        env = bus.make_envelope(producer)
-        env.update(
-            {
-                "team": team,
-                "request_id": request_id,
-                "timeout_s": RECOVERY_TIMEOUT_S,
-            }
-        )
-        bus.publish(pub, f"cmd.robot.recover.{team}", env)
-    control_state["recovery_pending_dispatch"] = False
 
 
 if __name__ == "__main__":
