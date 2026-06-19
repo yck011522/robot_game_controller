@@ -61,7 +61,10 @@ Each playing team controls one UR-12e robotic arm equipped with a stainless stee
 
 A pre-determined joint configuration will be used when the game starts. During gameplay, the robotic arm is controlled by the six dial controllers controlled by the players. Collision avoidance algorithms are used to avoid the robotic arm from colliding with itself or its environment.
 
-After the game is finished, the robots will be reset to the starting position via a collision-free motion planned in real-time.
+After the game is finished, each robot retraces the collision-certified joint
+targets recorded during gameplay in reverse. The rewind is retimed from path
+geometry and configured robot velocity limits; it does not reuse gameplay
+timing or perform collision checks during reset.
 
 ### **Ball Types**
 
@@ -195,9 +198,25 @@ The game can be paused at any time by the E-stop (software E-stop, the hardwired
 **Purpose:** Bring the robots from wherever they ended up back to a **known starting position** *before* scoring is counted. Scoring (Conclusion) relies on the robot starting from this known pose.
 **Actions:**
 
-- Each robot drives back to its initial/known position via a collision-free motion.
+- During Game On, the measured entry pose and every certified robot joint
+  target are stored in an in-memory COMPAS FAB `JointTrajectory` together with
+  gameplay-relative timestamps.
+- Reset creates a second reversed `JointTrajectory`. Its timing is generated
+  only from joint-space geometry and a configured fraction of each robot's
+  maximum joint velocity (30% in the initial hardware test profile).
+- The rewind controller supplies robot targets to the game controller without
+  running collision or proximity checks. Existing joint limits, pause/fault
+  handling, and any configured safety interlocks remain in the command path.
+- Haptic input does not control the robot during rewind. The haptic controllers
+  continue tracking measured robot joint positions so players can feel and see
+  the robot returning.
+- Acceleration/deceleration retiming is intentionally deferred until the first
+  end-to-end hardware workflow is validated.
 
-**Exit:** When **all active robots** have arrived at the known start position, advance to **Conclusion**.
+**Exit:** When **all active robots** are measured within the configured joint
+tolerance of their recorded Game On entry poses (0.5 degrees in the initial
+test profile), advance to **Conclusion**. Profiles with rewind disabled retain
+the legacy reset timer.
 
 ------
 

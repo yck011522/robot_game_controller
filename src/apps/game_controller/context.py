@@ -127,6 +127,21 @@ def _game_config(node: Any) -> dict[str, Any]:
         # start", until the real return-to-start motion + arrived signal
         # exist. Tune higher than the slowest expected homing move.
         "reset_duration_s": _coerce_positive_float(data.get("reset_duration_s"), 3.0),
+        # rewind_enabled: record certified play targets and retrace them during
+        # reset. False preserves the placeholder reset timer for other profiles.
+        "rewind_enabled": bool(data.get("rewind_enabled", False)),
+        # rewind_speed_fraction: fraction of configured per-joint maximum
+        # velocity used for geometry-only rewind retiming. Acceleration
+        # retiming is intentionally deferred until the hardware workflow works.
+        "rewind_speed_fraction": min(
+            1.0,
+            _coerce_positive_float(data.get("rewind_speed_fraction"), 0.3),
+        ),
+        # rewind_arrival_tolerance_deg: every measured joint must be within
+        # this absolute error of the play-entry pose before reset completes.
+        "rewind_arrival_tolerance_deg": _coerce_positive_float(
+            data.get("rewind_arrival_tolerance_deg"), 0.5
+        ),
         # idle_timeout_s: idle -> daydreaming if no significant dial movement
         # for this long (seconds).
         "idle_timeout_s": _coerce_positive_float(data.get("idle_timeout_s"), 60.0),
