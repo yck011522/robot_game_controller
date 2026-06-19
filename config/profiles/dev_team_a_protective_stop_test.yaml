@@ -1,0 +1,116 @@
+# Team A hardware workflow for diagnosing protective-stop recovery delay.
+# Derived from dev_team_a_state_machine: real haptic dials, real UR10e,
+# collision-certified gameplay, and no bucket or weight hardware dependency.
+#
+# Run from the repository root:
+#   $env:PYTHONPATH = "src"
+#   & C:\Users\yck01\miniconda3\envs\game\python.exe -m apps.launcher --profile config\profiles\dev_team_a_protective_stop_test.yaml
+
+profile_name: dev_team_a_protective_stop_test
+description: "Team A real haptic/robot, protective-stop recovery diagnostics"
+
+active_teams: [a]
+
+diagnostics:
+  bus_trace_enabled: true       # Start the passive trace before the bus broker.
+  bus_trace_output: logs/trace/bus_trace_latest.jsonl # Overwritten each launch.
+
+subsystems:
+  haptic_io:
+    a: real
+    b: null
+  robot_io:
+    a: real_rtde
+    b: null
+  jogging_planner:
+    a: in_process
+    b: null
+  weight_sensor_io: null       # Excluded so rewind testing needs no scales.
+  light_column_1_3: null
+  light_column_4_5: null
+  light_column_6_8: null
+  display_broadcaster: null
+  scoreboard_broadcaster: null
+  bucket_controller: null      # Excluded so rewind testing needs no buckets.
+  button_controller: null
+  safety_barrier_controller: null
+  collision_workers:
+    count: 8                   # Workers certify every gameplay target only.
+  collision_broker: null
+  event_recorder: null
+  gamemaster_ui: null
+  bus_broker:
+    impl: real
+
+tuning:
+  haptic:
+    gear_ratio: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+    bounds_deg_min: [-180, -180, -180, -180, -180, -180]
+    bounds_deg_max: [180, 180, 180, 180, 180, 180]
+    bounds_kp: 20.0             # Static wall stiffness outside configured bounds.
+    tracking_kp: 10.0           # Spring pulling each dial toward measured robot q.
+    tracking_kd: 0.1            # Tracking damping; raise if dials oscillate.
+    tracking_max_torque: 5.0    # Maximum tracking torque sent by the firmware.
+    oob_kick:
+      enabled: true             # Retain out-of-bounds corrective pulses.
+      amplitude: 2.0            # Corrective-pulse torque in firmware units.
+      pulse_interval_ms: 40     # Delay between corrective pulses.
+    telemetry_interval_ms: 10   # Dial telemetry interval used by game_controller.
+    input_mode: absolute        # Dial angle maps to an absolute robot joint target.
+
+  robot:
+    q_limits_min_deg: [-180, -180, -180, -180, -180, -180]
+    q_limits_max_deg: [180, 180, 180, 180, 180, 180]
+    # Rewind uses 30% of these per-axis limits. Tune the fraction under game,
+    # rather than reducing the normal gameplay limits here.
+    max_velocity_deg_s: [15, 20, 30, 40, 50, 50]
+    # Gameplay uses these limits. Rewind acceleration retiming is a later TODO.
+    max_acceleration_deg_s2: [45, 95, 95, 115, 115, 115]
+    headless: false
+    initial_pose_deg: [0.0, -90.0, 90.0, 0.0, 0.0, 0.0]
+
+  collision:
+    check_self: true
+    check_world: true
+    timeout_ms: 60
+    retries: 2
+    bundle_size: 1
+
+  jogging:
+    n_forward_steps: 16
+    forward_step_deg: 1.0
+    path_cutoff_deg: 3.0
+    forward_bundle_size: 1
+    probe_half_deg: 10
+    prox_floor: 0.6
+    forward_timeout_ms: 40
+
+  safety_barrier:
+    bypass_channels:
+      SBarr11: false
+      SBarr12: false
+      SBarr21: false
+      SBarr22: false
+      SBarr31: false
+      SBarr32: false
+      SBarr41: false
+      SBarr42: false
+
+  game:
+    duration_s: 300                  # Five-minute window for stop/recovery tests.
+    sum_score_rate_unit_per_s: 100
+    sim_bucket_values:
+      a: [120, 80, 40]
+    start_stage: tutorial            # Allow haptic alignment before recording.
+    tutorial_duration_s: 2           # Enter play two seconds after tutorial starts.
+    reset_duration_s: 3.0            # Used only if rewind_enabled becomes false.
+    rewind_enabled: false            # Isolate recovery behavior from rewind.
+    rewind_speed_fraction: 0.60      # 30% of each max_velocity_deg_s value.
+    rewind_arrival_tolerance_deg: 0.5 # All six measured joints must pass this.
+    idle_timeout_s: 60
+    daydream_to_idle_dial_deg: 30
+    idle_to_tutorial_dial_deg: 360
+    movement_arm_quiet_deg: 2.0
+    movement_arm_quiet_ticks: 45
+    tutorial_scroll_max_deg: 3600
+    tutorial_detents_deg: [0, 1200, 2400, 3600]

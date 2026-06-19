@@ -281,6 +281,51 @@ def _spawn(proc_name: str, profile_path: Path, *,
     return child
 
 
+def _spawn_bus_trace_recorder(profile: Profile) -> subprocess.Popen:
+    """Spawn the optional passive diagnostic recorder before runtime tiers.
+
+    The recorder connects before the broker exists and ZMQ reconnects it when
+    the broker binds. Because it is inserted first in ``children``, reverse
+    shutdown order terminates it last, after every message producer.
+    """
+
+    diagnostics = profile.raw.get("diagnostics")
+    config = diagnostics if isinstance(diagnostics, dict) else {}
+    output = str(
+        config.get("bus_trace_output", "logs/trace/bus_trace_latest.jsonl")
+    )
+    argv = [
+        sys.executable,
+        str(REPO_ROOT / "tools" / "bus_trace_recorder.py"),
+        "--output",
+        output,
+    ]
+    for team in profile.active_teams:
+        argv.extend(["--team", team])
+
+    env = os.environ.copy()
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = str(_SRC) + (os.pathsep + existing if existing else "")
+    popen_kwargs: dict[str, object] = {"cwd": str(REPO_ROOT), "env": env}
+    if os.name == "nt":
+        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
+
+    print(f"[launcher] spawn bus_trace_recorder: {' '.join(argv)}", flush=True)
+    child = subprocess.Popen(argv, **popen_kwargs)  # type: ignore[arg-type]
+    process_job = _ensure_process_job()
+    if process_job is not None:
+        try:
+            process_job.assign(child)
+        except OSError as exc:
+            print(
+                f"[launcher] warning: could not add bus_trace_recorder to "
+                f"Windows job object: {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
+    return child
+
+
 def _terminate(child: subprocess.Popen, name: str, grace_s: float = 3.0) -> None:
     """Ask a child to stop, then kill if it doesn't.
 
@@ -354,6 +399,12 @@ def main(argv: list[str] | None = None) -> int:
 
     exit_code = 0
     try:
+        # ---- diagnostics: starts before every runtime process ------------
+        diagnostics = profile.raw.get("diagnostics")
+        diagnostics = diagnostics if isinstance(diagnostics, dict) else {}
+        if bool(diagnostics.get("bus_trace_enabled", False)):
+            children["bus_trace_recorder"] = _spawn_bus_trace_recorder(profile)
+
         # ---- tier 1: bus broker ----------------------------------------
         if profile.is_enabled("bus_broker"):
             children["bus_broker"] = _spawn("bus_broker", profile_path,

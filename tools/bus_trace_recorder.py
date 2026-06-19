@@ -1,4 +1,10 @@
-"""Write selected live bus messages to a timestamped JSONL trace file.
+"""Write selected live bus messages to one overwriteable JSONL trace file.
+
+Typical manual runs:
+
+    python tools/bus_trace_recorder.py --team a
+    python tools/bus_trace_recorder.py --team a --duration-s 120
+    python tools/bus_trace_recorder.py --topic state.full --topic cmd.robot.target.a
 
 This is a short-term diagnostic tool for dense validation captures. It is
 not the full EventRecorder described in docs/architecture/LOGGING.md; it
@@ -10,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import signal
 import sys
 import time
 from pathlib import Path
@@ -34,25 +41,52 @@ DEFAULT_TOPICS = (
     "telem.robot.actual.b",
     "heartbeat.",
 )
+DEFAULT_OUTPUT_PATH = REPO_ROOT / "logs" / "trace" / "bus_trace_latest.jsonl"
 
 
 def main(argv: list[str] | None = None) -> int:
     """Record selected bus topics to JSONL until interrupted."""
 
     args = _parse_args(argv)
-    topics = tuple(args.topic) if args.topic else DEFAULT_TOPICS
+    topics = _resolve_topics(args.topic, args.team)
     out_path = _resolve_output_path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     ctx = zmq.Context.instance()
     sub = bus.make_sub(ctx, topics=topics)
+    poller = zmq.Poller()
+    poller.register(sub, zmq.POLLIN)
     count = 0
+    stop = {"requested": False}
+    deadline_s = (
+        time.perf_counter() + float(args.duration_s)
+        if float(args.duration_s) > 0.0
+        else None
+    )
+
+    def _request_stop(*_: object) -> None:
+        """Ask the blocking recorder loop to finish and close its file."""
+
+        stop["requested"] = True
+
+    signal.signal(signal.SIGINT, _request_stop)
+    signal.signal(signal.SIGTERM, _request_stop)
+    if hasattr(signal, "SIGBREAK"):
+        signal.signal(signal.SIGBREAK, _request_stop)  # type: ignore[attr-defined]
+
     next_status_s = time.perf_counter() + 5.0
     print(f"[bus_trace] writing {out_path}", flush=True)
     print(f"[bus_trace] topics: {', '.join(topics)}", flush=True)
     try:
-        with out_path.open("a", encoding="utf-8") as fh:
-            while True:
+        # Diagnostic captures intentionally replace the previous run. Keeping
+        # one stable path makes collection and later automation predictable.
+        with out_path.open("w", encoding="utf-8") as fh:
+            while not stop["requested"]:
+                if deadline_s is not None and time.perf_counter() >= deadline_s:
+                    break
+                events = dict(poller.poll(200))
+                if sub not in events:
+                    continue
                 topic, body = bus.recv(sub)
                 row = {
                     "ts_recv_wall_ns": time.time_ns(),
@@ -69,11 +103,12 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"[bus_trace] recorded {count} messages", flush=True)
                     next_status_s = now_s + 5.0
     except KeyboardInterrupt:
-        print(f"\n[bus_trace] stopped after {count} messages", flush=True)
-        return 0
+        stop["requested"] = True
     finally:
+        print(f"[bus_trace] stopped after {count} messages", flush=True)
         sub.close(0)
         ctx.destroy(linger=0)
+    return 0
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -83,7 +118,20 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--output",
         default=None,
-        help="Output JSONL path. Defaults to logs/trace/bus_trace_<wall-time>.jsonl.",
+        help="Output JSONL path. Defaults to logs/trace/bus_trace_latest.jsonl.",
+    )
+    parser.add_argument(
+        "--team",
+        action="append",
+        choices=("a", "b"),
+        default=[],
+        help="Record the standard control topics for this team. Repeatable.",
+    )
+    parser.add_argument(
+        "--duration-s",
+        type=float,
+        default=0.0,
+        help="Stop after this many seconds; zero records until launcher shutdown.",
     )
     parser.add_argument(
         "--topic",
@@ -104,12 +152,33 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
 
 
 def _resolve_output_path(value: str | None) -> Path:
-    """Return the requested path or a timestamped default trace path."""
+    """Return the requested path or the stable latest-trace path."""
 
     if value:
         return Path(value).resolve()
-    stamp = time.strftime("%Y%m%d_%H%M%S")
-    return REPO_ROOT / "logs" / "trace" / f"bus_trace_{stamp}.jsonl"
+    return DEFAULT_OUTPUT_PATH
+
+
+def _resolve_topics(topics: list[str], teams: list[str]) -> tuple[str, ...]:
+    """Build explicit or per-team diagnostic topic subscriptions."""
+
+    if topics:
+        return tuple(str(topic) for topic in topics)
+    if not teams:
+        return DEFAULT_TOPICS
+    resolved = ["state.full", "heartbeat."]
+    for team in teams:
+        resolved.extend(
+            [
+                f"telem.haptic.{team}",
+                f"cmd.haptic.{team}",
+                f"cmd.haptic.reseat.{team}",
+                f"cmd.robot.target.{team}",
+                f"cmd.robot.recover.{team}",
+                f"telem.robot.actual.{team}",
+            ]
+        )
+    return tuple(resolved)
 
 
 if __name__ == "__main__":

@@ -97,6 +97,16 @@ def main(argv: list[str] | None = None) -> int:
         "ok": True if not safety_enabled else None,
         "last_state_recv_mono_s": None,
     }
+    # Passive diagnostics for pause/recovery backlog investigations. These
+    # counters do not alter latest-wins command handling.
+    command_queue_state = {
+        "last_drain_count": 0,
+        "max_drain_count": 0,
+        "total_received": 0,
+        "last_drain_ms": 0.0,
+        "max_drain_ms": 0.0,
+        "last_target_rad": None,
+    }
 
     def tick(p: Proc) -> None:
         nonlocal next_telem, seq
@@ -104,13 +114,18 @@ def main(argv: list[str] | None = None) -> int:
         latest_q = None
         latest_clamps = None
         latest_recover_timeout_s = None
+        command_queue_state["last_drain_count"] = 0
+        command_queue_state["last_drain_ms"] = 0.0
         events = dict(poller.poll(1))
         if state_sub in events:
             _drain_latest(state_sub, on_msg=lambda body: _update_barrier_state(latest_barrier_state, body))
         if sub in events:
+            drain_started_s = time.perf_counter()
+            drain_count = 0
             while True:
                 try:
                     _, body = bus.recv(sub, flags=zmq.NOBLOCK)
+                    drain_count += 1
                     q = body.get("q_target_rad")
                     if isinstance(q, list):
                         latest_q = q
@@ -119,6 +134,20 @@ def main(argv: list[str] | None = None) -> int:
                         latest_clamps = c
                 except zmq.Again:
                     break
+            drain_ms = (time.perf_counter() - drain_started_s) * 1000.0
+            command_queue_state["last_drain_count"] = drain_count
+            command_queue_state["max_drain_count"] = max(
+                int(command_queue_state["max_drain_count"]), drain_count
+            )
+            command_queue_state["total_received"] = (
+                int(command_queue_state["total_received"]) + drain_count
+            )
+            command_queue_state["last_drain_ms"] = drain_ms
+            command_queue_state["max_drain_ms"] = max(
+                float(command_queue_state["max_drain_ms"]), drain_ms
+            )
+            if latest_q is not None:
+                command_queue_state["last_target_rad"] = list(latest_q[:6])
         if recover_sub in events:
             while True:
                 try:
@@ -163,6 +192,14 @@ def main(argv: list[str] | None = None) -> int:
                 "qd_rad_s": qd,
                 "rtde_ok": bool(getattr(impl, "rtde_ok", True)),
                 "robot_status": robot_status,
+                "command_queue": {
+                    "last_drain_count": int(command_queue_state["last_drain_count"]),
+                    "max_drain_count": int(command_queue_state["max_drain_count"]),
+                    "total_received": int(command_queue_state["total_received"]),
+                    "last_drain_ms": float(command_queue_state["last_drain_ms"]),
+                    "max_drain_ms": float(command_queue_state["max_drain_ms"]),
+                    "last_target_rad": command_queue_state["last_target_rad"],
+                },
             })
             bus.publish(pub, telem_topic, env)
             seq += 1
