@@ -1,9 +1,0 @@
-[bench] profile=dev_keyboard (C:\Users\yck01\GitHub\robot_game_controller\config\profiles\dev_keyboard.yaml)
-[bench] workload: robots=2 forward_steps=12 probe_half_deg=10
-[bench] sweep: workers=[4, 8, 12, 14, 16] bundle_sizes=[1, 2, 4]
-[bench] note: each frame uses forward_steps + 2*probe_half_deg configs per robot
-[bench] output: benchmark_collision_workers_20260604_163332.csv / benchmark_collision_workers_20260604_163332.json / benchmark_collision_workers_20260604_163332.svg
-
-[bus_broker] [bus_broker] bus broker up: XSUB tcp://127.0.0.1:5550  XPUB tcp://127.0.0.1:5551
-[collision_broker] [collision_broker] ready: ROUTER tcp://127.0.0.1:5560 <-> DEALER tcp://127.0.0.1:5561
-[bench] running workers=4 bundle_size=1 ...
