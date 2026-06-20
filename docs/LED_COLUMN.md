@@ -104,6 +104,7 @@ This enables:
 - Type: WS2811 (12V)
 - Length: ~1.0 m per strip
 - Addressable units: **28 segments per strip**
+- Controller payload byte order: **Red, Green, Blue (RGB)**
 - The 12V WS2811 strips group LEDs in sets of 3.
 
 ---
@@ -156,10 +157,19 @@ Even though labeled differently:
 
 ---
 
-### RS485 Communication Buses (Dual-Bus Architecture)
+### RS485 Communication Buses (Three-Bus Architecture)
 
-The 8 controllers are split across **two RS485 buses** for improved throughput.
+The 8 controllers are split across **three RS485 buses** for improved throughput.
 Each bus is served by its own USB-to-RS485 adapter on the control PC.
+
+The older two-bus sketch below is retained only as historical wiring context.
+The active installation mapping is:
+
+| Configured port | Controller addresses |
+|-----------------|----------------------|
+| COM45 | 1, 2, 3 |
+| COM39 | 4, 5 |
+| COM42 | 6, 7, 8 |
 
 ```
 Control PC
@@ -176,8 +186,10 @@ Control PC
     └── Controller 8
 ```
 
-> The exact grouping is flexible.  The software auto-discovers which
-> controllers are on which bus by probing device addresses on each port.
+The authoritative fixed grouping is stored in
+`config/device_ports_and_addr.yaml`. The standalone panel trusts this mapping,
+opens each port in transmit-only mode, and does not probe or read controllers.
+Legacy auto-discovery remains available for separate diagnostics.
 
 #### Auto-Discovery
 
@@ -306,7 +318,7 @@ Key fields:
 | Port          | 01 / 02        | Channel selection               |
 | Function      | 99             | Display color data              |
 | LED Type      | 02             | WS2811 (confirmed from tool)    |
-| Length        | 00 54          | 84 bytes (28 LEDs × 3 RGB)      |
+| Length        | 00 54          | 84 bytes (28 LEDs x 3 RGB)      |
 | Tail          | AA BB          | Fixed end bytes                 |
 
 ---

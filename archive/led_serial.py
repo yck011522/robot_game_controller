@@ -5,7 +5,7 @@ Handles:
   - Command generation for the LED protocol
   - LEDStrip abstraction: logical strips (11, 12, 21, ..., 82) mapped to physical
     controllers and channels
-  - Individual LED control per strip (0-27 LEDs, each with RGB)
+  - Individual LED control per strip (0-27 LEDs, logical RGB colors)
 
 The 8 physical controllers are arranged around the arena with 2 strips each (16 total).
 Logical strip IDs follow column + position: e.g., strip 11 = column 1, strip 1;
@@ -25,7 +25,7 @@ Protocol: RS485 using the baudrate configured in `config/device_ports_and_addr.y
 Command format (WS2811/12V LED strips):
   [Header: DD 55 EE] [Group: 00 00] [Device: 00 XX] [Port: 01/02] [Function: 99]
   [LED Type: 02] [Reserved: 00 00] [Length: 00 54] [Repeat: 00 01]
-  [Color Data: 28 LEDs × 3 bytes (RGB)] [Tail: AA BB]
+  [Color Data: 28 LEDs x 3 bytes (RGB wire order)] [Tail: AA BB]
 """
 
 import time
@@ -57,7 +57,7 @@ _FUNCTION_DISPLAY = 0x99
 _FUNCTION_QUERY_DEVICE_ADDR = 0x94
 _LED_TYPE_WS2811 = 0x02
 _LED_TYPE_RESERVED = bytes([0x00, 0x00])
-_LED_LENGTH = 0x54  # 84 bytes = 28 LEDs × 3 RGB
+_LED_LENGTH = 0x54  # 84 bytes = 28 LEDs x 3 RGB wire bytes
 _LED_REPEAT = bytes([0x00, 0x01])
 _LEDS_PER_STRIP = 28
 _SERIAL_SETTINGS_KEY = "light_columns"  # config key that owns LED RS485 transport settings
@@ -147,7 +147,7 @@ class Color:
         self.b = max(0, min(255, self.b))
 
     def to_bytes(self) -> bytes:
-        """Serialize to RGB bytes."""
+        """Serialize logical RGB components in controller RGB wire order."""
         return bytes([self.r, self.g, self.b])
 
     @staticmethod
@@ -525,15 +525,17 @@ class _BusConnection:
         baudrate: int,
         inter_command_delay_s: float,
         debug_hex: bool,
+        discard_incoming: bool = False,
     ):
         self.port = port
         self.conn = RS485Connection(port, baudrate)
         self._inter_command_delay_s = inter_command_delay_s
         self._debug_hex = debug_hex
+        self._discard_incoming = bool(discard_incoming)
         self._command_queue: deque[bytes] = deque()
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
-        self._queue_lock = threading.Lock()
+        self._queue_condition = threading.Condition()
         self._bus_lock = threading.Lock()  # atomic bus access (probe vs sender)
         self.discovered_controllers: set = set()
 
@@ -554,13 +556,18 @@ class _BusConnection:
     def stop(self) -> None:
         """Stop sender thread and close serial port."""
         self._stop_event.set()
+        with self._queue_condition:
+            self._queue_condition.notify_all()
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=2.0)
         self.conn.close()
 
     def queue_command(self, cmd: bytes) -> None:
-        with self._queue_lock:
+        """Enqueue one frame and immediately wake this bus's sender thread."""
+
+        with self._queue_condition:
             self._command_queue.append(cmd)
+            self._queue_condition.notify()
 
     @property
     def is_open(self) -> bool:
@@ -600,16 +607,14 @@ class _BusConnection:
         return False
 
     def _sender_loop(self) -> None:
-        interval = 1.0 / 50
         while not self._stop_event.is_set():
-            cmd = None
-            with self._queue_lock:
-                if self._command_queue:
-                    cmd = self._command_queue.popleft()
-
-            if cmd is None:
-                self._stop_event.wait(interval)
-                continue
+            with self._queue_condition:
+                self._queue_condition.wait_for(
+                    lambda: bool(self._command_queue) or self._stop_event.is_set()
+                )
+                if self._stop_event.is_set():
+                    break
+                cmd = self._command_queue.popleft()
 
             if self._debug_hex:
                 logger.info(
@@ -618,6 +623,8 @@ class _BusConnection:
                 )
 
             with self._bus_lock:
+                if self._discard_incoming:
+                    self.conn.flush_input()
                 self.conn.send(cmd)
 
             if self._inter_command_delay_s > 0:
@@ -651,6 +658,8 @@ class LEDSystem:
         debug_hex: bool = False,
         auto_discover: bool = True,
         exclude_ports: Optional[set] = None,
+        controller_addresses_by_port: Optional[Dict[str, List[int]]] = None,
+        trust_configured_routes: bool = False,
     ):
         """
         Args:
@@ -664,6 +673,12 @@ class LEDSystem:
                            RS485 adapters and probes LED controllers.
             exclude_ports: COM port names to skip during auto-discovery
                            (e.g. ports claimed by the haptic system).
+            controller_addresses_by_port: Expected controller addresses for
+                each explicit port. Startup probes only these address/port
+                pairs instead of every address on every configured port.
+            trust_configured_routes: Open explicit ports and route configured
+                addresses without sending probes or reading replies. Incoming
+                bytes are discarded before every display command.
         """
         if baudrate is not None:
             raise ValueError("LEDSystem baudrate must be configured in config/device_ports_and_addr.yaml")
@@ -677,6 +692,11 @@ class LEDSystem:
         self._debug_hex = debug_hex
         self._auto_discover = auto_discover
         self._exclude_ports = set(exclude_ports) if exclude_ports else set()
+        self._controller_addresses_by_port = {
+            str(port): [int(address) for address in addresses]
+            for port, addresses in (controller_addresses_by_port or {}).items()
+        }
+        self._trust_configured_routes = bool(trust_configured_routes)
 
         if 0 < self._inter_command_delay_s < _RECOMMENDED_MIN_INTER_COMMAND_S:
             logger.warning(
@@ -719,11 +739,23 @@ class LEDSystem:
         self._stop_event.clear()
         success = False
 
-        # 1. Connect to explicitly provided ports (full probe)
+        # 1. Connect to explicitly provided ports. Fixed installation mode
+        # trusts configured routes and performs no device reads or probes.
         for port in self._initial_ports:
-            if self._open_and_probe_port(
-                port, range(1, _MAX_CONTROLLER_ADDR + 1), _PROBE_TIMEOUT_S,
-            ):
+            configured_addresses = self._controller_addresses_by_port.get(port)
+            if self._trust_configured_routes:
+                if not configured_addresses:
+                    logger.error("Fixed LED route has no configured addresses: %s", port)
+                    continue
+                connected = self._open_fixed_port(port, configured_addresses)
+            else:
+                addresses = configured_addresses or list(
+                    range(1, _MAX_CONTROLLER_ADDR + 1)
+                )
+                connected = self._open_and_probe_port(
+                    port, addresses, _PROBE_TIMEOUT_S
+                )
+            if connected:
                 success = True
 
         # 2. Start background discovery
@@ -752,7 +784,7 @@ class LEDSystem:
         if not success:
             logger.warning(
                 "No LED RS485 buses found. "
-                "LED commands will be silently discarded."
+                "LED commands will be reported and dropped."
             )
 
         return success
@@ -825,13 +857,59 @@ class LEDSystem:
     def _queue_strip_command(self, strip_id: int) -> None:
         """Route a command to the correct bus based on discovered mapping."""
         cmd = self.strips[strip_id].get_command()
+        controller_addr, channel = _STRIP_TO_CONTROLLER[strip_id]
         with self._lock:
             port = self._strip_to_port.get(strip_id)
             if port and port in self._buses:
+                if self._debug_hex:
+                    logger.info(
+                        "LED route queued: strip=%d controller=%d channel=%d port=%s",
+                        strip_id,
+                        controller_addr,
+                        channel,
+                        port,
+                    )
                 self._buses[port].queue_command(cmd)
-            # else: strip not yet discovered on any bus — silently discard
+                return
+            # Missing routes are reported below so wiring/probe failures are visible.
 
     # ─── Internal: bus management ─────────────────────────────────────────
+
+        logger.warning(
+            "LED route unresolved; command dropped: strip=%d controller=%d "
+            "channel=%d discovered_mapping=%s",
+            strip_id,
+            controller_addr,
+            channel,
+            self.get_discovered_mapping(),
+        )
+
+    def _open_fixed_port(self, port: str, addresses: List[int]) -> bool:
+        """Open one transmit-only bus and trust its configured addresses."""
+
+        bus = _BusConnection(
+            port,
+            self._baudrate,
+            self._inter_command_delay_s,
+            self._debug_hex,
+            discard_incoming=True,
+        )
+        if not bus.open():
+            logger.error("Failed to open fixed LED bus %s", port)
+            return False
+        bus.conn.flush_input()
+        bus.discovered_controllers = {int(address) for address in addresses}
+        bus.start_sender()
+        with self._lock:
+            self._buses[port] = bus
+            for address in addresses:
+                self._register_controller(int(address), port)
+        logger.info(
+            "Fixed transmit-only LED bus %s routes controllers %s",
+            port,
+            sorted(bus.discovered_controllers),
+        )
+        return True
 
     def _open_and_probe_port(
         self,

@@ -6,6 +6,8 @@ for state publication, while the caller owns the actual bus envelope/publish.
 
 from __future__ import annotations
 
+import math
+
 from typing import Any
 
 from apps.game_controller.haptics import _coerce_float_list
@@ -139,6 +141,12 @@ def _team_state_full_payload(
         },
         "haptic": {
             "dial_pos_rad": team_state["last_dial"],
+            # Per-controller dial angle in degrees (A1-A6). Single source of
+            # truth for both the dashboard and the light columns so they never
+            # disagree on a unit conversion.
+            "dial_deg": [
+                math.degrees(float(v)) for v in (team_state["last_dial"] or [])
+            ],
             "dial_vel_rad_s": team_state["last_dial_vel"],
             "connected": team_state["last_haptic_connected"],
             "board_loop_hz": team_state["last_haptic_loop_hz"],

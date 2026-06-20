@@ -20,7 +20,7 @@ PER_TEAM_SUBSYSTEMS = ("haptic_io", "robot_io", "jogging_planner")
 
 GLOBAL_SUBSYSTEMS = (
     "weight_sensor_io",
-    "light_column_1_3", "light_column_4_5", "light_column_6_8",
+    "light_column",
     "display_broadcaster", "scoreboard_broadcaster",
     "bucket_controller", "button_controller",
     # TODO(buttons): physical admin buttons are deferred until the later

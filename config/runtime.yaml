@@ -38,6 +38,11 @@ subsystems:
     fps_min: 3.0
     heartbeat_age_max: 1100
 
+  light_column:
+    fps_target: 200.0
+    fps_min: 80.0
+    heartbeat_age_max: 1100
+
   safety_barrier_controller:
     fps_target: 18.0
     fps_min: 5.0

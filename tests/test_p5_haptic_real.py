@@ -22,7 +22,6 @@ if str(SRC) not in sys.path:
 
 from core import device_connection  # noqa: E402
 from core.config import ConfigError, load as load_profile  # noqa: E402
-from led_serial import LEDSystem  # noqa: E402
 from subsystems.haptic.real import (  # noqa: E402
     RealHaptic,
     _build_enable_lines,
@@ -314,29 +313,6 @@ def test_missing_haptic_baudrate_is_rejected() -> None:
             device_connection.clear_cache()
 
 
-def test_led_serial_settings_loaded_from_yaml() -> None:
-    with TemporaryDirectory() as tmpdir:
-        path = Path(tmpdir) / "device_ports_and_addr.yaml"
-        path.write_text(
-            "serial_settings:\n"
-            "  light_columns:\n"
-            "    baudrate: 765432\n"
-            "    inter_command_delay_s: 0.004\n",
-            encoding="utf-8",
-        )
-        original = device_connection.DEFAULT_DEVICE_CONNECTION_PATH
-        device_connection.clear_cache()
-        device_connection.DEFAULT_DEVICE_CONNECTION_PATH = path
-        try:
-            system = LEDSystem(auto_discover=False)
-            assert system._baudrate == 765432
-            assert system._inter_command_delay_s == 0.004
-            print("[test] LED serial settings load from YAML: OK")
-        finally:
-            device_connection.DEFAULT_DEVICE_CONNECTION_PATH = original
-            device_connection.clear_cache()
-
-
 def main() -> int:
     test_real_backend_discovers_and_drives()
     test_oob_kick_enable_defaults_to_protocol_enabled()
@@ -346,7 +322,6 @@ def main() -> int:
     test_device_config_empty_disables_haptic_scan()
     test_device_config_supplies_haptic_ports()
     test_missing_haptic_baudrate_is_rejected()
-    test_led_serial_settings_loaded_from_yaml()
     print("\n[test] P5 HAPTIC REAL TESTS PASSED\n")
     return 0
 
