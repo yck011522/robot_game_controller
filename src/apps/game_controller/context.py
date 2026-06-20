@@ -223,19 +223,30 @@ def _game_config(node: Any) -> dict[str, Any]:
         "tutorial_detents_pct": _coerce_tutorial_detents_pct(
             data.get("tutorial_detents_pct")
         ),
-        # movement_arm_quiet_deg / movement_arm_quiet_ticks: gate before
-        # movement detection is "armed" in daydreaming / idle. After startup
-        # alignment finishes, the dials must stay still (max per-tick change
-        # <= quiet_deg, in dial-space degrees) for quiet_ticks consecutive
-        # ticks before the baseline is captured. This prevents the startup
-        # digital-reseat settle from being mistaken for a player turning the
-        # dial. quiet_ticks is in game-loop ticks (~60/s); raise either value
-        # if a clean boot still false-triggers a wake.
-        "movement_arm_quiet_deg": _coerce_positive_float(
-            data.get("movement_arm_quiet_deg"), 2.0
+        # movement_window_s: length (seconds) of the rolling dial-history
+        # window used for movement detection in daydreaming / idle. Detection
+        # looks at the peak-to-peak range of each dial *within this window*
+        # instead of the displacement from a single fixed baseline, so slow
+        # drift around a set point rolls off the back of the window and never
+        # accumulates into a false wake. Longer = more drift rejection, but a
+        # genuine deliberate turn must complete within this many seconds to be
+        # seen. Detection only arms once a full clean window has been collected
+        # after startup alignment finishes (so a baseline can never be sampled
+        # mid-reseat). Tune up if slow drift still wakes the game; tune down if
+        # deliberate turns feel sluggish to register.
+        "movement_window_s": _coerce_positive_float(
+            data.get("movement_window_s"), 2.0
         ),
-        "movement_arm_quiet_ticks": int(
-            _coerce_positive_float(data.get("movement_arm_quiet_ticks"), 30.0)
+        # movement_glitch_trim: number of most-extreme samples discarded at
+        # EACH end (high and low) of every dial's window before computing the
+        # peak-to-peak range. This rejects brief single-/few-frame encoder
+        # glitches (e.g. a one-tick 140 deg J6 spike) that would otherwise trip
+        # detection, while a sustained real turn still produces a large range.
+        # At ~50 Hz a 2 s window holds ~100 samples, so the default 3 tolerates
+        # up to 3 glitch frames per joint. Raise if dials glitch in longer
+        # bursts; set to 0 for plain peak-to-peak (no glitch rejection).
+        "movement_glitch_trim": int(
+            _coerce_positive_float(data.get("movement_glitch_trim"), 3.0)
         ),
         # start_stage: boot stage. Falls back to the legacy force_stage key,
         # then to "play" so existing profiles keep their current behavior.

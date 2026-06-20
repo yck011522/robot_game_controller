@@ -313,9 +313,11 @@ def main(argv: list[str] | None = None) -> int:
         "winner_team": None,
         "pause_started_mono_ns": None,
         "paused_total_ns": 0,
-        # Movement-detection baselines (team -> [6] dial rad); captured on
-        # entering daydreaming / idle, cleared on every stage change.
-        "dial_baseline": {},
+        # Movement-detection rolling window (team -> [(now_ns, [6] dial rad)])
+        # plus per-team arming trackers (team -> {start_ns, armed}); both seeded
+        # empty here and re-initialized on every stage entry by `_enter_stage`.
+        "dial_window": {},
+        "dial_arm": {},
         # Set by the UI / physical SKIP control; consumed in play & tutorial.
         "skip_requested": False,
         # Edge tracker so PAUSE banners only print on on/off transitions.
@@ -700,6 +702,47 @@ def main(argv: list[str] | None = None) -> int:
                 q_target,
                 now_s=float(now_ns) / 1e9,
             )
+
+            # Event-based jogging debug trace. Published ONLY on "interesting"
+            # ticks (speed override dropped, a forward reply was missing, or a
+            # real collision) so the bus trace stays sparse while still
+            # capturing every speed-override-to-zero event with the timing
+            # context (chunks dispatched vs replied, blocking wait_ms, and the
+            # classified stop reason) needed to tell a worker/broker stall apart
+            # from a genuine collision. Off-bus collision REQ/REP timing is not
+            # tappable, so this is the only place that context is exposed.
+            if (
+                not bool(info.get("forward_certified", True))
+                or float(info.get("final_scalar", 1.0)) <= 1e-6
+                or bool(info.get("collision", False))
+            ):
+                dbg = bus.make_envelope(p.proc)
+                dbg.update(
+                    {
+                        "team": team,
+                        "stage": stage_state["stage"],
+                        "forward_certified": info.get("forward_certified"),
+                        "forward_stop_reason": info.get("forward_stop_reason"),
+                        "forward_chunks_dispatched": info.get(
+                            "forward_chunks_dispatched"
+                        ),
+                        "forward_chunks_replied": info.get("forward_chunks_replied"),
+                        "forward_wait_ms": info.get("forward_wait_ms"),
+                        "path_scalar": info.get("path_scalar"),
+                        "prox_scalar": info.get("prox_scalar"),
+                        "final_scalar": info.get("final_scalar"),
+                        "collision": info.get("collision"),
+                        "collision_first_hit": info.get("collision_first_hit"),
+                        "v_cmd_rad_s": info.get("v_cmd_rad_s"),
+                        "v_out_rad_s": info.get("v_out_rad_s"),
+                        "dial_pos_rad": (
+                            list(st["last_dial"])[:6]
+                            if isinstance(st.get("last_dial"), list)
+                            else None
+                        ),
+                    }
+                )
+                bus.publish(pub, f"telem.jogging.debug.{team}", dbg)
 
         if bool(control_state.get("recovery_active", False)):
             recovery_teams = [

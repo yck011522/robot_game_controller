@@ -352,6 +352,13 @@ class RealHaptic:
         dial_vel_rad_s: list[float] = []
         board_connected: list[bool] = []
         board_loop_hz: list[int] = []
+        # Diagnostic-only raw firmware fields (observe; no behavior change).
+        # These let a bus trace distinguish a serial-corruption glitch (raw
+        # decideg jumps but firmware seq advances normally) from a firmware
+        # reboot (seq rolls backward) when chasing spurious dial values.
+        dial_pos_decideg: list[int] = []  # raw integer angle straight from the T frame
+        dial_seq: list[int] = []          # firmware last-processed C-command sequence
+        dial_status_bits: list[int] = []  # firmware status bitfield (fault/mode flags)
         for dial_id in self._expected_dial_ids:
             board = self._connections.get(dial_id)
             telem = board.telemetry if board is not None else _DialTelemetry()
@@ -359,12 +366,18 @@ class RealHaptic:
             dial_vel_rad_s.append(_decideg_to_rad(telem.speed_decideg_s))
             board_connected.append(bool(board and board.connected))
             board_loop_hz.append(int(telem.foc_rate_hz))
+            dial_pos_decideg.append(int(telem.angle_decideg))
+            dial_seq.append(int(telem.last_control_seq))
+            dial_status_bits.append(int(telem.status_bits))
 
         return {
             "dial_pos_rad": dial_pos_rad,
             "dial_vel_rad_s": dial_vel_rad_s,
             "board_connected": board_connected,
             "board_loop_hz": board_loop_hz,
+            "dial_pos_decideg": dial_pos_decideg,
+            "dial_seq": dial_seq,
+            "dial_status_bits": dial_status_bits,
         }
 
     def close(self) -> None:

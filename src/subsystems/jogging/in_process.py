@@ -169,6 +169,10 @@ class InProcessPlanner:
         self._fwd_group_id = 0
         self._fwd_group_hits: list[Optional[bool]] = [None] * self._n_fwd
         self._fwd_group_pending: set[int] = set()
+        # Diagnostic-only: how many collision chunks the most recent forward
+        # dispatch sent. Compared against replies in `plan()` to expose why a
+        # forward gate failed (e.g. workers slow vs broker backlog).
+        self._fwd_chunks_dispatched = 0
 
         # In-flight request tracking.
         # pending[rid] = ("fwd", group_id, chunk_start, chunk_len)
@@ -280,11 +284,20 @@ class InProcessPlanner:
                 v_cmd[i] = -self._max_vel[i]
 
         # 4-5. Collision pool: HARD forward gate + SOFT round-robin prox.
+        # Diagnostic-only forward-gate counters, reset each tick.
         forward_certified = False
+        forward_wait_ms = 0.0          # wall time spent blocking on chunk replies
+        forward_chunks_replied = 0     # chunks that replied before the deadline
+        self._fwd_chunks_dispatched = 0
         if self._dealer is not None and self._collision_enabled:
             self._dispatch_forward(v_cmd)
             self._dispatch_one_proximity()
+            _t_wait0 = time.perf_counter()
             forward_certified = self._wait_for_forward()
+            forward_wait_ms = (time.perf_counter() - _t_wait0) * 1000.0
+            forward_chunks_replied = (
+                self._fwd_chunks_dispatched - len(self._fwd_group_pending)
+            )
             self._harvest_replies_nonblocking()
             for i in range(6):
                 self._prox_age_ticks[i] += 1
@@ -292,12 +305,26 @@ class InProcessPlanner:
             forward_certified = True
 
         # Stationary -> nothing to certify.
-        if math.sqrt(sum(v * v for v in v_cmd)) < 1e-6:
+        is_stationary = math.sqrt(sum(v * v for v in v_cmd)) < 1e-6
+        if is_stationary:
             forward_certified = True
 
         path_scalar = self._compute_path_scalar(forward_certified)
         prox_scalar = self._compute_prox_scalar()
         final_scalar = min(path_scalar, prox_scalar)
+
+        # Classify why this tick is (or is not) at full speed, so an
+        # event-based debug trace can pinpoint speed-override drops.
+        if is_stationary:
+            forward_stop_reason = "stationary"
+        elif not forward_certified:
+            forward_stop_reason = "forward_timeout"
+        elif path_scalar <= 0.0:
+            forward_stop_reason = "collision_block"
+        elif final_scalar < 1.0:
+            forward_stop_reason = "slowdown"
+        else:
+            forward_stop_reason = "ok"
 
         # 6. Integrate.
         v_out = [v_cmd[i] * final_scalar for i in range(6)]
@@ -327,6 +354,10 @@ class InProcessPlanner:
             "v_cmd_rad_s": v_cmd,
             "v_out_rad_s": v_out,
             "forward_certified": forward_certified,
+            "forward_stop_reason": forward_stop_reason,
+            "forward_chunks_dispatched": int(self._fwd_chunks_dispatched),
+            "forward_chunks_replied": int(forward_chunks_replied),
+            "forward_wait_ms": float(forward_wait_ms),
             "collision": bool(in_collision),
             "collision_first_hit": (
                 {"distance_deg": first_hit_step * self._fwd_step_deg}
@@ -351,6 +382,7 @@ class InProcessPlanner:
         gid = self._fwd_group_id
         self._fwd_group_hits = [None] * self._n_fwd
         self._fwd_group_pending = set()
+        self._fwd_chunks_dispatched = 0
 
         v_norm = math.sqrt(sum(v * v for v in v_cmd))
         if v_norm < 1e-6:
@@ -364,6 +396,7 @@ class InProcessPlanner:
             for k in range(1, self._n_fwd + 1)
         ]
         chunks = _chunks(all_configs, self._fwd_bundle_size)
+        self._fwd_chunks_dispatched = len(chunks)
         offset = 0
         for chunk in chunks:
             rid = self._send_request(chunk)

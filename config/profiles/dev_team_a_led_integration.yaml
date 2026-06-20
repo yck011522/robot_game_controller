@@ -79,7 +79,7 @@ tuning:
   collision:
     check_self: true
     check_world: true
-    timeout_ms: 60
+    timeout_ms: 200
     retries: 2
     bundle_size: 1
   jogging:
@@ -132,14 +132,16 @@ tuning:
     idle_timeout_s: 60              # idle -> daydreaming after this much quiet (seconds)
     daydream_to_idle_dial_deg: 60   # any dial moved this far (dial-space deg) wakes to idle
     idle_to_tutorial_dial_deg: 180  # any dial moved this far (dial-space deg) starts tutorial
-    # Movement-detection arming: after startup alignment, the dials must stay
-    # still (max per-tick change <= movement_arm_quiet_deg) for
-    # movement_arm_quiet_ticks consecutive game-loop ticks (~60/s) before a
-    # baseline is captured. This stops the startup digital-reseat settle from
-    # being mistaken for a player turning the dial. Raise either value if a
-    # clean boot still false-wakes to idle.
-    movement_arm_quiet_deg: 2.0
-    movement_arm_quiet_ticks: 45    # ~0.75 s of stillness at 60 Hz
+    # Movement-detection (rolling window): wake/tutorial triggers compare each
+    # dial's peak-to-peak range over the last movement_window_s seconds against
+    # the *_dial_deg thresholds above, so slow drift around a set point never
+    # accumulates into a false trigger. movement_glitch_trim discards that many
+    # most-extreme samples at each end of the window before measuring, rejecting
+    # brief encoder glitches. Detection only arms after a full clean window is
+    # collected post startup-alignment. Raise window for more drift rejection;
+    # raise trim if dials glitch in longer bursts.
+    movement_window_s: 2.0          # rolling window length (seconds)
+    movement_glitch_trim: 3         # extreme samples dropped per end (glitch reject)
     # --- Tutorial scroll (dial-space, deci-degrees; decideg = deg * 10) ---
     # Each player scrolls their haptic dial to watch the tutorial. On tutorial
     # entry every dial is digitally reseat to 0 and bounded to

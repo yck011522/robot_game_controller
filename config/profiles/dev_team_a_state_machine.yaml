@@ -116,14 +116,15 @@ tuning:
     idle_timeout_s: 60              # idle -> daydreaming after this much quiet (seconds)
     daydream_to_idle_dial_deg: 30   # any dial moved this far (dial-space deg) wakes to idle
     idle_to_tutorial_dial_deg: 360  # any dial moved this far (dial-space deg) starts tutorial
-    # Movement-detection arming: after startup alignment, the dials must stay
-    # still (max per-tick change <= movement_arm_quiet_deg) for
-    # movement_arm_quiet_ticks consecutive game-loop ticks (~60/s) before a
-    # baseline is captured. This stops the startup digital-reseat settle from
-    # being mistaken for a player turning the dial. Raise either value if a
-    # clean boot still false-wakes to idle.
-    movement_arm_quiet_deg: 2.0
-    movement_arm_quiet_ticks: 45    # ~0.75 s of stillness at 60 Hz
+    # Movement-detection (rolling window): wake/tutorial triggers compare each
+    # dial's peak-to-peak range over the last movement_window_s seconds against
+    # the *_dial_deg thresholds above, so slow drift around a set point never
+    # accumulates into a false trigger. movement_glitch_trim discards that many
+    # most-extreme samples at each end of the window before measuring, rejecting
+    # brief encoder glitches. Detection only arms after a full clean window is
+    # collected post startup-alignment.
+    movement_window_s: 2.0          # rolling window length (seconds)
+    movement_glitch_trim: 3         # extreme samples dropped per end (glitch reject)
     # Reserved for the tutorial scroll-with-detents haptic feel (parsed, not yet wired):
     tutorial_scroll_max_deg: 3600
     tutorial_detents_deg: [0, 1200, 2400, 3600]

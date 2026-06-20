@@ -110,7 +110,7 @@ tuning:
     idle_timeout_s: 60
     daydream_to_idle_dial_deg: 30
     idle_to_tutorial_dial_deg: 360
-    movement_arm_quiet_deg: 2.0
-    movement_arm_quiet_ticks: 45
+    movement_window_s: 2.0          # movement-detection rolling window (s)
+    movement_glitch_trim: 3         # glitch-reject: extreme samples dropped per end
     tutorial_scroll_max_deg: 3600
     tutorial_detents_deg: [0, 1200, 2400, 3600]

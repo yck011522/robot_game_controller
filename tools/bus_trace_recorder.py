@@ -39,6 +39,7 @@ DEFAULT_TOPICS = (
     "cmd.robot.target.b",
     "cmd.robot.recover.b",
     "telem.robot.actual.b",
+    "telem.jogging.debug.b",
     "heartbeat.",
 )
 DEFAULT_OUTPUT_PATH = REPO_ROOT / "logs" / "trace" / "bus_trace_latest.jsonl"
@@ -176,6 +177,7 @@ def _resolve_topics(topics: list[str], teams: list[str]) -> tuple[str, ...]:
                 f"cmd.robot.target.{team}",
                 f"cmd.robot.recover.{team}",
                 f"telem.robot.actual.{team}",
+                f"telem.jogging.debug.{team}",
             ]
         )
     return tuple(resolved)

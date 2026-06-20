@@ -60,10 +60,12 @@ def _tick_stage_state(
     if stage == "daydreaming":
         # Attract mode. Wake to idle as soon as any dial is turned past the
         # configured threshold. No timer here.
-        _refresh_dial_baselines(stage_state, teams, game_cfg)
+        _update_dial_window(stage_state, teams, game_cfg, now_ns)
         wake_rad = math.radians(float(game_cfg["daydream_to_idle_dial_deg"]))
-        _maybe_log_movement_progress(stage_state, teams, wake_rad, "daydreaming", now_ns)
-        delta, detail = _max_dial_delta_detail(stage_state, teams)
+        _maybe_log_movement_progress(
+            stage_state, teams, game_cfg, wake_rad, "daydreaming", now_ns
+        )
+        delta, detail = _max_dial_delta_detail(stage_state, teams, game_cfg)
         if detail is not None and delta >= wake_rad:
             _enter_stage(
                 stage_state, teams, "idle", game_cfg, now_ns,
@@ -74,10 +76,12 @@ def _tick_stage_state(
     if stage == "idle":
         # Ready state. A big "scroll up" starts the tutorial; otherwise a long
         # quiet period drops back to daydreaming. No countdown shown.
-        _refresh_dial_baselines(stage_state, teams, game_cfg)
+        _update_dial_window(stage_state, teams, game_cfg, now_ns)
         start_rad = math.radians(float(game_cfg["idle_to_tutorial_dial_deg"]))
-        _maybe_log_movement_progress(stage_state, teams, start_rad, "idle", now_ns)
-        delta, detail = _max_dial_delta_detail(stage_state, teams)
+        _maybe_log_movement_progress(
+            stage_state, teams, game_cfg, start_rad, "idle", now_ns
+        )
+        delta, detail = _max_dial_delta_detail(stage_state, teams, game_cfg)
         if detail is not None and delta >= start_rad:
             _enter_stage(
                 stage_state, teams, "tutorial", game_cfg, now_ns,
@@ -202,18 +206,19 @@ def _enter_stage(
     """Transition the stage machine and run per-stage entry side effects.
 
     Resets the stage timer + pause accounting, clears the movement-detection
-    baselines and any pending skip, seeds a fresh game on `play`, and seeds
-    the scoring sequence on `conclusion`. Prints a one-line transition banner
-    so the operator can trace the flow on the console.
+    rolling window, and any pending skip, seeds a fresh game on `play`, and
+    seeds the scoring sequence on `conclusion`. Prints a one-line transition
+    banner so the operator can trace the flow on the console.
     """
     old_stage = stage_state.get("stage")
     stage_state["stage"] = new_stage
     stage_state["stage_entered_mono_ns"] = now_ns
     stage_state["pause_started_mono_ns"] = None
     stage_state["paused_total_ns"] = 0
-    stage_state["dial_baseline"] = {}
-    # Per-team "is the dial still yet?" trackers used to settle-gate baseline
-    # capture; reset so the new stage re-arms movement detection cleanly.
+    # Rolling per-team dial-history window used by movement detection, plus the
+    # per-team arming trackers. Cleared on every stage entry so the new stage
+    # collects a fresh clean window before detection can fire.
+    stage_state["dial_window"] = {}
     stage_state["dial_arm"] = {}
     # Throttle timestamp for the movement-progress debug readout.
     stage_state["_move_dbg_ns"] = None
@@ -285,93 +290,137 @@ def _seed_play_teams(teams: dict[str, dict], game_cfg: dict[str, Any]) -> None:
         st["conclusion_sum_remainder_units"] = 0.0
 
 
-def _refresh_dial_baselines(
-    stage_state: dict[str, Any], teams: dict[str, dict], game_cfg: dict[str, Any]
+def _update_dial_window(
+    stage_state: dict[str, Any],
+    teams: dict[str, dict],
+    game_cfg: dict[str, Any],
+    now_ns: int,
 ) -> None:
-    """Capture each team's dial position as the movement baseline, once settled.
+    """Append the current dial positions to each team's rolling history window.
 
-    Movement detection is "armed" per team only after ALL of:
-      * haptic telemetry has arrived (`haptic_seeded`), and
-      * any startup digital-reseat alignment has finished, and
-      * the dial has then stayed still (max per-tick change <=
-        ``movement_arm_quiet_deg``) for ``movement_arm_quiet_ticks`` ticks.
+    Movement detection no longer uses a single fixed baseline. Instead, every
+    tick we record ``(now_ns, dial[6])`` into a per-team ring kept in
+    ``stage_state['dial_window'][team]`` and trim anything older than
+    ``movement_window_s``. Detection then looks at the peak-to-peak range
+    *inside* this window (see ``_max_dial_delta_detail``), so slow drift around
+    a set point rolls off the back of the window and never accumulates into a
+    false wake.
 
-    The stillness streak is the key safeguard: right after the startup reseat
-    (which can be a multi-radian digital jump) the dial telemetry keeps moving
-    while it settles, so we wait for it to go quiet before snapshotting the
-    baseline. Without this, the settle motion was being mistaken for a player
-    turning the dial and instantly woke daydreaming -> idle on boot.
+    Arming (per team, tracked in ``stage_state['dial_arm'][team]``):
+      * The window is dropped and arming restarts while haptic telemetry has
+        not arrived (``haptic_seeded`` False) or a startup digital-reseat is
+        still in progress (``_startup_alignment_active``). This guarantees the
+        window only ever contains post-reseat samples.
+      * A team arms only once a FULL window has elapsed since sampling (re)began
+        (``now_ns - start_ns >= movement_window_s``) and at least two samples
+        are buffered. Until armed, ``_max_dial_delta_detail`` ignores the team,
+        so a half-collected window can never trigger a transition.
 
-    Per-team trackers live in ``stage_state['dial_arm']`` and are cleared on
-    every stage entry (alongside ``dial_baseline``).
+    Units: dial positions are dial-space radians (``last_dial``); ``now_ns`` is
+    the monotonic game clock in nanoseconds.
     """
-    baselines = stage_state.setdefault("dial_baseline", {})
+    window_s = float(game_cfg.get("movement_window_s", 2.0))
+    window_ns = int(window_s * 1e9)
+    trim = max(0, int(game_cfg.get("movement_glitch_trim", 3)))
+    windows = stage_state.setdefault("dial_window", {})
     arm = stage_state.setdefault("dial_arm", {})
-    quiet_rad = math.radians(float(game_cfg.get("movement_arm_quiet_deg", 2.0)))
-    quiet_ticks = max(1, int(game_cfg.get("movement_arm_quiet_ticks", 30)))
 
     for team, st in teams.items():
-        if team in baselines:
-            continue
-        # Not ready to even start settling: haptic not seeded, or still
-        # aligning. Drop any partial tracker so the streak restarts cleanly.
+        # Not ready to sample: telemetry missing or still reseating. Drop the
+        # window + tracker so arming restarts cleanly once alignment finishes.
         if not bool(st.get("haptic_seeded", False)) or _startup_alignment_active(st):
+            windows.pop(team, None)
             arm.pop(team, None)
             continue
 
         cur = list(st.get("last_dial") or [0.0] * 6)[:6]
+        buf = windows.get(team)
         tracker = arm.get(team)
-        if tracker is None or not isinstance(tracker.get("prev"), list):
-            # First eligible tick: start the stillness window.
-            arm[team] = {"streak": 0, "prev": cur}
+        if buf is None or tracker is None:
+            # First eligible tick: open a fresh window + arming clock.
+            windows[team] = [(now_ns, cur)]
+            arm[team] = {"start_ns": now_ns, "armed": False}
             continue
 
-        prev = tracker["prev"]
-        moved = 0.0
-        for i in range(min(6, len(prev), len(cur))):
-            change = abs(float(cur[i]) - float(prev[i]))
-            if change > moved:
-                moved = change
-        tracker["streak"] = (
-            int(tracker.get("streak", 0)) + 1 if moved <= quiet_rad else 0
-        )
-        tracker["prev"] = cur
+        buf.append((now_ns, cur))
+        # Trim samples that have aged out of the window (always keep >= 1).
+        cutoff = now_ns - window_ns
+        while len(buf) > 1 and buf[0][0] < cutoff:
+            buf.pop(0)
 
-        if tracker["streak"] >= quiet_ticks:
-            baselines[team] = list(cur)
-            arm.pop(team, None)
-            print(
-                f"[game_controller] movement-detect armed team={team} "
-                f"baseline_deg={[round(math.degrees(v), 1) for v in cur]}",
-                flush=True,
-            )
+        # Arm once a full clean window has been collected.
+        if not bool(tracker.get("armed", False)):
+            elapsed = now_ns - int(tracker.get("start_ns", now_ns))
+            if elapsed >= window_ns and len(buf) >= 2:
+                tracker["armed"] = True
+                ranges_deg = []
+                for j in range(6):
+                    low, high = _robust_range(_joint_series(buf, j), trim)
+                    ranges_deg.append(round(math.degrees(high - low), 1))
+                print(
+                    f"[game_controller] movement-detect armed team={team} "
+                    f"window_s={window_s:.2f} trim={trim} "
+                    f"range_deg={ranges_deg}",
+                    flush=True,
+                )
+
+
+def _joint_series(buf: list[tuple[int, list[float]]], joint: int) -> list[float]:
+    """Extract one joint's value across every sample in a dial window."""
+    return [s[1][joint] for s in buf if len(s[1]) > joint]
+
+
+def _robust_range(values: list[float], trim: int) -> tuple[float, float]:
+    """Return a glitch-tolerant (low, high) bound for one joint's samples.
+
+    Sorts the samples and discards up to ``trim`` of the most-extreme values at
+    each end before reading the bounds, which rejects brief encoder glitches
+    (a few outlier frames) while preserving a sustained real turn. ``trim`` is
+    clamped so at least one sample always survives on each side, so tiny
+    windows degrade gracefully to plain min/max instead of collapsing to zero.
+    """
+    n = len(values)
+    if n == 0:
+        return 0.0, 0.0
+    ordered = sorted(values)
+    k = min(max(0, trim), (n - 1) // 2)
+    return ordered[k], ordered[n - 1 - k]
 
 
 def _max_dial_delta_detail(
-    stage_state: dict[str, Any], teams: dict[str, dict]
+    stage_state: dict[str, Any], teams: dict[str, dict], game_cfg: dict[str, Any]
 ) -> tuple[float, tuple[str, int, float, float] | None]:
-    """Largest absolute dial change (rad) from the captured baseline + detail.
+    """Largest glitch-tolerant dial range (rad) over the window + detail.
 
-    Returns ``(best_delta_rad, detail)`` where ``detail`` is
-    ``(team, joint_index, baseline_rad, current_rad)`` for the joint that moved
-    the most, or ``None`` if no team has an armed baseline yet (in which case
-    movement detection must not fire). Scans every team that has a baseline, so
-    the same code path works whether only team A is active now or both teams
-    are active later.
+    For every armed team, computes each joint's robust peak-to-peak range
+    (``_robust_range``) across its rolling window and returns
+    ``(best_range_rad, detail)`` where ``detail`` is
+    ``(team, joint_index, low_rad, high_rad)`` for the joint with the widest
+    range, or ``None`` when no team is armed yet (in which case movement
+    detection must not fire). Scans every team that has data, so the same code
+    path works whether one or both teams are active.
     """
-    baselines = stage_state.get("dial_baseline", {})
+    windows = stage_state.get("dial_window", {})
+    arm = stage_state.get("dial_arm", {})
+    trim = max(0, int(game_cfg.get("movement_glitch_trim", 3)))
     best = 0.0
     detail: tuple[str, int, float, float] | None = None
-    for team, st in teams.items():
-        base = baselines.get(team)
-        if not isinstance(base, list):
+    for team in teams:
+        tracker = arm.get(team)
+        buf = windows.get(team)
+        if not isinstance(tracker, dict) or not bool(tracker.get("armed", False)):
             continue
-        cur = st.get("last_dial") or []
-        for i in range(min(6, len(base), len(cur))):
-            delta = abs(float(cur[i]) - float(base[i]))
-            if delta > best or detail is None:
-                best = delta
-                detail = (team, i, float(base[i]), float(cur[i]))
+        if not isinstance(buf, list) or len(buf) < 2:
+            continue
+        for j in range(6):
+            series = _joint_series(buf, j)
+            if len(series) < 2:
+                continue
+            low, high = _robust_range(series, trim)
+            span = high - low
+            if span > best or detail is None:
+                best = span
+                detail = (team, j, float(low), float(high))
     return best, detail
 
 
@@ -382,10 +431,10 @@ def _movement_reason(
     threshold_rad: float,
 ) -> str:
     """Format a human-readable transition reason describing the dial movement."""
-    team, joint, base, cur = detail
+    team, joint, low, high = detail
     return (
         f"{label}: team {team} J{joint + 1} moved {math.degrees(delta_rad):.1f}deg "
-        f"(base {math.degrees(base):.1f} -> now {math.degrees(cur):.1f}, "
+        f"(window range {math.degrees(low):.1f} -> {math.degrees(high):.1f}, "
         f"thr {math.degrees(threshold_rad):.0f}deg)"
     )
 
@@ -393,32 +442,33 @@ def _movement_reason(
 def _maybe_log_movement_progress(
     stage_state: dict[str, Any],
     teams: dict[str, dict],
+    game_cfg: dict[str, Any],
     threshold_rad: float,
     label: str,
     now_ns: int,
 ) -> None:
     """Throttled (~1 Hz) console readout of how close any dial is to triggering.
 
-    Prints either the current max dial delta vs the threshold (once armed), or
-    a note that movement detection is still waiting for the dials to settle.
-    Helps diagnose unexpected (or missing) stage transitions.
+    Prints either the current widest window range vs the threshold (once
+    armed), or a note that movement detection is still collecting its first
+    window. Helps diagnose unexpected (or missing) stage transitions.
     """
     last = stage_state.get("_move_dbg_ns")
     if last is not None and (now_ns - last) < 1_000_000_000:
         return
     stage_state["_move_dbg_ns"] = now_ns
 
-    delta, detail = _max_dial_delta_detail(stage_state, teams)
+    delta, detail = _max_dial_delta_detail(stage_state, teams, game_cfg)
     if detail is None:
         print(
             f"[game_controller] {label}: movement detection not armed yet "
-            f"(waiting for dials to settle)",
+            f"(collecting window)",
             flush=True,
         )
         return
-    team, joint, _base, _cur = detail
+    team, joint, _low, _high = detail
     print(
-        f"[game_controller] {label}: max dial delta team {team} J{joint + 1} "
+        f"[game_controller] {label}: max dial range team {team} J{joint + 1} "
         f"{math.degrees(delta):.1f}deg / thr {math.degrees(threshold_rad):.0f}deg",
         flush=True,
     )

@@ -32,6 +32,9 @@ tools/benchmark_collision_workers_run.err
 # Generated high-rate diagnostic bus captures
 logs/trace/*.jsonl
 
+# Scratch console error dump (manually pasted; not part of the project)
+LAST_ERROR.txt
+
 # Generated virtual rewind-shortcut validation reports
 logs/rewind_shortcut_validation*.log
 logs/rewind_batch_validation*.json

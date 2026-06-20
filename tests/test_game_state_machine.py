@@ -42,7 +42,9 @@ gc._stage_countdown_s = gc_stages._stage_countdown_s
 
 
 # Small, fast thresholds so tests are quick and deterministic.
-# movement_arm_quiet_ticks=1 so a single still tick arms movement detection.
+# movement_window_s is tiny so a couple of ~0.1 s ticks fill a full window and
+# arm detection; movement_glitch_trim=0 gives plain peak-to-peak for the basic
+# transition tests (a dedicated test below exercises trim-based glitch reject).
 GAME_CFG = gc._game_config(
     {
         "duration_s": 5,
@@ -51,8 +53,8 @@ GAME_CFG = gc._game_config(
         "idle_timeout_s": 3,
         "daydream_to_idle_dial_deg": 30,
         "idle_to_tutorial_dial_deg": 360,
-        "movement_arm_quiet_deg": 5,
-        "movement_arm_quiet_ticks": 1,
+        "movement_window_s": 0.15,
+        "movement_glitch_trim": 0,
         "sim_bucket_values": {"a": [120, 80, 40]},
         "start_stage": "daydreaming",
     }
@@ -96,7 +98,8 @@ def _new_stage_state() -> dict:
         "winner_team": None,
         "pause_started_mono_ns": None,
         "paused_total_ns": 0,
-        "dial_baseline": {},
+        "dial_window": {},
+        "dial_arm": {},
         "skip_requested": False,
         "prev_paused": False,
     }
@@ -112,6 +115,21 @@ def _secs(n: float) -> int:
     return int(n * 1e9)
 
 
+def _arm(ss: dict, teams: dict, start_s: float = 0.1, step_s: float = 0.1) -> float:
+    """Tick with the dials still until detection arms; return next tick time (s).
+
+    Feeds a clean (still) rolling window so the team becomes armed, mirroring a
+    settled boot. Returns the timestamp (seconds) for the caller's next tick.
+    """
+    t = start_s
+    for _ in range(8):
+        gc._tick_stage_state(ss, teams, GAME_CFG, _secs(t))
+        if ss["dial_arm"].get("a", {}).get("armed"):
+            return round(t + step_s, 6)
+        t = round(t + step_s, 6)
+    raise AssertionError("movement detection never armed")
+
+
 # --- daydreaming ----------------------------------------------------------
 
 
@@ -119,41 +137,84 @@ def test_daydreaming_to_idle_on_dial_movement() -> None:
     teams = _make_teams()
     ss = _enter("daydreaming", teams)
 
-    # Two still ticks arm the baseline (tick 1 starts the stillness window,
-    # tick 2 reaches the 1-tick quiet streak); no movement yet -> daydreaming.
-    gc._tick_stage_state(ss, teams, GAME_CFG, _secs(0.1))
-    gc._tick_stage_state(ss, teams, GAME_CFG, _secs(0.2))
+    # Collect a clean still window so detection arms; no movement -> daydreaming.
+    t = _arm(ss, teams)
     assert ss["stage"] == "daydreaming"
-    assert "a" in ss["dial_baseline"]  # detection armed
+    assert ss["dial_arm"]["a"]["armed"]  # detection armed
 
-    # Move dial 0 past the wake threshold (30 deg) -> idle.
+    # Move dial 0 past the wake threshold (30 deg) -> idle. The window now holds
+    # both still (0) and moved (40) samples, so its range crosses the threshold.
     teams["a"]["last_dial"][0] = math.radians(40)
-    gc._tick_stage_state(ss, teams, GAME_CFG, _secs(0.3))
+    gc._tick_stage_state(ss, teams, GAME_CFG, _secs(t))
     assert ss["stage"] == "idle"
 
 
 def test_daydreaming_ignores_subthreshold_movement() -> None:
     teams = _make_teams()
     ss = _enter("daydreaming", teams)
-    gc._tick_stage_state(ss, teams, GAME_CFG, _secs(0.1))
-    gc._tick_stage_state(ss, teams, GAME_CFG, _secs(0.2))  # arm baseline
+    t = _arm(ss, teams)
 
     teams["a"]["last_dial"][0] = math.radians(10)  # below 30 deg
-    gc._tick_stage_state(ss, teams, GAME_CFG, _secs(0.3))
+    gc._tick_stage_state(ss, teams, GAME_CFG, _secs(t))
     assert ss["stage"] == "daydreaming"
 
 
-def test_no_wake_until_baseline_armed() -> None:
-    """A dial that keeps moving never settles, so detection never arms."""
+def test_daydreaming_ignores_slow_drift() -> None:
+    """Slow drift around a set point rolls off the window and never wakes.
+
+    The dial creeps a little each tick, but because detection looks at the
+    peak-to-peak range *within* the rolling window (old samples expire), the
+    accumulated long-run displacement never registers as a wake.
+    """
     teams = _make_teams()
     ss = _enter("daydreaming", teams)
-    # Jog the dial past quiet_deg every tick -> stillness streak never
-    # completes -> baseline never captured -> no wake despite large motion.
-    for k in range(1, 8):
-        teams["a"]["last_dial"][0] = math.radians(40 * k)
-        gc._tick_stage_state(ss, teams, GAME_CFG, _secs(0.1 * k))
+    _arm(ss, teams)
+    # Creep ~2 deg per 0.1 s tick for ~1 s. Within any 0.15 s window the range
+    # is only a few degrees, far under the 30 deg wake threshold.
+    t = 1.0
+    for k in range(1, 11):
+        teams["a"]["last_dial"][0] = math.radians(2.0 * k)
+        gc._tick_stage_state(ss, teams, GAME_CFG, _secs(t))
+        t = round(t + 0.1, 6)
     assert ss["stage"] == "daydreaming"
-    assert "a" not in ss["dial_baseline"]
+
+
+def test_single_frame_glitch_does_not_wake() -> None:
+    """A lone encoder glitch frame is trimmed out and does not wake the game.
+
+    Reproduces the real-world false wake (a one-tick ~140 deg J6 spike). With
+    movement_glitch_trim>0 the outlier sample is discarded from the window
+    range, so a single glitch frame surrounded by still samples never crosses
+    the wake threshold.
+    """
+    cfg = gc._game_config(
+        {
+            "daydream_to_idle_dial_deg": 30,
+            "idle_to_tutorial_dial_deg": 360,
+            "idle_timeout_s": 3,
+            "movement_window_s": 0.6,
+            "movement_glitch_trim": 3,
+            "start_stage": "daydreaming",
+        }
+    )
+    teams = _make_teams()
+    ss = _new_stage_state()
+    gc._enter_stage(ss, teams, "daydreaming", cfg, 0, reason="test")
+    # Fill a still window (10 ticks @ 0.05 s spans 0.45 s -> a full 0.6 s window
+    # after the next few ticks) so detection arms with clean data.
+    t = 0.05
+    for _ in range(20):
+        gc._tick_stage_state(ss, teams, cfg, _secs(t))
+        t = round(t + 0.05, 6)
+        if ss["dial_arm"].get("a", {}).get("armed"):
+            break
+    assert ss["dial_arm"]["a"]["armed"]
+    # Inject a single 140 deg glitch frame on J6, then return to still.
+    teams["a"]["last_dial"][5] = math.radians(140)
+    gc._tick_stage_state(ss, teams, cfg, _secs(t))
+    teams["a"]["last_dial"][5] = 0.0
+    gc._tick_stage_state(ss, teams, cfg, _secs(round(t + 0.05, 6)))
+    assert ss["stage"] == "daydreaming"  # glitch trimmed -> no false wake
 
 
 # --- idle -----------------------------------------------------------------
@@ -162,11 +223,10 @@ def test_no_wake_until_baseline_armed() -> None:
 def test_idle_to_tutorial_on_scroll_up() -> None:
     teams = _make_teams()
     ss = _enter("idle", teams)
-    gc._tick_stage_state(ss, teams, GAME_CFG, _secs(0.1))
-    gc._tick_stage_state(ss, teams, GAME_CFG, _secs(0.2))  # arm baseline
+    t = _arm(ss, teams)
 
     teams["a"]["last_dial"][0] = math.radians(400)  # past 360 deg
-    gc._tick_stage_state(ss, teams, GAME_CFG, _secs(0.3))
+    gc._tick_stage_state(ss, teams, GAME_CFG, _secs(t))
     assert ss["stage"] == "tutorial"
 
 
