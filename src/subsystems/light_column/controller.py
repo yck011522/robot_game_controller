@@ -303,7 +303,15 @@ class LedColumnController:
         ):
             self._fill_all(WHITE)
             return
-
+        # TEMP: force flash between back and white
+        if (
+            countdown is not None
+            and countdown <= self._config.endgame_flash_window_s
+            and not self._flash_on(now_mono)
+        ):
+            self._fill_all(OFF)
+            return
+        
         # Normal play: each team's strips show its speed scale as a fill bar.
         for team in ("a", "b"):
             scalar = _team_final_scalar(state, team)

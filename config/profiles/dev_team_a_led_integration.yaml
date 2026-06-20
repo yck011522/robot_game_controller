@@ -106,11 +106,11 @@ tuning:
       a: "#0000FF"
       b: "#FF0000"
     breathing_period_s: 3.0          # daydreaming dim<->bright cycle length (s)
-    breathing_min_brightness: 0.15   # lowest brightness reached while breathing (0..1)
+    breathing_min_brightness: 0.10   # lowest brightness reached while breathing (0..1)
     play_startup_blackout_s: 0.5     # all-dark hold at the very start of play (s)
-    endgame_flash_window_s: 5.0      # final-countdown white-flash window (s)
-    endgame_flash_period_s: 1.0      # flash cycle length within that window (s)
-    endgame_flash_on_s: 0.2          # white "on" slice of each flash cycle (s)
+    endgame_flash_window_s: 10.0      # final-countdown white-flash window (s)
+    endgame_flash_period_s: 2.0      # flash cycle length within that window (s)
+    endgame_flash_on_s: 1.0          # white "on" slice of each flash cycle (s)
     conclusion_post_count_hold_s: 1.0 # hold score bars before crowning winner (s)
     # Tutorial progress is published per-player by the game controller (0..100%)
     # and consumed directly here, so the light columns need no scroll-scale tuning.
@@ -131,7 +131,7 @@ tuning:
     rewind_arrival_tolerance_deg: 0.5  # all six measured joints must be within this to finish
     idle_timeout_s: 60              # idle -> daydreaming after this much quiet (seconds)
     daydream_to_idle_dial_deg: 60   # any dial moved this far (dial-space deg) wakes to idle
-    idle_to_tutorial_dial_deg: 360  # any dial moved this far (dial-space deg) starts tutorial
+    idle_to_tutorial_dial_deg: 180  # any dial moved this far (dial-space deg) starts tutorial
     # Movement-detection arming: after startup alignment, the dials must stay
     # still (max per-tick change <= movement_arm_quiet_deg) for
     # movement_arm_quiet_ticks consecutive game-loop ticks (~60/s) before a
