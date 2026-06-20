@@ -75,9 +75,6 @@ class LightColumnConfig:
     # Conclusion: hold the finished score bars this long after the count
     # finishes before flipping the losing team to the winner's color.
     conclusion_post_count_hold_s: float = 1.0
-    # Tutorial: dial-space degrees that map a player's strip from empty to full.
-    # Should match tuning.game.tutorial_scroll_max_deg.
-    tutorial_scroll_max_deg: float = 3600.0
     # Per-team solid color used for team strips, indicators, and bars.
     team_colors: dict[str, Color] = None  # type: ignore[assignment]
 
@@ -91,16 +88,14 @@ class LightColumnConfig:
     def from_profile(cls, profile: Any) -> "LightColumnConfig":
         """Build a config from a loaded profile's ``tuning`` block.
 
-        Reads ``tuning.light_column`` for overrides and falls back to
-        ``tuning.game.tutorial_scroll_max_deg`` for the tutorial scale so the
-        LEDs and the game stage machine agree on the scroll range.
+        Reads ``tuning.light_column`` for overrides. Tutorial progress bars are
+        driven by the per-player progress published in state.full, so no
+        tutorial scroll scale is needed here.
         """
 
         tuning = getattr(profile, "tuning", {}) or {}
         light = tuning.get("light_column") if isinstance(tuning, dict) else {}
         light = light if isinstance(light, dict) else {}
-        game = tuning.get("game") if isinstance(tuning, dict) else {}
-        game = game if isinstance(game, dict) else {}
 
         config = cls()
         config.breathing_period_s = _pos_float(
@@ -124,11 +119,6 @@ class LightColumnConfig:
         config.conclusion_post_count_hold_s = _non_neg_float(
             light.get("conclusion_post_count_hold_s"),
             config.conclusion_post_count_hold_s,
-        )
-        config.tutorial_scroll_max_deg = _pos_float(
-            light.get("tutorial_scroll_max_deg",
-                      game.get("tutorial_scroll_max_deg")),
-            config.tutorial_scroll_max_deg,
         )
         team_colors = light.get("team_colors")
         if isinstance(team_colors, dict):
@@ -282,13 +272,14 @@ class LedColumnController:
             # Indicator strips show the flat team color.
             for strip_id in self._layout.team_indicator_strips[team]:
                 self._strip_colors[strip_id] = solid(team_color, self._n)
-            # Each player's strip is a progress bar from their dial position.
-            dial_deg = _team_dial_deg(state, team)
-            scroll_max = self._config.tutorial_scroll_max_deg
+            # Each player's strip is a progress bar from their published
+            # tutorial scroll progress (0..100%, computed by the game
+            # controller from the dial position).
+            progress_pct = _team_tutorial_progress_pct(state, team)
             for player, strip_id in self._layout.tutorial_player_strips[team].items():
                 index = _player_dial_index(player)
-                value = dial_deg[index] if 0 <= index < len(dial_deg) else 0.0
-                progress = _clamp01(value / scroll_max if scroll_max > 0 else 0.0, 0.0)
+                value = progress_pct[index] if 0 <= index < len(progress_pct) else 0.0
+                progress = _clamp01(value / 100.0, 0.0)
                 self._strip_colors[strip_id] = two_color_split(
                     team_color, OFF, progress, self._n
                 )
@@ -418,12 +409,12 @@ def _team_final_scalar(state: dict[str, Any], team: str) -> float:
     return _clamp01(collision.get("final_scalar"), 1.0)
 
 
-def _team_dial_deg(state: dict[str, Any], team: str) -> list[float]:
-    """Return the team's 6 per-controller dial angles in degrees."""
+def _team_tutorial_progress_pct(state: dict[str, Any], team: str) -> list[float]:
+    """Return the team's 6 per-player tutorial progress values (0..100%)."""
 
     haptic = _team_block(state, team).get("haptic")
     haptic = haptic if isinstance(haptic, dict) else {}
-    values = haptic.get("dial_deg")
+    values = haptic.get("tutorial_progress_pct")
     if isinstance(values, list):
         return [_maybe_float(v) or 0.0 for v in values]
     return [0.0] * 6

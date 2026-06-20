@@ -77,6 +77,54 @@ def _coerce_float_seq(value: Any) -> list[float]:
     return out
 
 
+def _coerce_tutorial_scroll(start_end: Any, bound: Any) -> dict[str, float]:
+    """Normalize the tutorial scroll span + soft bounds (deci-degrees).
+
+    ``start_end`` is a ``[start, end]`` pair the player scrolls through; ``end``
+    is normally negative so scrolling toward it advances progress. ``bound`` is
+    a ``[min, max]`` soft-limit pair (typically a touch wider than start/end so
+    both endpoints are reachable). Missing / malformed values fall back to the
+    reference defaults: span ``0 -> -10000`` and bounds ``-10010 .. 10``.
+    """
+
+    span = _coerce_float_seq(start_end)
+    start = span[0] if len(span) >= 1 else 0.0
+    end = span[1] if len(span) >= 2 else -10000.0
+    limits = _coerce_float_seq(bound)
+    bmin = limits[0] if len(limits) >= 1 else -10010.0
+    bmax = limits[1] if len(limits) >= 2 else 10.0
+    if bmin > bmax:  # tolerate a swapped [max, min] pair
+        bmin, bmax = bmax, bmin
+    return {
+        "tutorial_scroll_dial_start_decideg": start,
+        "tutorial_scroll_dial_end_decideg": end,
+        "tutorial_scroll_dial_bound_min_decideg": bmin,
+        "tutorial_scroll_dial_bound_max_decideg": bmax,
+    }
+
+
+def _coerce_tutorial_detents_pct(value: Any) -> list[float]:
+    """Coerce the tutorial detent percentages, clamped to 0..100 and sorted.
+
+    Each entry marks a progress percentage where the dial snaps to a detent.
+    Out-of-range / non-numeric entries are dropped; the reference defaults
+    ``[10, 30, 40, 70, 100]`` are used when nothing valid is supplied.
+    """
+
+    out: list[float] = []
+    if isinstance(value, list):
+        for item in value:
+            try:
+                pct = float(item)
+            except (TypeError, ValueError):
+                continue
+            if 0.0 <= pct <= 100.0:
+                out.append(pct)
+    if not out:
+        return [10.0, 30.0, 40.0, 70.0, 100.0]
+    return sorted(out)
+
+
 def _coerce_start_stage(value: Any, fallback: Any) -> str:
     """Pick a valid boot stage from start_stage, then force_stage, else play."""
     for candidate in (value, fallback):
@@ -155,12 +203,26 @@ def _game_config(node: Any) -> dict[str, Any]:
         "idle_to_tutorial_dial_deg": _coerce_positive_float(
             data.get("idle_to_tutorial_dial_deg"), 360.0
         ),
-        # tutorial_scroll_max_deg / tutorial_detents_deg: reserved for the
-        # tutorial scroll-with-detents haptic feel; parsed now, wired later.
-        "tutorial_scroll_max_deg": _coerce_positive_float(
-            data.get("tutorial_scroll_max_deg"), 3600.0
+        # --- Tutorial scroll-with-detents (dial-space, deci-degrees) ---
+        # tutorial_scroll_dial_start_end: [start, end] dial position the player
+        # scrolls through during the tutorial, in deci-degrees (decideg =
+        # deg * 10). Defaults span 0 -> -10000 decideg (0 -> -1000 deg). The
+        # end is negative so scrolling "down" advances; progress 0..100% maps
+        # linearly start -> end. Split into two scalar keys below.
+        # tutorial_scroll_dial_bound: [min, max] soft haptic bounds (decideg)
+        # held constant for the whole tutorial; set slightly wider than
+        # start/end so both endpoints are reachable.
+        # tutorial_detents_pct: progress percentages (0..100) at which the dial
+        # snaps to a detent (nearest-detent tracking each tick). No 0% detent
+        # means the dial pulls to the first detent the moment the tutorial
+        # begins. Defaults match the reference profile.
+        **_coerce_tutorial_scroll(
+            data.get("tutorial_scroll_dial_start_end"),
+            data.get("tutorial_scroll_dial_bound"),
         ),
-        "tutorial_detents_deg": _coerce_float_seq(data.get("tutorial_detents_deg")),
+        "tutorial_detents_pct": _coerce_tutorial_detents_pct(
+            data.get("tutorial_detents_pct")
+        ),
         # movement_arm_quiet_deg / movement_arm_quiet_ticks: gate before
         # movement detection is "armed" in daydreaming / idle. After startup
         # alignment finishes, the dials must stay still (max per-tick change

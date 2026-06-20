@@ -106,6 +106,10 @@ class TeamMock:
     actual_deg: list[float]
     connected: list[bool]
     loop_hz: list[float]
+    # Per-player tutorial scroll progress (0..100%); only drawn while the
+    # active stage is "tutorial", replacing the joint swim lanes with bottom-up
+    # fill bars.
+    tutorial_progress: list[float]
     in_collision: bool
     path_scalar: float
     final_scalar: float
@@ -482,6 +486,7 @@ class DashboardMockup:
             actual_deg=[0.0] * 6,
             connected=[False] * 6,
             loop_hz=[0.0] * 6,
+            tutorial_progress=[0.0] * 6,
             in_collision=False,
             path_scalar=0.0,
             final_scalar=0.0,
@@ -502,6 +507,7 @@ class DashboardMockup:
         q_target = _coerce_float_list(robot.get("q_target_rad"), 6, 0.0)
         connected = _coerce_bool_list(haptic.get("connected"), 6, False)
         loop_hz = _coerce_float_list(haptic.get("board_loop_hz"), 6, 0.0)
+        tutorial_progress = _coerce_float_list(haptic.get("tutorial_progress_pct"), 6, 0.0)
         hit = collision.get("first_hit") if isinstance(collision.get("first_hit"), dict) else {}
         q_actual_deg = [math.degrees(v) for v in q_actual]
         prox_probe_offsets_deg = _coerce_float_list(collision.get("prox_probe_offsets_deg"), 20, 0.0)
@@ -527,6 +533,7 @@ class DashboardMockup:
             actual_deg=q_actual_deg,
             connected=connected,
             loop_hz=loop_hz,
+            tutorial_progress=tutorial_progress,
             in_collision=bool(collision.get("in_collision", False)),
             path_scalar=float(collision.get("path_scalar", 0.0) or 0.0),
             final_scalar=float(collision.get("final_scalar", 0.0) or 0.0),
@@ -695,7 +702,7 @@ class DashboardMockup:
         if style["corner_brackets"]:
             self._draw_corner_brackets(surface, rect, COLORS["outline"])
 
-    def _lane_bank(self, surface: pygame.Surface, rect: pygame.Rect, team: TeamMock, title: str) -> None:
+    def _lane_bank(self, surface: pygame.Surface, rect: pygame.Rect, team: TeamMock, title: str, stage: str = "") -> None:
         self._panel(surface, rect, alt=True)
         self._label(surface, title, rect.x + 26, rect.y + 18, 34, COLORS["text"], bold=True)
         lane_gap = 18
@@ -704,7 +711,37 @@ class DashboardMockup:
         lane_h = rect.h - 124
         for axis in range(6):
             lane_rect = pygame.Rect(rect.x + 26 + axis * (lane_w + lane_gap), lane_top, lane_w, lane_h)
-            self._draw_lane(surface, lane_rect, axis, team)
+            if stage == "tutorial":
+                self._draw_tutorial_lane(surface, lane_rect, axis, team)
+            else:
+                self._draw_lane(surface, lane_rect, axis, team)
+
+    def _draw_tutorial_lane(self, surface: pygame.Surface, rect: pygame.Rect, axis: int, team: TeamMock) -> None:
+        """Draw one player's tutorial progress as a bottom-up fill bar.
+
+        Replaces the joint actual/target swim lane during the tutorial stage.
+        The bar fills from the bottom of the lane up to a height proportional
+        to that player's published progress (0..100%).
+        """
+        style = self._current_style()
+        lane_radius = int(style["lane_radius"])
+        connected = team.connected[axis] if axis < len(team.connected) else False
+        border = team.color if connected else COLORS["grey"]
+        fill_bg = (24, 36, 48) if connected else (34, 36, 39)
+        pygame.draw.rect(surface, fill_bg, rect, border_radius=lane_radius)
+
+        progress = team.tutorial_progress[axis] if axis < len(team.tutorial_progress) else 0.0
+        frac = max(0.0, min(1.0, progress / 100.0))
+        fill_h = int(round((rect.h - 8) * frac))
+        if fill_h > 0:
+            fill_rect = pygame.Rect(rect.x + 4, rect.bottom - 4 - fill_h, rect.w - 8, fill_h)
+            pygame.draw.rect(surface, team.color if connected else COLORS["grey"], fill_rect, border_radius=lane_radius)
+
+        pygame.draw.rect(surface, border, rect, 2, border_radius=lane_radius)
+        self._label(surface, f"J{axis + 1}", rect.centerx, rect.y + 14, 20, COLORS["muted"], align="center")
+        self._label(surface, f"{progress:.0f}%", rect.centerx, rect.bottom - 30, 24, COLORS["text"] if connected else COLORS["grey"], bold=True, align="center")
+        if not connected:
+            self._label(surface, "OFF", rect.centerx, rect.centery - 18, 30, COLORS["grey"], bold=True, align="center")
 
     def _draw_lane(self, surface: pygame.Surface, rect: pygame.Rect, axis: int, team: TeamMock) -> None:
         style = self._current_style()
@@ -815,7 +852,7 @@ class DashboardMockup:
         self._team_spine_header(surface, pygame.Rect(rect.x + 28, rect.y + 28, rect.w - 56, 145), team, align=align)
         self._bucket_strip(surface, pygame.Rect(rect.x + 28, rect.y + 195, rect.w - 56, 128), team)
         self._team_summary_strip(surface, pygame.Rect(rect.x + 28, rect.y + 345, rect.w - 56, 142), team, align=align, stage=stage, conclusion_winner=conclusion_winner)
-        self._lane_bank(surface, pygame.Rect(rect.x + 28, rect.y + 515, rect.w - 56, rect.h - 545), team, title=f"TEAM {team.name}")
+        self._lane_bank(surface, pygame.Rect(rect.x + 28, rect.y + 515, rect.w - 56, rect.h - 545), team, title=f"TEAM {team.name}", stage=stage)
 
     def _central_spine(self, surface: pygame.Surface, rect: pygame.Rect, state: dict, style: dict) -> None:
         self._panel(surface, rect)

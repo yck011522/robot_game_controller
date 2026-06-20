@@ -112,8 +112,8 @@ tuning:
     endgame_flash_period_s: 1.0      # flash cycle length within that window (s)
     endgame_flash_on_s: 0.2          # white "on" slice of each flash cycle (s)
     conclusion_post_count_hold_s: 1.0 # hold score bars before crowning winner (s)
-    # tutorial_scroll_max_deg falls back to tuning.game.tutorial_scroll_max_deg
-    # when omitted; keep them in sync so LEDs and the stage machine agree.
+    # Tutorial progress is published per-player by the game controller (0..100%)
+    # and consumed directly here, so the light columns need no scroll-scale tuning.
   game:
     # --- Core game ---
     duration_s: 60                  # play-stage length (seconds)
@@ -130,7 +130,7 @@ tuning:
     rewind_speed_fraction: 0.60     # rewind at 60% of each max_velocity_deg_s
     rewind_arrival_tolerance_deg: 0.5  # all six measured joints must be within this to finish
     idle_timeout_s: 60              # idle -> daydreaming after this much quiet (seconds)
-    daydream_to_idle_dial_deg: 30   # any dial moved this far (dial-space deg) wakes to idle
+    daydream_to_idle_dial_deg: 60   # any dial moved this far (dial-space deg) wakes to idle
     idle_to_tutorial_dial_deg: 360  # any dial moved this far (dial-space deg) starts tutorial
     # Movement-detection arming: after startup alignment, the dials must stay
     # still (max per-tick change <= movement_arm_quiet_deg) for
@@ -140,10 +140,19 @@ tuning:
     # clean boot still false-wakes to idle.
     movement_arm_quiet_deg: 2.0
     movement_arm_quiet_ticks: 45    # ~0.75 s of stillness at 60 Hz
-    # Tutorial scroll range (dial-space deg). Also used by the LED tutorial
-    # progress bars (see tuning.light_column.tutorial_scroll_max_deg).
-    tutorial_scroll_max_deg: 3600
-    tutorial_detents_deg: [0, 1200, 2400, 3600]
+    # --- Tutorial scroll (dial-space, deci-degrees; decideg = deg * 10) ---
+    # Each player scrolls their haptic dial to watch the tutorial. On tutorial
+    # entry every dial is digitally reseat to 0 and bounded to
+    # tutorial_scroll_dial_bound. Progress 0..100% maps linearly start -> end
+    # (direction is flipped: scrolling toward the negative end advances).
+    tutorial_scroll_dial_start_end: [0, -10000]   # [start, end] dial pos (decideg)
+    tutorial_scroll_dial_bound: [-10010, 10]      # [min, max] soft bounds (decideg)
+    # Progress percentages at which the dial snaps to a detent. Each tick the
+    # haptic tracking target is set to the nearest detent to the measured
+    # position, so players feel a lock at each step. There is no 0% detent, so
+    # the dial pulls toward the first (10%) detent the instant the tutorial
+    # begins.
+    tutorial_detents_pct: [10, 30, 40, 70, 100]
 
   rewind_shortcut:
     enabled: true                   # smooth/optimize the rewind path before replaying it

@@ -49,6 +49,7 @@ from apps.game_controller.haptics import (  # noqa: E402
     _reset_team_motion_outputs,
     _tick_startup_alignment,
     _tick_play_sync,
+    _tick_tutorial_team,
     _update_dynamic_haptic_bounds_from_prox,
     _update_haptic_state,
 )
@@ -290,6 +291,13 @@ def main(argv: list[str] | None = None) -> int:
                 "settled_streak": 0,
                 "attempts": 0,
             },
+            # Per-player tutorial scroll progress (0..100%), refreshed every
+            # tutorial tick from the measured dial position. Published in
+            # state.full and consumed by the LEDs + dashboard.
+            "tutorial_progress": [0.0] * 6,
+            # One-shot flag set on tutorial entry; the runtime loop reseats the
+            # dial to 0 and installs the tutorial bounds, then clears it.
+            "tutorial_reset_pending": False,
         }
     banner(proc.proc, f"teams={active_teams} collision_check={collision_enabled}")
 
@@ -553,6 +561,17 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 if sync_ready:
                     planner.reseed(st["last_q"], dial_pos_rad=st["last_dial"])
+                _publish_hold_current_pose(pub, p.proc, team, st)
+                continue
+
+            if stage_state["stage"] == "tutorial":
+                # Tutorial: the robot holds its measured pose while each player
+                # scrolls their dial. _tick_tutorial_team performs the one-shot
+                # reseat-to-zero + bounds install on entry, refreshes per-player
+                # progress, and publishes the snap-to-detent haptic command.
+                _tick_tutorial_team(
+                    pub, p.proc, team, st, haptic_cfg, game_cfg
+                )
                 _publish_hold_current_pose(pub, p.proc, team, st)
                 continue
 

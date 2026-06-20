@@ -234,10 +234,15 @@ class RendererTest(unittest.TestCase):
     def test_tutorial_indicator_and_progress(self) -> None:
         controller, _, layout, config = _make_controller()
         # Player A1 (dial index 0) scrolled halfway through the tutorial range.
-        half = config.tutorial_scroll_max_deg / 2.0
         state = {
             "active_stage": "tutorial",
-            "teams": {"a": {"haptic": {"dial_deg": [half, 0, 0, 0, 0, 0]}}},
+            "teams": {
+                "a": {
+                    "haptic": {
+                        "tutorial_progress_pct": [50.0, 0, 0, 0, 0, 0]
+                    }
+                }
+            },
         }
         controller.set_state(state)
         controller.update(now_mono=1.0, now_wall=0.0)

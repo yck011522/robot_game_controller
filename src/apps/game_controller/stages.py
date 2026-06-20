@@ -94,14 +94,22 @@ def _tick_stage_state(
         return
 
     if stage == "tutorial":
-        # Timed; skippable. (Future: also exit when all dials scrolled to the
-        # bottom detent.)
-        if stage_state.get("skip_requested") or _stage_elapsed_s(
-            stage_state, now_ns
-        ) >= float(game_cfg["tutorial_duration_s"]):
-            reason = (
-                "skip" if stage_state.get("skip_requested") else "tutorial timer expired"
-            )
+        # Timed; skippable; also exits early once every active player has
+        # scrolled to 100% tutorial progress. Progress is computed in the
+        # per-team motion loop (which runs earlier this tick) and cached on
+        # each team's ``tutorial_progress``.
+        skip = bool(stage_state.get("skip_requested"))
+        timed_out = _stage_elapsed_s(stage_state, now_ns) >= float(
+            game_cfg["tutorial_duration_s"]
+        )
+        all_done = _all_tutorial_progress_complete(teams)
+        if skip or timed_out or all_done:
+            if skip:
+                reason = "skip"
+            elif all_done:
+                reason = "all players reached 100%"
+            else:
+                reason = "tutorial timer expired"
             _enter_stage(stage_state, teams, "play", game_cfg, now_ns, reason=reason)
         return
 
@@ -161,6 +169,27 @@ def _tick_stage_state(
         return
 
 
+def _all_tutorial_progress_complete(teams: dict[str, dict]) -> bool:
+    """Return True once every active team's six dials are at 100% progress.
+
+    Reads the per-team ``tutorial_progress`` list (0..100 per dial) that the
+    runtime loop refreshes each tutorial tick. Returns False when there are no
+    teams or any team has not yet populated progress, so a fresh tutorial never
+    exits before the players have actually scrolled. A small epsilon absorbs
+    float rounding around the 100% endpoint.
+    """
+
+    if not teams:
+        return False
+    for st in teams.values():
+        progress = st.get("tutorial_progress")
+        if not isinstance(progress, list) or len(progress) < 6:
+            return False
+        if any(float(p) < 99.999 for p in progress[:6]):
+            return False
+    return True
+
+
 def _enter_stage(
     stage_state: dict[str, Any],
     teams: dict[str, dict],
@@ -207,6 +236,15 @@ def _enter_stage(
                 rewind.start_recording(
                     st.get("last_q"), now_s=float(now_ns) / 1e9
                 )
+    elif new_stage == "tutorial":
+        # Tutorial entry side effects (dict-only; the runtime loop owns the
+        # actual haptic reseat + bounds publishing). Every active team starts
+        # the scroll at zero progress and flags a one-shot dial reset so the
+        # per-team loop reseats each dial to 0 and installs the wide tutorial
+        # bounds on the first tutorial tick.
+        for st in teams.values():
+            st["tutorial_progress"] = [0.0] * 6
+            st["tutorial_reset_pending"] = True
     elif new_stage == "reset" and bool(game_cfg.get("rewind_enabled", False)):
         for st in teams.values():
             rewind = st.get("rewind")

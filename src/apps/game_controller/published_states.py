@@ -150,6 +150,11 @@ def _team_state_full_payload(
             "dial_vel_rad_s": team_state["last_dial_vel"],
             "connected": team_state["last_haptic_connected"],
             "board_loop_hz": team_state["last_haptic_loop_hz"],
+            # Per-player tutorial scroll progress (0..100%). Only meaningful
+            # during the tutorial stage; held at its last value otherwise.
+            "tutorial_progress_pct": [
+                float(v) for v in (team_state.get("tutorial_progress") or [0.0] * 6)
+            ],
             "bounds_min_rad": list(
                 team_state.get("current_haptic_bounds_min_rad")
                 or haptic_cfg["bounds_min_rad"]

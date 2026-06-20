@@ -167,6 +167,156 @@ def _publish_haptic_command(
     bus.publish(pub, f"cmd.haptic.{team}", env)
 
 
+def _tutorial_scroll_span_decideg(game_cfg: dict[str, Any]) -> tuple[float, float]:
+    """Return the tutorial scroll (start, end) dial positions in deci-degrees."""
+
+    start = float(game_cfg.get("tutorial_scroll_dial_start_decideg", 0.0))
+    end = float(game_cfg.get("tutorial_scroll_dial_end_decideg", -10000.0))
+    return start, end
+
+
+def _tutorial_detent_targets_rad(game_cfg: dict[str, Any]) -> list[float]:
+    """Return tutorial detent dial positions (radians, dial-space), sorted.
+
+    Detents are configured as progress percentages (``tutorial_detents_pct``).
+    Each percentage is mapped linearly onto the scroll span
+    ``[start .. end]`` (deci-degrees) and converted to radians for the haptic
+    bus (decideg -> deg -> rad).
+    """
+
+    start, end = _tutorial_scroll_span_decideg(game_cfg)
+    pct_list = game_cfg.get("tutorial_detents_pct") or []
+    out: list[float] = []
+    for pct in pct_list:
+        decideg = start + (end - start) * (float(pct) / 100.0)
+        out.append(math.radians(decideg / 10.0))
+    return sorted(out)
+
+
+def _tutorial_bounds_rad(game_cfg: dict[str, Any]) -> tuple[list[float], list[float]]:
+    """Return the constant tutorial soft bounds as (min[6], max[6]) radians."""
+
+    bmin = float(game_cfg.get("tutorial_scroll_dial_bound_min_decideg", -10010.0))
+    bmax = float(game_cfg.get("tutorial_scroll_dial_bound_max_decideg", 10.0))
+    return (
+        [math.radians(bmin / 10.0)] * 6,
+        [math.radians(bmax / 10.0)] * 6,
+    )
+
+
+def _tutorial_progress_pct(dial_pos_rad: float, game_cfg: dict[str, Any]) -> float:
+    """Map a measured dial position (radians) to tutorial progress 0..100%.
+
+    Progress is the fraction travelled from the scroll start to the scroll end,
+    in dial-space, clamped to ``[0, 100]``. The flipped scroll direction is
+    handled implicitly because the span end is negative.
+    """
+
+    start, end = _tutorial_scroll_span_decideg(game_cfg)
+    span = end - start
+    if abs(span) < 1e-9:
+        return 0.0
+    decideg = math.degrees(float(dial_pos_rad)) * 10.0
+    frac = (decideg - start) / span
+    return max(0.0, min(100.0, frac * 100.0))
+
+
+def _nearest_detent_rad(value_rad: float, detents_rad: list[float]) -> float:
+    """Return the detent (radians) closest to ``value_rad``.
+
+    Used to "snap" the haptic tracking target to the nearest tutorial detent
+    every tick so the player feels a lock at each step while still being able
+    to push between detents.
+    """
+
+    if not detents_rad:
+        return value_rad
+    return min(detents_rad, key=lambda d: abs(d - value_rad))
+
+
+def _publish_tutorial_haptic_command(
+    pub: zmq.Socket,
+    producer: str,
+    team: str,
+    targets_dial_rad: list[float],
+    bounds_min_rad: list[float],
+    bounds_max_rad: list[float],
+) -> None:
+    """Publish a tutorial haptic command with explicit dial-space targets.
+
+    Unlike :func:`_publish_haptic_command` (which derives the target from the
+    robot pose), the tutorial uses snapped detent positions as the tracking
+    target and the wide, constant tutorial bounds.
+    """
+
+    env = bus.make_envelope(producer)
+    env.update(
+        {
+            "team": team,
+            "tracking_target_rad": [float(v) for v in targets_dial_rad[:6]],
+            "bounds_min_rad": [float(v) for v in bounds_min_rad[:6]],
+            "bounds_max_rad": [float(v) for v in bounds_max_rad[:6]],
+        }
+    )
+    bus.publish(pub, f"cmd.haptic.{team}", env)
+
+
+def _tick_tutorial_team(
+    pub: zmq.Socket,
+    producer: str,
+    team: str,
+    state: dict[str, Any],
+    haptic_cfg: dict[str, Any],
+    game_cfg: dict[str, Any],
+) -> None:
+    """Drive one team's dials through the tutorial scroll-with-detents.
+
+    On the first tutorial tick (``tutorial_reset_pending``) the dial logical
+    position is reset to zero (firmware ``R`` command, no physical motion) and
+    the constant tutorial bounds are installed so the dial can travel the full
+    scroll span. Every tick the measured dial position is mapped to per-player
+    progress (0..100%, cached on ``tutorial_progress``) and the haptic tracking
+    target is snapped to the nearest configured detent.
+
+    ``play_sync.enabled`` doubles as the "haptic_io is real for this team" flag;
+    the reseat is only published for real haptics, but progress is always
+    computed so the LEDs / dashboard visualize sim runs too.
+    """
+
+    detents = _tutorial_detent_targets_rad(game_cfg)
+    bounds_min, bounds_max = _tutorial_bounds_rad(game_cfg)
+    haptic_real = bool(state.get("play_sync", {}).get("enabled", False))
+
+    if bool(state.get("tutorial_reset_pending", False)):
+        state["tutorial_progress"] = [0.0] * 6
+        state["current_haptic_bounds_min_rad"] = list(bounds_min)
+        state["current_haptic_bounds_max_rad"] = list(bounds_max)
+        if haptic_real:
+            _publish_haptic_reseat(
+                pub,
+                producer,
+                team,
+                current_pos_robot_rad=[0.0] * 6,
+                current_pos_dial_rad=[0.0] * 6,
+            )
+        state["tutorial_reset_pending"] = False
+
+    measured = list(state.get("last_dial") or [0.0] * 6)[:6]
+    while len(measured) < 6:
+        measured.append(0.0)
+
+    state["tutorial_progress"] = [
+        _tutorial_progress_pct(measured[i], game_cfg) for i in range(6)
+    ]
+
+    targets = [_nearest_detent_rad(measured[i], detents) for i in range(6)]
+    bounds_min = list(state.get("current_haptic_bounds_min_rad") or bounds_min)
+    bounds_max = list(state.get("current_haptic_bounds_max_rad") or bounds_max)
+    _publish_tutorial_haptic_command(
+        pub, producer, team, targets, bounds_min, bounds_max
+    )
+
+
 def _reset_haptic_bounds_to_static(
     state: dict[str, Any], haptic_cfg: dict[str, Any]
 ) -> None:
