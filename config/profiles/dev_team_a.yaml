@@ -104,6 +104,9 @@ tuning:
     rewind_enabled: true
     rewind_speed_fraction: 0.60     # 60% of configured per-joint maximum velocity.
     rewind_arrival_tolerance_deg: 0.5
+    conclusion_speed_fraction: 0.60 # Conclusion show moves at 60% of per-axis max.
+    conclusion_cert_budget_s: 2.0   # Budget to certify the show path collision-free.
+    conclusion_collision_step_deg: 1.0  # Densify show-path edges at <=1 degree.
 
   rewind_shortcut:
     enabled: true

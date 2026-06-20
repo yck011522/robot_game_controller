@@ -18,7 +18,6 @@ shared constants / predicates from ``context`` and is imported by ``__main__``.
 from __future__ import annotations
 
 import math
-import time
 from typing import Any
 
 from apps.game_controller.context import (
@@ -28,18 +27,37 @@ from apps.game_controller.context import (
 )
 
 # --- Conclusion scoring sequence timing ------------------------------------
-# All are placeholder waits standing in for future robot motions; tune as the
-# real conclusion trajectories land. Units are seconds.
-# Pause after entering conclusion, before the first bucket is summed.
+# Hold durations (seconds) for the non-motion phases of the conclusion show.
+# Motion phases are NOT timed here: they advance when the per-team SegmentMover
+# (driven in ``__main__``) reports arrival, so their duration follows the
+# retimed trajectory and ``conclusion_speed_fraction`` rather than a constant.
+#
+# Every duration below is measured against a pause-aware clock
+# (``conclusion_phase_elapsed_s``) that only accumulates ``dt`` on ticks where
+# the game is actually running, so an e-stop / soft-pause freezes the show.
+#
+# Pause after entering conclusion, before the first bucket-look move. This also
+# overlaps the background collision-certification window owned by ``__main__``.
 CONCLUSION_INITIAL_PAUSE_S = 1.0
-# Stand-in wait for the "move to bucket look pose" motion.
-CONCLUSION_BUCKET_LOOK_MOTION_WAIT_S = 5.0
-# Short pause after a bucket empties (door open) before the next bucket.
+# Short pause after a bucket empties (door open) before moving to the next one.
 CONCLUSION_BUCKET_EMPTY_PAUSE_S = 0.5
-# Stand-in wait for the celebration motion after the final bucket opens.
-CONCLUSION_CELEBRATION_MOTION_WAIT_S = 5.0
-# Pause on the announcement pose before resolving winner / loser poses.
-CONCLUSION_ANNOUNCEMENT_PAUSE_S = 1.0
+# Pause on the announcement pose before the winner / loser pose is resolved.
+CONCLUSION_ANNOUNCEMENT_PAUSE_S = 0.5
+# Hold on the winner / loser pose before returning to the begin pose.
+CONCLUSION_WINNER_POSE_HOLD_S = 3.0
+
+# Conclusion phases whose ``conclusion_phase`` value means "the winner pose has
+# been (or is about to be) resolved". The stage machine computes the winner once
+# every team has reached one of these, so the per-team winner/loser move can read
+# ``stage_state["winner_team"]``.
+_CONCLUSION_ANNOUNCEMENT_READY = frozenset(
+    {
+        "announcement_pause",
+        "move_to_winner_pose",
+        "winner_pose_hold",
+        "move_to_begin",
+    }
+)
 
 
 def _tick_stage_state(
@@ -155,10 +173,9 @@ def _tick_stage_state(
     if stage == "conclusion":
         # Scripted scoring sequence advanced per-team in the main loop.
         # Not skippable; returns to idle once every team has finished.
-        announcement_ready = {"announcement_pose", "winner_pose"}
         if stage_state["winner_team"] is None and all(
             bool(st.get("conclusion_done", False))
-            or str(st.get("conclusion_phase")) in announcement_ready
+            or str(st.get("conclusion_phase")) in _CONCLUSION_ANNOUNCEMENT_READY
             for st in teams.values()
         ):
             stage_state["winner_team"] = _winner_team(teams)
@@ -285,7 +302,10 @@ def _seed_play_teams(teams: dict[str, dict], game_cfg: dict[str, Any]) -> None:
         st["conclusion_target_pose_name"] = None
         st["conclusion_target_pose_deg"] = None
         st["conclusion_bucket_open_triggered"] = False
-        st["conclusion_phase_started_mono_ns"] = None
+        st["conclusion_phase_elapsed_s"] = 0.0
+        st["conclusion_move_pending"] = False
+        st["conclusion_move_arrived"] = False
+        st["conclusion_hardstopped"] = False
         st["conclusion_done"] = False
         st["conclusion_sum_remainder_units"] = 0.0
 
@@ -528,17 +548,82 @@ def _update_stage_pause_tracking(
 
 
 def _enter_conclusion(state: dict[str, Any], now_ns: int) -> None:
+    """Initialise one team's conclusion show state on entering the stage.
+
+    Args:
+        state: The per-team state dict (mutated in place).
+        now_ns: Monotonic clock; accepted for signature symmetry with the other
+            stage-entry helpers (the conclusion show is driven by an accumulated
+            ``dt`` clock, not ``now_ns``, so it is not stored here).
+    """
+
     state["bucket_values"] = [max(0, int(round(v))) for v in state["bucket_values"]]
+    # Current show phase (see ``_tick_conclusion_team``); ``None`` once finished.
     state["conclusion_phase"] = "pause_before_sum"
+    # Which bucket (0-based) is currently being counted / looked at.
     state["conclusion_active_bucket_index"] = 0
+    # Name + degrees of the pose the active move targets (None when holding).
     state["conclusion_target_pose_name"] = None
     state["conclusion_target_pose_deg"] = None
+    # True for exactly the tick a bucket's door-open command is emitted.
     state["conclusion_bucket_open_triggered"] = False
-    state["conclusion_phase_started_mono_ns"] = now_ns
+    # Pause-aware clock: seconds spent in the current phase. Only advanced by
+    # ``dt`` on running ticks, so a pause freezes every conclusion timer.
+    state["conclusion_phase_elapsed_s"] = 0.0
+    # Handshake with ``__main__``'s SegmentMover: set True to ask it to (re)seed
+    # a move toward ``conclusion_target_pose_*``; ``__main__`` clears it.
+    state["conclusion_move_pending"] = False
+    # Set True by ``__main__`` once the active move's mover reports arrival.
+    state["conclusion_move_arrived"] = False
+    # True once the whole show has finished (lets the stage machine return idle).
     state["conclusion_done"] = False
     state["summed_score"] = 0
     state["score"] = int(sum(state["bucket_values"]))
+    # Fractional score carried between sum ticks (units < 1 not yet credited).
     state["conclusion_sum_remainder_units"] = 0.0
+
+
+def _request_conclusion_move(
+    state: dict[str, Any],
+    phase: str,
+    pose_name: str,
+    pose_cfg: dict[str, list[float]],
+) -> None:
+    """Switch to a motion phase and ask ``__main__`` to drive the SegmentMover.
+
+    Sets the target pose, raises the ``conclusion_move_pending`` handshake, and
+    resets the pause-aware phase clock + arrival flag.
+
+    Args:
+        state: Per-team state dict (mutated in place).
+        phase: The motion phase name to enter (e.g. ``"move_to_bucket_pose"``).
+        pose_name: Key into ``pose_cfg`` for the goal pose (degrees).
+        pose_cfg: This team's ``robot_show_poses`` mapping (name -> degrees).
+    """
+
+    state["conclusion_phase"] = phase
+    state["conclusion_target_pose_name"] = pose_name
+    state["conclusion_target_pose_deg"] = pose_cfg.get(
+        pose_name, list(DEFAULT_LOOK_POSE_DEG)
+    )
+    state["conclusion_move_pending"] = True
+    state["conclusion_move_arrived"] = False
+    state["conclusion_phase_elapsed_s"] = 0.0
+
+
+def _enter_hold_phase(state: dict[str, Any], phase: str) -> None:
+    """Switch to a non-motion (hold/count) phase and reset its phase clock."""
+
+    state["conclusion_phase"] = phase
+    state["conclusion_phase_elapsed_s"] = 0.0
+
+
+# Bucket index -> "look at bucket" pose name in ``robot_show_poses``.
+_BUCKET_LOOK_POSE_NAMES = (
+    "robot_lookb1_pose",
+    "robot_lookb2_pose",
+    "robot_lookb3_pose",
+)
 
 
 def _tick_conclusion_team(
@@ -550,37 +635,62 @@ def _tick_conclusion_team(
     *,
     bucket_command_fn=None,
 ) -> None:
-    """Advance one team's conclusion scoring sequence and bucket commands."""
+    """Advance one team's conclusion scoring + choreography by one tick.
+
+    Show sequence (per team):
+      pause_before_sum -> for each bucket: move_to_bucket_pose -> sum_bucket ->
+      empty_bucket -> ... -> move_to_announcement -> announcement_pause ->
+      move_to_winner_pose -> winner_pose_hold -> move_to_begin -> done.
+
+    Motion phases (``move_*``) set ``conclusion_move_pending`` and wait for
+    ``__main__`` to report ``conclusion_move_arrived``; the SegmentMover owns
+    their duration. Hold phases use the pause-aware ``conclusion_phase_elapsed_s``
+    clock advanced below.
+
+    Args:
+        state: Per-team state dict (mutated in place).
+        dt: Seconds elapsed since the previous running tick. Only added to the
+            phase clock, so paused ticks (which never call this) never advance it.
+        game_cfg: Game config; uses ``sum_score_rate_unit_per_s`` (points/sec
+            the buckets count down at).
+        pose_cfg: This team's ``robot_show_poses`` mapping (name -> degrees).
+        stage_state: Shared stage state; read ``winner_team`` to pick win/lose.
+        bucket_command_fn: Optional callback ``(action, *, team, bucket_number,
+            reason)`` used to open a bucket door when its count reaches zero.
+    """
 
     phase = state.get("conclusion_phase")
     if phase is None:
         return
 
-    now_ns = time.perf_counter_ns()
-    phase_started_ns = int(state.get("conclusion_phase_started_mono_ns") or now_ns)
-    phase_elapsed_s = (now_ns - phase_started_ns) / 1e9
+    # Pause-aware clock: only running ticks reach this function, so summing dt
+    # here naturally freezes every timer during an e-stop / soft-pause and keeps
+    # both teams (advanced with the same dt each loop) phase-aligned.
+    elapsed_s = float(state.get("conclusion_phase_elapsed_s", 0.0)) + max(0.0, float(dt))
+    state["conclusion_phase_elapsed_s"] = elapsed_s
 
     if phase == "pause_before_sum":
-        if phase_elapsed_s >= CONCLUSION_INITIAL_PAUSE_S:
-            _set_bucket_pose_phase(state, now_ns, pose_cfg)
+        if elapsed_s >= CONCLUSION_INITIAL_PAUSE_S:
+            bucket_index = int(state.get("conclusion_active_bucket_index") or 0)
+            pose_name = _BUCKET_LOOK_POSE_NAMES[
+                min(bucket_index, len(_BUCKET_LOOK_POSE_NAMES) - 1)
+            ]
+            _request_conclusion_move(state, "move_to_bucket_pose", pose_name, pose_cfg)
         return
 
     if phase == "move_to_bucket_pose":
-        # Temporary stand-in for the future conclusion robot motion that
-        # will move to the active bucket look pose. Do not block the GC
-        # loop here; this phase simply lets state.full keep publishing
-        # while we simulate waiting for that motion to finish.
-        # TODO(conclusion-motion): replace this timer with completion from
-        # the free-motion planner / robot trajectory executor.
-        if phase_elapsed_s >= CONCLUSION_BUCKET_LOOK_MOTION_WAIT_S:
-            state["conclusion_phase"] = "sum_bucket"
-            state["conclusion_phase_started_mono_ns"] = now_ns
+        # Advance only once the real robot move has finished (arrival reported by
+        # __main__). Duration follows the retimed trajectory, not a timer.
+        if bool(state.get("conclusion_move_arrived")):
+            _enter_hold_phase(state, "sum_bucket")
         return
 
     if phase == "sum_bucket":
         bucket_index = int(state.get("conclusion_active_bucket_index") or 0)
         if bucket_index >= len(state["bucket_values"]):
-            _set_announcement_phase(state, now_ns, pose_cfg)
+            _request_conclusion_move(
+                state, "move_to_announcement", "robot_announcement_pose", pose_cfg
+            )
             return
 
         remaining = int(state["bucket_values"][bucket_index])
@@ -594,9 +704,8 @@ def _tick_conclusion_team(
         state["score"] = int(sum(state["bucket_values"]))
         if state["bucket_values"][bucket_index] <= 0:
             state["bucket_values"][bucket_index] = 0
-            state["conclusion_phase"] = "empty_bucket"
+            _enter_hold_phase(state, "empty_bucket")
             state["conclusion_bucket_open_triggered"] = True
-            state["conclusion_phase_started_mono_ns"] = now_ns
             state["conclusion_sum_remainder_units"] = 0.0
             if bucket_command_fn is not None:
                 bucket_command_fn(
@@ -608,97 +717,68 @@ def _tick_conclusion_team(
         return
 
     if phase == "empty_bucket":
-        if phase_elapsed_s >= CONCLUSION_BUCKET_EMPTY_PAUSE_S:
+        if elapsed_s >= CONCLUSION_BUCKET_EMPTY_PAUSE_S:
             next_bucket_index = (
                 int(state.get("conclusion_active_bucket_index") or 0) + 1
             )
             state["conclusion_active_bucket_index"] = next_bucket_index
             state["conclusion_bucket_open_triggered"] = False
             if next_bucket_index >= len(state["bucket_values"]):
-                _set_celebration_phase(state, now_ns, pose_cfg)
-            else:
-                _set_bucket_pose_phase(state, now_ns, pose_cfg)
-        return
-
-    if phase == "celebration_motion":
-        # Temporary stand-in for the future celebration robot motion that
-        # happens after the final bucket opens. Keep this non-blocking so
-        # GameController continues publishing state while the fake motion
-        # duration elapses.
-        # TODO(conclusion-motion): replace this timer with completion from
-        # the celebration trajectory executor.
-        if phase_elapsed_s >= CONCLUSION_CELEBRATION_MOTION_WAIT_S:
-            _set_announcement_phase(state, now_ns, pose_cfg)
-        return
-
-    if phase == "announcement_pose":
-        if phase_elapsed_s >= CONCLUSION_ANNOUNCEMENT_PAUSE_S:
-            winner_team = stage_state.get("winner_team")
-            if winner_team is None:
-                return
-            state["conclusion_phase"] = "winner_pose"
-            if winner_team == "tie":
-                state["conclusion_target_pose_name"] = "robot_win_pose"
-            else:
-                state["conclusion_target_pose_name"] = (
-                    "robot_win_pose"
-                    if state["team"] == winner_team
-                    else "robot_lose_pose"
+                _request_conclusion_move(
+                    state, "move_to_announcement", "robot_announcement_pose", pose_cfg
                 )
-            state["conclusion_target_pose_deg"] = pose_cfg.get(
-                state["conclusion_target_pose_name"], list(DEFAULT_LOOK_POSE_DEG)
-            )
-            state["conclusion_phase_started_mono_ns"] = now_ns
-            # TODO(conclusion-motion): replace this pose bookkeeping with a
-            # collision-free motion plan once the dedicated planner lands.
+            else:
+                pose_name = _BUCKET_LOOK_POSE_NAMES[
+                    min(next_bucket_index, len(_BUCKET_LOOK_POSE_NAMES) - 1)
+                ]
+                _request_conclusion_move(
+                    state, "move_to_bucket_pose", pose_name, pose_cfg
+                )
         return
 
-    if phase == "winner_pose":
-        state["conclusion_done"] = True
+    if phase == "move_to_announcement":
+        if bool(state.get("conclusion_move_arrived")):
+            _enter_hold_phase(state, "announcement_pause")
+        return
 
+    if phase == "announcement_pause":
+        if elapsed_s < CONCLUSION_ANNOUNCEMENT_PAUSE_S:
+            return
+        winner_team = stage_state.get("winner_team")
+        if winner_team is None:
+            # Wait for the stage machine to resolve the winner (it does so once
+            # every team has reached the announcement-ready phase set).
+            return
+        if winner_team == "tie":
+            pose_name = "robot_win_pose"
+        else:
+            pose_name = (
+                "robot_win_pose"
+                if state["team"] == winner_team
+                else "robot_lose_pose"
+            )
+        _request_conclusion_move(state, "move_to_winner_pose", pose_name, pose_cfg)
+        return
 
-def _set_bucket_pose_phase(
-    state: dict[str, Any], now_ns: int, pose_cfg: dict[str, list[float]]
-) -> None:
-    bucket_index = int(state.get("conclusion_active_bucket_index") or 0)
-    pose_names = ["robot_lookb1_pose", "robot_lookb2_pose", "robot_lookb3_pose"]
-    pose_name = pose_names[min(bucket_index, len(pose_names) - 1)]
-    state["conclusion_phase"] = "move_to_bucket_pose"
-    state["conclusion_target_pose_name"] = pose_name
-    state["conclusion_target_pose_deg"] = pose_cfg.get(
-        pose_name, list(DEFAULT_LOOK_POSE_DEG)
-    )
-    state["conclusion_phase_started_mono_ns"] = now_ns
-    # TODO(conclusion-motion): send the collision-free move to this
-    # bucket-look pose here. Until that planner exists,
-    # move_to_bucket_pose waits for CONCLUSION_BUCKET_LOOK_MOTION_WAIT_S.
+    if phase == "move_to_winner_pose":
+        if bool(state.get("conclusion_move_arrived")):
+            _enter_hold_phase(state, "winner_pose_hold")
+        return
 
+    if phase == "winner_pose_hold":
+        if elapsed_s >= CONCLUSION_WINNER_POSE_HOLD_S:
+            _request_conclusion_move(
+                state, "move_to_begin", "robot_begin_pose", pose_cfg
+            )
+        return
 
-def _set_celebration_phase(
-    state: dict[str, Any], now_ns: int, pose_cfg: dict[str, list[float]]
-) -> None:
-    """Enter the temporary post-bucket celebration phase."""
-
-    state["conclusion_phase"] = "celebration_motion"
-    state["conclusion_target_pose_name"] = "robot_celebration_pose"
-    state["conclusion_target_pose_deg"] = pose_cfg.get(
-        "robot_celebration_pose", list(DEFAULT_LOOK_POSE_DEG)
-    )
-    state["conclusion_phase_started_mono_ns"] = now_ns
-    # TODO(conclusion-motion): send the celebration trajectory here. Until
-    # that exists, celebration_motion waits for
-    # CONCLUSION_CELEBRATION_MOTION_WAIT_S.
-
-
-def _set_announcement_phase(
-    state: dict[str, Any], now_ns: int, pose_cfg: dict[str, list[float]]
-) -> None:
-    state["conclusion_phase"] = "announcement_pose"
-    state["conclusion_target_pose_name"] = "robot_announcement_pose"
-    state["conclusion_target_pose_deg"] = pose_cfg.get(
-        "robot_announcement_pose", list(DEFAULT_LOOK_POSE_DEG)
-    )
-    state["conclusion_phase_started_mono_ns"] = now_ns
+    if phase == "move_to_begin":
+        if bool(state.get("conclusion_move_arrived")):
+            state["conclusion_phase"] = None
+            state["conclusion_target_pose_name"] = None
+            state["conclusion_target_pose_deg"] = None
+            state["conclusion_done"] = True
+        return
 
 
 def _winner_team(teams: dict[str, dict]) -> str | None:

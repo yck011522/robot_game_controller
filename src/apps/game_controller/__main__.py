@@ -20,6 +20,7 @@ from core.proc import Proc, banner  # noqa: E402
 from subsystems.jogging.in_process import InProcessPlanner  # noqa: E402
 from subsystems.rewind.in_process import RewindController  # noqa: E402
 from subsystems.rewind.shortcut import ShortcutSettings  # noqa: E402
+from subsystems.motion_planning.trajectory_timing import SegmentMover  # noqa: E402
 from apps.game_controller.batch_validation import (  # noqa: E402
     BatchValidationSession,
     batch_validation_settings,
@@ -39,6 +40,11 @@ from apps.game_controller.context import (  # noqa: E402
 )
 from apps.game_controller.context import (  # noqa: E402
     DEFAULT_BUCKET_VALUES,
+)
+from apps.game_controller.conclusion_motion import (  # noqa: E402
+    ConclusionCertifier,
+    build_conclusion_team_edges,
+    drive_conclusion_team_motion,
 )
 from apps.game_controller.haptics import (  # noqa: E402
     _begin_play_sync,
@@ -159,6 +165,16 @@ def main(argv: list[str] | None = None) -> int:
         and collision_worker_count > 0
     )
 
+    # One-shot background certifier for the fixed conclusion show path. Started
+    # on entering conclusion (below) and read by the per-team motion driver.
+    conclusion_certifier = ConclusionCertifier(
+        collision_enabled=collision_enabled,
+        collision_step_rad=math.radians(game_cfg["conclusion_collision_step_deg"]),
+        collision_batch_size=shortcut_cfg["collision_batch_size"],
+        worker_limit=max(1, collision_worker_count),
+        budget_s=game_cfg["conclusion_cert_budget_s"],
+    )
+
     # Per-team state. P2 builds only `a`; the structure generalizes.
     teams: dict[str, dict] = {}
     team_count = max(1, len(active_teams))
@@ -261,7 +277,21 @@ def main(argv: list[str] | None = None) -> int:
             "conclusion_target_pose_name": None,
             "conclusion_target_pose_deg": None,
             "conclusion_bucket_open_triggered": False,
-            "conclusion_phase_started_mono_ns": None,
+            # Pause-aware seconds-in-phase clock for the conclusion show.
+            "conclusion_phase_elapsed_s": 0.0,
+            # Handshake flags with the conclusion motion driver: request a move
+            # / report its arrival back to the stage phase machine.
+            "conclusion_move_pending": False,
+            "conclusion_move_arrived": False,
+            # True once this team's conclusion path failed certification and was
+            # hard-stopped (logged once).
+            "conclusion_hardstopped": False,
+            # Single-segment straight-line mover that drives every conclusion
+            # show motion at conclusion_speed_fraction of the per-axis max.
+            "conclusion_mover": SegmentMover(
+                max_velocity_rad_s=max_velocity_rad_s,
+                speed_fraction=game_cfg["conclusion_speed_fraction"],
+            ),
             "conclusion_done": False,
             "conclusion_sum_remainder_units": 0.0,
             "last_tick_t": time.perf_counter(),
@@ -648,6 +678,13 @@ def main(argv: list[str] | None = None) -> int:
                         stage_state,
                         bucket_command_fn=_publish_bucket_command,
                     )
+                    # Motion phases publish their own cmd.robot.target via the
+                    # SegmentMover; hold the measured pose only for hold phases
+                    # (and while blocked on collision certification).
+                    if drive_conclusion_team_motion(
+                        pub, p.proc, team, st, dt, conclusion_certifier
+                    ):
+                        continue
                 _publish_hold_current_pose(pub, p.proc, team, st)
                 continue
 
@@ -839,6 +876,27 @@ def main(argv: list[str] | None = None) -> int:
                 )
             if batch_session is not None:
                 batch_session.mark_play_started()
+        if stage_before_tick != "conclusion" and stage_state["stage"] == "conclusion":
+            # Entered conclusion this tick. Kick off the one-shot background
+            # certification of every team's fixed show path, starting from each
+            # team's measured pose (where reset left the arm). The initial
+            # conclusion pause overlaps this so motion only starts once each
+            # path is certified collision-free (or the team is hard-stopped).
+            for team, st in teams.items():
+                st["conclusion_hardstopped"] = False
+            conclusion_certifier.start(
+                {
+                    team: build_conclusion_team_edges(
+                        list(st["last_q"])
+                        if isinstance(st.get("last_q"), list)
+                        else [math.radians(v) for v in robot_show_poses.get(team, {}).get(
+                            "robot_begin_pose", [0.0] * 6
+                        )[:6]],
+                        robot_show_poses.get(team, {}),
+                    )
+                    for team, st in teams.items()
+                }
+            )
         if stage_before_tick == "conclusion" and stage_state["stage"] != "conclusion":
             # Leaving conclusion (now conclusion -> idle): close any buckets
             # opened during scoring and tare the load cells for the next game.

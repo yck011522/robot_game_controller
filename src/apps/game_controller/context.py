@@ -190,6 +190,30 @@ def _game_config(node: Any) -> dict[str, Any]:
         "rewind_arrival_tolerance_deg": _coerce_positive_float(
             data.get("rewind_arrival_tolerance_deg"), 0.5
         ),
+        # conclusion_speed_fraction: fraction (0, 1] of each configured per-joint
+        # maximum velocity used to retime every conclusion show move (look-at-
+        # bucket, win/lose, return-to-begin). This is the single speed knob for
+        # the end-of-game choreography. 0.60 = move at 60% of the per-axis max.
+        # Raise for a snappier show, lower for a calmer one.
+        "conclusion_speed_fraction": min(
+            1.0,
+            _coerce_positive_float(data.get("conclusion_speed_fraction"), 0.60),
+        ),
+        # conclusion_cert_budget_s: wall-clock budget for the one-shot background
+        # collision certification of the fixed conclusion pose-to-pose path,
+        # started on entering conclusion. Certification must finish within this
+        # many seconds (it overlaps the initial pause); a team whose path is not
+        # certified collision-free in time is hard-stopped (holds its pose and is
+        # marked done). Tune up if the collision pool is slow / heavily loaded.
+        "conclusion_cert_budget_s": _coerce_positive_float(
+            data.get("conclusion_cert_budget_s"), 2.0
+        ),
+        # conclusion_collision_step_deg: maximum joint-space increment (degrees)
+        # between collision samples when densifying each conclusion path edge for
+        # certification. Smaller = finer (safer but slower) checking.
+        "conclusion_collision_step_deg": _coerce_positive_float(
+            data.get("conclusion_collision_step_deg"), 1.0
+        ),
         # idle_timeout_s: idle -> daydreaming if no significant dial movement
         # for this long (seconds).
         "idle_timeout_s": _coerce_positive_float(data.get("idle_timeout_s"), 60.0),
@@ -306,10 +330,10 @@ def _coerce_deg_pose(value: Any, fallback: list[float]) -> list[float]:
 
 def _default_pose_map() -> dict[str, list[float]]:
     return {
+        "robot_begin_pose": list(DEFAULT_LOOK_POSE_DEG),
         "robot_lookb1_pose": list(DEFAULT_LOOK_POSE_DEG),
         "robot_lookb2_pose": list(DEFAULT_LOOK_POSE_DEG),
         "robot_lookb3_pose": list(DEFAULT_LOOK_POSE_DEG),
-        "robot_celebration_pose": list(DEFAULT_LOOK_POSE_DEG),
         "robot_announcement_pose": list(DEFAULT_LOOK_POSE_DEG),
         "robot_win_pose": list(DEFAULT_LOOK_POSE_DEG),
         "robot_lose_pose": list(DEFAULT_LOOK_POSE_DEG),

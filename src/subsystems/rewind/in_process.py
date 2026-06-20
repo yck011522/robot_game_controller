@@ -12,7 +12,6 @@ configured velocity limits; recorded timing never affects robot motion.
 
 from __future__ import annotations
 
-import bisect
 import math
 import secrets
 import threading
@@ -24,6 +23,10 @@ from compas_fab.robots import Duration, JointTrajectory, JointTrajectoryPoint
 from compas_robots.model import Joint
 
 from subsystems.motion_planning.collision_client import CollisionWorkerClient
+from subsystems.motion_planning.trajectory_timing import (
+    retime_path,
+    sample_path_with_index,
+)
 from subsystems.rewind.shortcut import (
     JointTrajectoryShortcutter,
     ShortcutResult,
@@ -205,27 +208,21 @@ class RewindController:
 
         self._installed_rewind_path = [list(q) for q in path_rad]
         self._rewind_motion_started_s = time.perf_counter()
-        points: list[JointTrajectoryPoint] = []
-        elapsed_s = 0.0
-        previous_q: list[float] | None = None
-        rewind_limits = [
-            max(1e-9, velocity * self.speed_fraction)
-            for velocity in self.max_velocity_rad_s
+        # Velocity-retime the geometric path with the shared timing helper so
+        # the rewind controller and the conclusion SegmentMover use one formula.
+        self._rewind_times_s = retime_path(
+            path_rad, self.max_velocity_rad_s, self.speed_fraction
+        )
+        points = [
+            _point(q, elapsed_s)
+            for q, elapsed_s in zip(path_rad, self._rewind_times_s)
         ]
-        for q in path_rad:
-            if previous_q is not None:
-                elapsed_s += max(
-                    abs(q[axis] - previous_q[axis]) / rewind_limits[axis]
-                    for axis in range(_AXES)
-                )
-            points.append(_point(q, elapsed_s))
-            previous_q = q
+        elapsed_s = self._rewind_times_s[-1] if self._rewind_times_s else 0.0
 
         self.rewind_trajectory = JointTrajectory(
             trajectory_points=points,
             joint_names=list(_JOINT_NAMES),
         )
-        self._rewind_times_s = [point.time_from_start.seconds for point in points]
         self._rewind_elapsed_s = 0.0
         self._current_index = 0
         self._max_error_rad = None
@@ -615,27 +612,11 @@ class RewindController:
         """Linearly interpolate the velocity-retimed trajectory at one time."""
 
         points = list(self.rewind_trajectory.points)
-        if elapsed_s <= 0.0 or len(points) == 1:
-            self._current_index = 0
-            return list(points[0].joint_values[:_AXES])
-        if elapsed_s >= self._rewind_times_s[-1]:
-            self._current_index = len(points) - 1
-            return list(points[-1].joint_values[:_AXES])
-
-        upper = bisect.bisect_right(self._rewind_times_s, elapsed_s)
-        lower = max(0, upper - 1)
-        self._current_index = lower
-        t0 = self._rewind_times_s[lower]
-        t1 = self._rewind_times_s[upper]
-        q0 = points[lower].joint_values
-        q1 = points[upper].joint_values
-        if t1 <= t0:
-            return list(q1[:_AXES])
-        alpha = (elapsed_s - t0) / (t1 - t0)
-        return [
-            float(q0[axis]) + alpha * (float(q1[axis]) - float(q0[axis]))
-            for axis in range(_AXES)
-        ]
+        path = [list(point.joint_values[:_AXES]) for point in points]
+        q, self._current_index = sample_path_with_index(
+            path, self._rewind_times_s, elapsed_s
+        )
+        return q
 
 
 def _empty_trajectory() -> JointTrajectory:
