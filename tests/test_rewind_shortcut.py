@@ -52,11 +52,16 @@ class RewindShortcutTests(unittest.TestCase):
             """Return the configured synthetic verdict for every candidate."""
 
             del batch_size, max_in_flight, deadline_s
+            counts = [len(edge) for edge in edges]
             return ParallelEdgeCheckResult(
                 free=[collision_free] * len(edges),
-                configs_sent=sum(len(edge) for edge in edges),
+                configs_sent=sum(counts),
                 batches_sent=len(edges),
                 compute_ms=1.0,
+                planned_configs_by_edge=counts,
+                dispatched_configs_by_edge=counts,
+                completed_configs_by_edge=counts,
+                logical_checked_configs_by_edge=counts,
             )
 
         optimizer = JointTrajectoryShortcutter(
@@ -177,6 +182,8 @@ class ParallelEdgeSchedulerTests(unittest.TestCase):
         )
 
         self.assertEqual(result.free, [False, True])
+        self.assertEqual(result.planned_configs_by_edge, [2, 2])
+        self.assertEqual(result.logical_checked_configs_by_edge, [1, 2])
         flattened = [value for batch in transport.sent_first_axes for value in batch]
         self.assertNotIn(98.0, flattened)
         self.assertIn(2.0, flattened)

@@ -34,3 +34,7 @@ logs/trace/*.jsonl
 
 # Generated virtual rewind-shortcut validation reports
 logs/rewind_shortcut_validation*.log
+logs/rewind_batch_validation*.json
+logs/rewind_batch_validation*.jsonl
+logs/rewind_batch_*validation*.log
+logs/sim_trajectory_recording/

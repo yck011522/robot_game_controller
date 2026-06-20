@@ -384,7 +384,7 @@ def main(argv: list[str] | None = None) -> int:
         signal.signal(signal.SIGBREAK, _on_signal)  # type: ignore[attr-defined]
 
     ctx = zmq.Context.instance()
-    sub = bus.make_sub(ctx, topics=["heartbeat."])
+    sub = bus.make_sub(ctx, topics=["heartbeat.", "cmd.launcher.shutdown"])
     actual_sub = bus.make_sub(ctx, topics=["telem.robot.actual."])
     poller = zmq.Poller()
     poller.register(sub, zmq.POLLIN)
@@ -542,6 +542,13 @@ def main(argv: list[str] | None = None) -> int:
                         break
                     if topic.startswith("heartbeat."):
                         last_heartbeat_body[topic[len("heartbeat."):]] = body
+                    elif _is_graceful_shutdown_request(topic, body):
+                        print(
+                            "[launcher] graceful shutdown requested by "
+                            f"game_controller: {body.get('reason')}",
+                            flush=True,
+                        )
+                        stop["flag"] = True
                     _record_heartbeat(topic, body, last_recv_mono_ns, last_loop_hz,
                                        recv_window, seen_first)
 
@@ -576,6 +583,16 @@ def main(argv: list[str] | None = None) -> int:
         ctx.destroy(linger=0)
 
     return exit_code
+
+
+def _is_graceful_shutdown_request(topic: str, body: dict) -> bool:
+    """Accept shutdown only from the authoritative game-controller producer."""
+
+    return (
+        topic == "cmd.launcher.shutdown"
+        and body.get("producer") == "game_controller"
+        and body.get("reason") == "batch_validation_complete"
+    )
 
 
 def _resolve_profile_path(arg: str | None) -> Path | None:

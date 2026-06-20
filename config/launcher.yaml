@@ -12,9 +12,10 @@
 # default_profile: dev_bucket_integration
 # default_profile: dev_team_a
 # Default real Team A state-machine development profile.
-default_profile: dev_team_a_state_machine
-# default_profile: dev_team_a_rewind_test
+# default_profile: dev_team_a_state_machine
+default_profile: dev_team_a_rewind_test
 # default_profile: dev_team_a_protective_stop_test
+# default_profile: dev_random_trajectory_rewind_batch
 
 # Maps a logical process name to the python module the launcher spawns
 # for it. Default for anything not listed here is `apps.<name>`, which

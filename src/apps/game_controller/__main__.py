@@ -20,6 +20,10 @@ from core.proc import Proc, banner  # noqa: E402
 from subsystems.jogging.in_process import InProcessPlanner  # noqa: E402
 from subsystems.rewind.in_process import RewindController  # noqa: E402
 from subsystems.rewind.shortcut import ShortcutSettings  # noqa: E402
+from apps.game_controller.batch_validation import (  # noqa: E402
+    BatchValidationSession,
+    batch_validation_settings,
+)
 
 # Shared constants + profile/config construction live in the context module;
 # the stage machine + conclusion scoring live in the stages module; runtime
@@ -97,6 +101,10 @@ def main(argv: list[str] | None = None) -> int:
     shortcut_cfg = _rewind_shortcut_config(
         proc.profile.tuning.get("rewind_shortcut")
     )
+    batch_cfg = batch_validation_settings(
+        proc.profile.tuning.get("batch_validation")
+    )
+    batch_session = BatchValidationSession(batch_cfg) if batch_cfg.enabled else None
     haptic_cfg = _haptic_config(proc.profile.tuning.get("haptic"))
     safety_enabled = (
         proc.profile.subsystem_impl("safety_barrier_controller") is not None
@@ -163,7 +171,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         configured_seed = shortcut_cfg["random_seed"]
         team_seed = (
-            configured_seed + team_index if configured_seed is not None else None
+            batch_session.shortcut_seed(team_index)
+            if batch_session is not None
+            else configured_seed + team_index
+            if configured_seed is not None
+            else None
         )
         planner = InProcessPlanner(
             ctx=proc.ctx,
@@ -330,6 +342,45 @@ def main(argv: list[str] | None = None) -> int:
         time.perf_counter_ns(),
         reason="boot",
     )
+    if batch_session is not None and stage_state["stage"] == "play":
+        batch_session.mark_play_started()
+    last_batch_shutdown_s = 0.0
+
+    def _prepare_next_batch_game() -> None:
+        """Install the next game's seeds and notify synthetic haptic inputs."""
+
+        assert batch_session is not None
+        for team_index, (team, st) in enumerate(teams.items()):
+            gameplay_seed = batch_session.gameplay_seed(team_index)
+            shortcut_seed = batch_session.shortcut_seed(team_index)
+            st["rewind"].set_shortcut_seed(shortcut_seed)
+            env = bus.make_envelope(proc.proc)
+            env.update(
+                {
+                    "team": team,
+                    "game_index": batch_session.game_index,
+                    "seed": gameplay_seed,
+                }
+            )
+            bus.publish(pub, f"cmd.validation.seed.{team}", env)
+
+    def _publish_batch_shutdown() -> None:
+        """Repeat a sparse shutdown request until the launcher acknowledges by exit."""
+
+        nonlocal last_batch_shutdown_s
+        assert batch_session is not None
+        now_s = time.perf_counter()
+        if now_s - last_batch_shutdown_s < 0.2:
+            return
+        last_batch_shutdown_s = now_s
+        env = bus.make_envelope(proc.proc, with_wall=True)
+        env.update(
+            {
+                "reason": "batch_validation_complete",
+                "completed_games": batch_session.completed_game_count,
+            }
+        )
+        bus.publish(pub, "cmd.launcher.shutdown", env)
 
     def _publish_bucket_command(
         action: str,
@@ -670,7 +721,47 @@ def main(argv: list[str] | None = None) -> int:
         _update_stage_pause_tracking(stage_state, paused, now_ns)
         stage_before_tick = stage_state["stage"]
         if not paused:
-            _tick_stage_state(stage_state, teams, game_cfg, now_ns)
+            batch_rewind_complete = (
+                batch_session is not None
+                and stage_state["stage"] == "reset"
+                and bool(teams)
+                and all(st["rewind"].complete for st in teams.values())
+            )
+            if batch_rewind_complete and not batch_session.shutdown_requested:
+                completed_index = batch_session.game_index
+                start_next = batch_session.record_completed_game(teams)
+                print(
+                    f"[batch-validation] completed game={completed_index}/"
+                    f"{batch_cfg.game_count} report={batch_cfg.output_jsonl}",
+                    flush=True,
+                )
+                if start_next:
+                    _prepare_next_batch_game()
+                    _enter_stage(
+                        stage_state,
+                        teams,
+                        "tutorial",
+                        game_cfg,
+                        now_ns,
+                        reason="batch auto-restart",
+                    )
+                elif batch_cfg.shutdown_when_complete:
+                    batch_session.shutdown_requested = True
+                else:
+                    _enter_stage(
+                        stage_state,
+                        teams,
+                        "conclusion",
+                        game_cfg,
+                        now_ns,
+                        reason="batch complete",
+                    )
+            elif batch_session is None:
+                _tick_stage_state(stage_state, teams, game_cfg, now_ns)
+            elif not batch_session.shutdown_requested:
+                _tick_stage_state(stage_state, teams, game_cfg, now_ns)
+        if batch_session is not None and batch_session.shutdown_requested:
+            _publish_batch_shutdown()
         if stage_before_tick != "play" and stage_state["stage"] == "play":
             # Stage transitions happen after the per-team motion loop. Issue
             # the coordinate-reset command now, on that same transition tick;
@@ -684,6 +775,8 @@ def main(argv: list[str] | None = None) -> int:
                     haptic_cfg,
                     now=time.perf_counter(),
                 )
+            if batch_session is not None:
+                batch_session.mark_play_started()
         if stage_before_tick == "conclusion" and stage_state["stage"] != "conclusion":
             # Leaving conclusion (now conclusion -> idle): close any buckets
             # opened during scoring and tare the load cells for the next game.
@@ -711,10 +804,21 @@ def main(argv: list[str] | None = None) -> int:
                 countdown_s=countdown_s,
             )
         )
+        if batch_session is not None:
+            env["batch_validation"] = {
+                "enabled": True,
+                "game_index": batch_session.game_index,
+                "game_count": batch_cfg.game_count,
+                "gameplay_seed": batch_session.gameplay_seed(),
+                "shortcut_seed": batch_session.shortcut_seed(),
+                "shutdown_requested": batch_session.shutdown_requested,
+            }
         bus.publish(pub, "state.full", env)
         state_seq += 1
 
     def teardown(_: Proc) -> None:
+        if batch_session is not None:
+            batch_session.close()
         for st in teams.values():
             st["rewind"].close()
             st["planner"].close()

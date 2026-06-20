@@ -52,15 +52,21 @@ class ShortcutResult:
     original_point_count: int
     shortened_point_count: int
     attempts: int
+    collision_free_candidates: int
     accepted_shortcuts: int
     collision_rejections: int
     unresolved_candidates: int
+    planned_configurations: int
     configurations_sent: int
+    completed_configurations: int
     batches_sent: int
     worker_compute_ms: float
+    rejected_checked_fraction_sum: float
+    rejected_checked_fraction_count: int
     elapsed_s: float
     original_duration_s: float
     shortened_duration_s: float
+    shortened_dense_point_count: int
 
 
 class JointTrajectoryShortcutter:
@@ -109,15 +115,23 @@ class JointTrajectoryShortcutter:
             original_point_count=len(path),
             shortened_point_count=len(path),
             attempts=0,
+            collision_free_candidates=0,
             accepted_shortcuts=0,
             collision_rejections=0,
             unresolved_candidates=0,
+            planned_configurations=0,
             configurations_sent=0,
+            completed_configurations=0,
             batches_sent=0,
             worker_compute_ms=0.0,
+            rejected_checked_fraction_sum=0.0,
+            rejected_checked_fraction_count=0,
             elapsed_s=0.0,
             original_duration_s=original_duration_s,
             shortened_duration_s=original_duration_s,
+            shortened_dense_point_count=_dense_point_count(
+                path, self.settings.collision_step_rad
+            ),
         )
 
         while len(path) > 2 and time.perf_counter() < deadline_s:
@@ -139,6 +153,18 @@ class JointTrajectoryShortcutter:
             unresolved = result.unresolved_candidates + sum(
                 verdict is None for verdict in checks.free
             )
+            free_candidates = result.collision_free_candidates + sum(
+                verdict is True for verdict in checks.free
+            )
+            rejected_fractions = [
+                min(1.0, logical / planned)
+                for verdict, logical, planned in zip(
+                    checks.free,
+                    checks.logical_checked_configs_by_edge,
+                    checks.planned_configs_by_edge,
+                )
+                if verdict is False and planned > 0
+            ]
             valid = [
                 candidate
                 for candidate, verdict in zip(candidates, checks.free)
@@ -157,15 +183,33 @@ class JointTrajectoryShortcutter:
                 original_point_count=result.original_point_count,
                 shortened_point_count=len(path),
                 attempts=attempts,
+                collision_free_candidates=free_candidates,
                 accepted_shortcuts=accepted,
                 collision_rejections=collision_rejections,
                 unresolved_candidates=unresolved,
+                planned_configurations=(
+                    result.planned_configurations
+                    + sum(checks.planned_configs_by_edge)
+                ),
                 configurations_sent=result.configurations_sent + checks.configs_sent,
+                completed_configurations=(
+                    result.completed_configurations
+                    + sum(checks.completed_configs_by_edge)
+                ),
                 batches_sent=result.batches_sent + checks.batches_sent,
                 worker_compute_ms=result.worker_compute_ms + checks.compute_ms,
+                rejected_checked_fraction_sum=(
+                    result.rejected_checked_fraction_sum + sum(rejected_fractions)
+                ),
+                rejected_checked_fraction_count=(
+                    result.rejected_checked_fraction_count + len(rejected_fractions)
+                ),
                 elapsed_s=elapsed_s,
                 original_duration_s=original_duration_s,
                 shortened_duration_s=self._path_duration(path),
+                shortened_dense_point_count=_dense_point_count(
+                    path, self.settings.collision_step_rad
+                ),
             )
             if progress_fn is not None:
                 progress_fn(result)
@@ -178,6 +222,9 @@ class JointTrajectoryShortcutter:
             shortened_point_count=len(path),
             elapsed_s=time.perf_counter() - started_s,
             shortened_duration_s=self._path_duration(path),
+            shortened_dense_point_count=_dense_point_count(
+                path, self.settings.collision_step_rad
+            ),
         )
 
     def _candidate_round(
@@ -229,3 +276,18 @@ class JointTrajectoryShortcutter:
             abs(float(last[axis]) - float(first[axis])) / self._velocity_limits[axis]
             for axis in range(6)
         )
+
+
+def _dense_point_count(
+    path: Sequence[Sequence[float]], collision_step_rad: float
+) -> int:
+    """Count path points after 1-step resampling without shared duplicates."""
+
+    if not path:
+        return 0
+    if len(path) == 1:
+        return 1
+    return 1 + sum(
+        len(discretize_joint_line(list(first), list(last), collision_step_rad)) - 1
+        for first, last in zip(path, path[1:])
+    )

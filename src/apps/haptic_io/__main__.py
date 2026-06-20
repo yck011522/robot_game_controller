@@ -34,6 +34,9 @@ def main(argv: list[str] | None = None) -> int:
     actual_sub = bus.make_sub(proc.ctx, topics=[f"telem.robot.actual.{team}"])
     cmd_sub = bus.make_sub(proc.ctx, topics=[f"cmd.haptic.{team}"])
     reseat_sub = bus.make_sub(proc.ctx, topics=[f"cmd.haptic.reseat.{team}"])
+    validation_seed_sub = bus.make_sub(
+        proc.ctx, topics=[f"cmd.validation.seed.{team}"]
+    )
     state_sub = bus.make_sub(proc.ctx, topics=["state.full"])
     # For sim-only impls that do one-time seeding, this guards against
     # repeatedly overwriting their internal dial position.
@@ -50,6 +53,10 @@ def main(argv: list[str] | None = None) -> int:
         _drain_latest(actual_sub, on_msg=lambda b: _handle_robot_actual(impl, b, seed_ref))
         _drain_latest(cmd_sub, on_msg=lambda b: _apply_command(impl, b))
         _drain_latest(reseat_sub, on_msg=lambda b: _apply_reseat_request(impl, b))
+        _drain_latest(
+            validation_seed_sub,
+            on_msg=lambda b: _apply_validation_seed(impl, b),
+        )
         _drain_latest(state_sub, on_msg=lambda b: _apply_state_full(impl, b))
         sample = impl.sample()
         if sample is None:
@@ -62,6 +69,7 @@ def main(argv: list[str] | None = None) -> int:
         actual_sub.close(0)
         cmd_sub.close(0)
         reseat_sub.close(0)
+        validation_seed_sub.close(0)
         state_sub.close(0)
         close = getattr(impl, "close", None)
         if callable(close):
@@ -156,6 +164,20 @@ def _apply_reseat_request(impl, body: dict) -> None:
     reseat = getattr(impl, "request_reseat", None)
     if callable(reseat):
         reseat([float(v) for v in q[:6]])
+
+
+def _apply_validation_seed(impl, body: dict) -> None:
+    """Reset a synthetic haptic generator for one reproducible batch game."""
+
+    reset = getattr(impl, "reset_for_game", None)
+    if not callable(reset):
+        return
+    try:
+        seed = int(body.get("seed"))
+        game_index = int(body.get("game_index"))
+    except (TypeError, ValueError):
+        return
+    reset(seed=seed, game_index=game_index)
 
 
 if __name__ == "__main__":

@@ -6,6 +6,9 @@ description: "Team A real haptic/robot with real bucket and load-cell integratio
 
 active_teams: [a]
 
+diagnostics:
+  bus_trace_enabled: false     # Production hardware runs without high-rate bus capture.
+
 subsystems:
   haptic_io:
     a: real
@@ -98,3 +101,16 @@ tuning:
     sim_bucket_values:
       a: [120, 80, 40]
     force_stage: play
+    rewind_enabled: true
+    rewind_speed_fraction: 0.60     # 60% of configured per-joint maximum velocity.
+    rewind_arrival_tolerance_deg: 0.5
+
+  rewind_shortcut:
+    enabled: true
+    optimization_budget_s: 3.0      # Search wall-time budget before rewind begins.
+    collision_step_deg: 1.0         # Certify every proposed edge at <=1 degree.
+    collision_batch_size: 8         # Keep all eight collision workers occupied.
+    random_seed: null               # Fresh production shortcut search each game.
+
+  batch_validation:
+    enabled: false                  # No JSONL summary or gzip trajectory files.

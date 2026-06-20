@@ -45,6 +45,7 @@ class RandomTrajectoryHaptic:
         now_fn: Callable[[], float] | None = None,
     ) -> None:
         validation_cfg = _mapping(profile.tuning.get("random_trajectory_validation"))
+        batch_cfg = _mapping(profile.tuning.get("batch_validation"))
         haptic_cfg = _mapping(profile.tuning.get("haptic"))
         robot_cfg = _mapping(profile.tuning.get("robot"))
         jogging_cfg = _mapping(profile.tuning.get("jogging"))
@@ -52,6 +53,9 @@ class RandomTrajectoryHaptic:
         self._team = team  # Team key used to read this team's state.full payload.
         self._now = now_fn or time.perf_counter  # Monotonic clock used for integration.
         self._rng = random.Random(_int_value(validation_cfg.get("seed"), DEFAULT_SEED))
+        self._batch_mode = bool(batch_cfg.get("enabled", False))
+        self._active_stage: str | None = None
+        self._game_index = 1
         self._running = bool(validation_cfg.get("enabled_on_start", False))
         self._ui_enabled = bool(validation_cfg.get("ui_enabled", True))
         self._speed_scale = _nonnegative_float(
@@ -135,22 +139,19 @@ class RandomTrajectoryHaptic:
         exactly once, which avoids continuously chasing robot feedback.
         """
 
-        enabled = bool(enabled)
-        self._run_requested = enabled
-        if self._running == enabled:
-            return
-        self._running = enabled
-        if enabled:
-            if not self._seeded_from_robot:
-                self._running = False
-                self._last_randomize_reason = "waiting_for_robot_actual"
-                return
-            self._running = True
-            self._last_sample_s = self._now()
-            self._randomize_velocity(reason="resume")
-            return
+        self._run_requested = bool(enabled)
+        self._sync_running(reason="operator")
+
+    def reset_for_game(self, *, seed: int, game_index: int) -> None:
+        """Reseed and re-anchor the virtual target during batch tutorial."""
+
+        self._rng.seed(int(seed))
+        self._game_index = max(1, int(game_index))
+        self._randomize_count = 0
+        self._last_randomize_reason = "batch_game_reset"
         self._running = False
-        self._latch_to_latest_planner_target(reason="pause")
+        self._latch_to_latest_robot(reason="batch_game_reset")
+        self._sync_running(reason="batch_game_reset")
 
     def update_robot_actual(self, q_rad: list[float]) -> None:
         """Store robot feedback and seed the paused target once at startup."""
@@ -160,13 +161,15 @@ class RandomTrajectoryHaptic:
         self._latest_robot_q_rad = [float(v) for v in q_rad[:6]]
         if not self._seeded_from_robot:
             self._latch_to_latest_robot(reason="initial_robot_actual")
-            if self._run_requested:
-                self._running = True
-                self._last_sample_s = self._now()
-                self._randomize_velocity(reason="startup_after_robot_actual")
+            self._sync_running(reason="startup_after_robot_actual")
 
     def update_state_full(self, body: dict[str, Any]) -> None:
         """Consume planner collision state and reroll blocked trajectories."""
+
+        active_stage = body.get("active_stage")
+        if isinstance(active_stage, str) and active_stage != self._active_stage:
+            self._active_stage = active_stage
+            self._sync_running(reason=f"stage_{active_stage}")
 
         planner_target = _planner_target_rad(body, self._team)
         if planner_target is not None:
@@ -219,6 +222,7 @@ class RandomTrajectoryHaptic:
             "board_loop_hz": [int(PUBLISH_HZ)] * 6,
             "validation": {
                 "running": self._running,
+                "game_index": self._game_index,
                 "randomize_count": self._randomize_count,
                 "last_randomize_reason": self._last_randomize_reason,
                 "last_path_distance_deg": self._last_path_distance_deg,
@@ -227,6 +231,27 @@ class RandomTrajectoryHaptic:
                 "axis_decisions": [dict(item) for item in self._last_axis_decisions],
             },
         }
+
+    def _sync_running(self, *, reason: str) -> None:
+        """Apply operator intent plus batch stage gating to generator motion."""
+
+        stage_allows_motion = not self._batch_mode or self._active_stage == "play"
+        should_run = self._run_requested and stage_allows_motion
+        if should_run and not self._seeded_from_robot:
+            self._running = False
+            self._last_randomize_reason = "waiting_for_robot_actual"
+            return
+        if should_run == self._running:
+            return
+        if should_run:
+            self._running = True
+            self._last_sample_s = self._now()
+            self._randomize_velocity(reason=reason)
+            return
+        was_running = self._running
+        self._running = False
+        if was_running:
+            self._latch_to_latest_planner_target(reason=reason)
 
     def close(self) -> None:
         """Close the optional Pygame UI resources."""

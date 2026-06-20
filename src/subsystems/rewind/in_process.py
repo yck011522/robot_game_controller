@@ -16,6 +16,8 @@ import bisect
 import math
 import secrets
 import threading
+import time
+from dataclasses import replace
 from typing import Any
 
 from compas_fab.robots import Duration, JointTrajectory, JointTrajectoryPoint
@@ -26,6 +28,7 @@ from subsystems.rewind.shortcut import (
     JointTrajectoryShortcutter,
     ShortcutResult,
     ShortcutSettings,
+    _dense_point_count,
 )
 from subsystems.robot.shared_compas_scene import UR10E_JOINT_NAMES
 
@@ -85,6 +88,10 @@ class RewindController:
         self._shortcut_result: ShortcutResult | None = None
         self._shortcut_error: str | None = None
         self._shortcut_seed: int | None = None
+        self._installed_rewind_path: list[list[float]] = []
+        self._reset_started_s: float | None = None
+        self._rewind_motion_started_s: float | None = None
+        self._rewind_completed_s: float | None = None
 
     def start_recording(
         self, initial_q_rad: list[float] | None, *, now_s: float
@@ -107,6 +114,10 @@ class RewindController:
         self._current_index = 0
         self._max_error_rad = None
         self._raw_rewind_path = []
+        self._installed_rewind_path = []
+        self._reset_started_s = None
+        self._rewind_motion_started_s = None
+        self._rewind_completed_s = None
         self._stop_shortcut_thread()
         with self._shortcut_lock:
             self._shortcut_result = None
@@ -157,6 +168,7 @@ class RewindController:
 
         if not self.enabled:
             return False
+        self._reset_started_s = time.perf_counter()
         source_points = list(self.recorded_trajectory.points)
         if not source_points or self._initial_q_rad is None:
             self._status = "unavailable"
@@ -183,9 +195,16 @@ class RewindController:
 
         self._stop_shortcut_thread()
 
+    def set_shortcut_seed(self, seed: int | None) -> None:
+        """Set the seed used by the next reset-stage shortcut search."""
+
+        self.shortcut_settings = replace(self.shortcut_settings, random_seed=seed)
+
     def _install_rewind_path(self, path_rad: list[list[float]]) -> None:
         """Velocity-retime and activate one geometric rewind path."""
 
+        self._installed_rewind_path = [list(q) for q in path_rad]
+        self._rewind_motion_started_s = time.perf_counter()
         points: list[JointTrajectoryPoint] = []
         elapsed_s = 0.0
         previous_q: list[float] | None = None
@@ -334,6 +353,8 @@ class RewindController:
                 f"reduction={reduction:.1f}% duration="
                 f"{result.original_duration_s:.2f}s->{result.shortened_duration_s:.2f}s "
                 f"attempts={result.attempts} accepted={result.accepted_shortcuts} "
+                f"free={result.collision_free_candidates} "
+                f"rejected={result.collision_rejections} "
                 f"checks={result.configurations_sent} elapsed={result.elapsed_s:.3f}s",
                 flush=True,
             )
@@ -398,6 +419,8 @@ class RewindController:
                 )
                 if self._max_error_rad <= self.arrival_tolerance_rad:
                     self._status = "complete"
+                    if self._rewind_completed_s is None:
+                        self._rewind_completed_s = time.perf_counter()
         return target
 
     @property
@@ -446,6 +469,9 @@ class RewindController:
                 else len(self._raw_rewind_path)
             ),
             "attempts": shortcut_result.attempts if shortcut_result else 0,
+            "collision_free_candidates": (
+                shortcut_result.collision_free_candidates if shortcut_result else 0
+            ),
             "accepted_shortcuts": (
                 shortcut_result.accepted_shortcuts if shortcut_result else 0
             ),
@@ -454,6 +480,9 @@ class RewindController:
             ),
             "configurations_sent": (
                 shortcut_result.configurations_sent if shortcut_result else 0
+            ),
+            "completed_configurations": (
+                shortcut_result.completed_configurations if shortcut_result else 0
             ),
             "elapsed_s": shortcut_result.elapsed_s if shortcut_result else 0.0,
             "original_duration_s": (
@@ -480,6 +509,106 @@ class RewindController:
                 else None
             ),
             "shortcut": shortcut,
+        }
+
+    def validation_metrics(self) -> dict[str, Any]:
+        """Return one JSON-safe metrics record after rewind completion.
+
+        Candidate success and rejection describe collision-test outcomes.
+        ``applied_shortcuts`` can be smaller than collision-free candidates
+        because only the best compatible candidate is applied per round.
+        """
+
+        with self._shortcut_lock:
+            result = self._shortcut_result
+            error = self._shortcut_error
+        attempts = result.attempts if result is not None else 0
+        collision_free = result.collision_free_candidates if result is not None else 0
+        applied = result.accepted_shortcuts if result is not None else 0
+        rejected = result.collision_rejections if result is not None else 0
+        unresolved = result.unresolved_candidates if result is not None else 0
+        fail_fast_fraction = None
+        if result is not None and result.rejected_checked_fraction_count > 0:
+            fail_fast_fraction = (
+                result.rejected_checked_fraction_sum
+                / result.rejected_checked_fraction_count
+            )
+        rewind_runtime_s = _elapsed_between(
+            self._rewind_motion_started_s, self._rewind_completed_s
+        )
+        optimization_wall_s = _elapsed_between(
+            self._reset_started_s, self._rewind_motion_started_s
+        )
+        reset_runtime_s = _elapsed_between(
+            self._reset_started_s, self._rewind_completed_s
+        )
+        return {
+            "team": self.team,
+            "status": self._status,
+            "shortcut_seed": self._shortcut_seed,
+            "original_dense_points": len(self._raw_rewind_path),
+            "remaining_sparse_points": len(self._installed_rewind_path),
+            "remaining_dense_points": (
+                result.shortened_dense_point_count
+                if result is not None and error is None
+                else _dense_point_count(
+                    self._installed_rewind_path,
+                    self.shortcut_settings.collision_step_rad,
+                )
+            ),
+            "shortcut_candidates_attempted": attempts,
+            "collision_free_candidates": collision_free,
+            "collision_free_candidate_percent": _percent(collision_free, attempts),
+            "applied_shortcuts": applied,
+            "applied_shortcut_percent": _percent(applied, attempts),
+            "collision_rejected_candidates": rejected,
+            "deadline_unresolved_candidates": unresolved,
+            "average_fail_fast_checked_percent": (
+                fail_fast_fraction * 100.0
+                if fail_fast_fraction is not None
+                else None
+            ),
+            "fail_fast_rejected_candidate_count": (
+                result.rejected_checked_fraction_count if result is not None else 0
+            ),
+            "fail_fast_checked_fraction_sum": (
+                result.rejected_checked_fraction_sum if result is not None else 0.0
+            ),
+            "collision_configurations_planned": (
+                result.planned_configurations if result is not None else 0
+            ),
+            # Every dispatched request is processed by a worker even when its
+            # reply is intentionally discarded after another chunk fails.
+            "collision_checks_performed": (
+                result.configurations_sent if result is not None else 0
+            ),
+            "collision_results_received": (
+                result.completed_configurations if result is not None else 0
+            ),
+            "collision_batches_dispatched": (
+                result.batches_sent if result is not None else 0
+            ),
+            "worker_compute_ms_sum": (
+                result.worker_compute_ms if result is not None else 0.0
+            ),
+            "optimization_time_s": optimization_wall_s,
+            "optimization_search_time_s": (
+                result.elapsed_s if result is not None else 0.0
+            ),
+            "rewind_run_time_s": rewind_runtime_s,
+            "reset_total_time_s": reset_runtime_s,
+            "original_estimated_duration_s": (
+                result.original_duration_s if result is not None else None
+            ),
+            "shortened_estimated_duration_s": (
+                result.shortened_duration_s if result is not None else None
+            ),
+            "arrival_max_error_deg": (
+                math.degrees(self._max_error_rad)
+                if self._max_error_rad is not None
+                else None
+            ),
+            "error": error,
         }
 
     def _sample(self, elapsed_s: float) -> list[float]:
@@ -541,3 +670,19 @@ def _six_floats(value: list[float], fallback: float) -> list[float]:
     while len(values) < _AXES:
         values.append(float(fallback))
     return [v if v > 1e-9 else float(fallback) for v in values]
+
+
+def _elapsed_between(start_s: float | None, end_s: float | None) -> float | None:
+    """Return a nonnegative duration when both monotonic timestamps exist."""
+
+    if start_s is None or end_s is None:
+        return None
+    return max(0.0, end_s - start_s)
+
+
+def _percent(numerator: int, denominator: int) -> float | None:
+    """Return a percentage, or ``None`` when no candidate was attempted."""
+
+    if denominator <= 0:
+        return None
+    return 100.0 * float(numerator) / float(denominator)

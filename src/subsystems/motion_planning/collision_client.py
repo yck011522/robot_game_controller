@@ -76,6 +76,10 @@ class ParallelEdgeCheckResult:
     configs_sent: int
     batches_sent: int
     compute_ms: float
+    planned_configs_by_edge: list[int]
+    dispatched_configs_by_edge: list[int]
+    completed_configs_by_edge: list[int]
+    logical_checked_configs_by_edge: list[int]
 
 
 class CollisionWorkerClient:
@@ -311,13 +315,19 @@ class CollisionWorkerClient:
         batch_size = max(1, int(batch_size))
         max_in_flight = max(1, int(max_in_flight))
         chunks = [
-            [edge[start : start + batch_size] for start in range(0, len(edge), batch_size)]
+            [
+                (start, edge[start : start + batch_size])
+                for start in range(0, len(edge), batch_size)
+            ]
             for edge in edges
         ]
         results: list[bool | None] = [None] * len(edges)
         next_chunk = [0] * len(edges)
         pending_by_edge = [0] * len(edges)
-        pending: dict[int, tuple[int, int]] = {}
+        pending: dict[int, tuple[int, int, int]] = {}
+        dispatched_by_edge = [0] * len(edges)
+        completed_by_edge = [0] * len(edges)
+        logical_checked_by_edge = [0] * len(edges)
         configs_sent = 0
         batches_sent = 0
         compute_ms = 0.0
@@ -343,11 +353,12 @@ class CollisionWorkerClient:
                             continue
                         if next_chunk[edge_index] >= len(chunks[edge_index]):
                             continue
-                        chunk = chunks[edge_index][next_chunk[edge_index]]
+                        chunk_start, chunk = chunks[edge_index][next_chunk[edge_index]]
                         request_id = self._send_request(chunk)
-                        pending[request_id] = (edge_index, len(chunk))
+                        pending[request_id] = (edge_index, chunk_start, len(chunk))
                         pending_by_edge[edge_index] += 1
                         next_chunk[edge_index] += 1
+                        dispatched_by_edge[edge_index] += len(chunk)
                         configs_sent += len(chunk)
                         batches_sent += 1
                         dispatch_cursor = (edge_index + 1) % max(1, len(edges))
@@ -361,6 +372,7 @@ class CollisionWorkerClient:
                         and pending_by_edge[edge_index] == 0
                     ):
                         results[edge_index] = True
+                        logical_checked_by_edge[edge_index] = len(edges[edge_index])
 
                 if not pending:
                     continue
@@ -372,7 +384,7 @@ class CollisionWorkerClient:
                 request_id = reply.get("request_id")
                 if not isinstance(request_id, int) or request_id not in pending:
                     continue
-                edge_index, expected_count = pending.pop(request_id)
+                edge_index, chunk_start, expected_count = pending.pop(request_id)
                 pending_by_edge[edge_index] -= 1
                 if not reply.get("ok"):
                     raise RuntimeError(str(reply.get("error") or "collision worker error"))
@@ -383,10 +395,24 @@ class CollisionWorkerClient:
                         f"expected {expected_count}"
                     )
                 compute_ms += float(reply.get("compute_ms") or 0.0)
-                if results[edge_index] is None and any(
-                    bool(item.get("collision")) for item in items
-                ):
-                    results[edge_index] = False
+                completed_by_edge[edge_index] += expected_count
+                if results[edge_index] is None:
+                    first_collision = next(
+                        (
+                            item_index
+                            for item_index, item in enumerate(items)
+                            if bool(item.get("collision"))
+                        ),
+                        None,
+                    )
+                    if first_collision is not None:
+                        results[edge_index] = False
+                        # This is the ordered path position at which fail-fast
+                        # became logically possible. Dispatched/completed
+                        # counters separately expose parallel work overhead.
+                        logical_checked_by_edge[edge_index] = (
+                            chunk_start + first_collision + 1
+                        )
         except BaseException:
             self._reset_socket()
             raise
@@ -402,6 +428,10 @@ class CollisionWorkerClient:
             configs_sent=configs_sent,
             batches_sent=batches_sent,
             compute_ms=compute_ms,
+            planned_configs_by_edge=[len(edge) for edge in edges],
+            dispatched_configs_by_edge=dispatched_by_edge,
+            completed_configs_by_edge=completed_by_edge,
+            logical_checked_configs_by_edge=logical_checked_by_edge,
         )
 
     def is_config_free(self, q_rad: Iterable[float]) -> bool:

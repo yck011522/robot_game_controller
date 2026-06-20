@@ -12,7 +12,7 @@ description: "Team A real haptic/robot, short play and geometric rewind test"
 active_teams: [a]
 
 diagnostics:
-  bus_trace_enabled: true       # Start the passive trace before the bus broker.
+  bus_trace_enabled: false      # Disabled for normal hardware rewind operation.
   bus_trace_output: logs/trace/bus_trace_latest.jsonl # Overwritten each launch.
 
 subsystems:
@@ -35,7 +35,7 @@ subsystems:
   button_controller: null
   safety_barrier_controller: null
   collision_workers:
-    count: 8                   # Workers certify every gameplay target only.
+    count: 8                   # Gameplay certification and reset shortcut search.
   collision_broker: null
   event_recorder: null
   gamemaster_ui: null
@@ -61,7 +61,7 @@ tuning:
   robot:
     q_limits_min_deg: [-180, -180, -180, -180, -180, -180]
     q_limits_max_deg: [180, 180, 180, 180, 180, 180]
-    # Rewind uses 30% of these per-axis limits. Tune the fraction under game,
+    # Rewind uses a fraction of these per-axis limits. Tune it under game,
     # rather than reducing the normal gameplay limits here.
     max_velocity_deg_s: [15, 20, 30, 40, 50, 50]
     # Gameplay uses these limits. Rewind acceleration retiming is a later TODO.
@@ -105,7 +105,7 @@ tuning:
     tutorial_duration_s: 2           # Enter play two seconds after tutorial starts.
     reset_duration_s: 3.0            # Used only if rewind_enabled becomes false.
     rewind_enabled: true             # Replace reset timer with geometric rewind.
-    rewind_speed_fraction: 0.60      # 30% of each max_velocity_deg_s value.
+    rewind_speed_fraction: 0.60      # 60% of each max_velocity_deg_s value.
     rewind_arrival_tolerance_deg: 0.5 # All six measured joints must pass this.
     idle_timeout_s: 60
     daydream_to_idle_dial_deg: 30
@@ -114,3 +114,13 @@ tuning:
     movement_arm_quiet_ticks: 45
     tutorial_scroll_max_deg: 3600
     tutorial_detents_deg: [0, 1200, 2400, 3600]
+
+  rewind_shortcut:
+    enabled: true
+    optimization_budget_s: 3.0      # Search wall-time budget before rewind begins.
+    collision_step_deg: 1.0         # Certify every proposed edge at <=1 degree.
+    collision_batch_size: 8         # Keep all eight collision workers occupied.
+    random_seed: null               # Fresh production shortcut search each game.
+
+  batch_validation:
+    enabled: false                  # No JSONL summary or gzip trajectory files.
