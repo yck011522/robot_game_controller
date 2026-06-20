@@ -528,6 +528,19 @@ def main(argv: list[str] | None = None) -> int:
             exit_code = 1
             return exit_code
 
+        # ---- tier 8: state broadcaster ---------------------------------
+        # UDP fan-out of state.full to the player-display Raspberry Pis.
+        # Launched by default (like the dashboard) so every runtime exposes
+        # the display feed; it has no hardware dependencies.
+        children["state_broadcaster"] = _spawn("state_broadcaster", profile_path,
+                                                module_registry=module_registry)
+        if not _wait_for_first_heartbeat(sub, poller, "state_broadcaster",
+                                          STARTUP_HEARTBEAT_TIMEOUT_S,
+                                          children, seen_first,
+                                          last_recv_mono_ns, last_loop_hz, recv_window):
+            exit_code = 1
+            return exit_code
+
         print(f"[launcher] all children up: {list(children.keys())}", flush=True)
 
         # ---- main watchdog loop ----------------------------------------

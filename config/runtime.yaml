@@ -58,3 +58,10 @@ subsystems:
     fps_target: 60.0
     fps_min: 50.0
     heartbeat_age_max: 1100
+
+  state_broadcaster:
+    # Match the game_controller state.full publish rate (60 Hz): the
+    # broadcaster re-emits the latest snapshot once per tick over UDP.
+    fps_target: 60.0
+    fps_min: 30.0
+    heartbeat_age_max: 1100

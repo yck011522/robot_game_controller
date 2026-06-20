@@ -219,6 +219,99 @@ def require_robot_endpoint(
     return RobotEndpoint(host=host.strip(), port=port_int, source=source)
 
 
+@dataclass(frozen=True)
+class DisplayBroadcast:
+    """Resolved UDP fan-out endpoint plus the per-Pi player-panel map.
+
+    Attributes
+    ----------
+    dest:
+        Destination IP for the datagrams (broadcast, unicast, or loopback).
+    port:
+        UDP port every display Pi (and the local viewer) listens on.
+    hosts:
+        Mapping of Pi hostname -> tuple of player ids (e.g. ``("a1", "a2")``)
+        that the Pi renders, one per attached screen.
+    source:
+        Provenance string for error messages.
+    """
+
+    dest: str
+    port: int
+    hosts: dict[str, tuple[str, ...]]
+    source: str
+
+
+def load_display_broadcast(path: str | Path | None = None) -> DisplayBroadcast:
+    """Return the configured UDP display-broadcast endpoint and host map.
+
+    Raises ValueError when the ``display_broadcast`` block is missing or
+    malformed so the broadcaster and viewers fail loudly instead of guessing a
+    destination address or port.
+    """
+
+    data = load_device_connection(path)
+    node = data.get("display_broadcast")
+    source = f"{_path_from_arg(path)}:display_broadcast"
+    if not isinstance(node, dict):
+        raise ValueError(f"missing display_broadcast mapping in {_path_from_arg(path)}")
+
+    dest = node.get("dest")
+    if not isinstance(dest, str) or not dest.strip():
+        raise ValueError(f"{source}.dest must be a non-empty string")
+
+    port = node.get("port")
+    try:
+        port_int = int(port)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{source}.port must be an integer") from exc
+    if port_int <= 0:
+        raise ValueError(f"{source}.port must be > 0")
+
+    hosts: dict[str, tuple[str, ...]] = {}
+    hosts_node = node.get("hosts") or {}
+    if not isinstance(hosts_node, dict):
+        raise ValueError(f"{source}.hosts must be a mapping")
+    for hostname, entry in hosts_node.items():
+        # An entry may be either a bare list of player ids or a mapping with a
+        # `players` list (plus optional `ip`/notes); support both forms.
+        if isinstance(entry, dict):
+            players = entry.get("players")
+        else:
+            players = entry
+        if not isinstance(players, list) or not players:
+            raise ValueError(
+                f"{source}.hosts.{hostname}.players must be a non-empty list"
+            )
+        hosts[str(hostname)] = tuple(str(player) for player in players)
+
+    return DisplayBroadcast(
+        dest=dest.strip(), port=port_int, hosts=hosts, source=source
+    )
+
+
+def resolve_display_players(
+    hostname: str,
+    *,
+    path: str | Path | None = None,
+) -> tuple[str, ...] | None:
+    """Return the player ids a given Pi hostname drives, or ``None``.
+
+    Lookup is case-insensitive on the hostname (real Pis may report a
+    fully-qualified or differently-cased name). ``None`` means the hostname is
+    not in the configured map, letting callers fall back to a default panel.
+    """
+
+    db = load_display_broadcast(path)
+    if hostname in db.hosts:
+        return db.hosts[hostname]
+    lowered = hostname.strip().lower()
+    for name, players in db.hosts.items():
+        if name.lower() == lowered:
+            return players
+    return None
+
+
 def clear_cache() -> None:
     """Clear the YAML cache; useful for tests and discovery writers."""
 

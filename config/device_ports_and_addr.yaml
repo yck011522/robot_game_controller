@@ -101,3 +101,41 @@ robot:
   a:
     host: "192.168.0.3"
     port: 30004
+
+# UDP fan-out of the fat game state (state.full) to the player-display Pis.
+#
+# The `state_broadcaster` process re-emits state.full as one UDP datagram per
+# game tick. Each Raspberry Pi binds `port` on 0.0.0.0, reads the latest
+# datagram, and renders the two player panels mapped to its own hostname.
+display_broadcast:
+  # Destination address for the datagrams. Defaults to the directed broadcast
+  # of the robot/Pi subnet (192.168.0.0/24) so every Pi on that LAN receives a
+  # copy. Override with a single Pi IP for unicast, or "127.0.0.1" for a pure
+  # localhost dev loop with display_viewer.
+  dest: "192.168.0.255"
+  # dest: "127.0.0.1" # Localhost for dev; change to broadcast address for real Pis.
+  port: 49200 # UDP port every display Pi (and the local viewer) listens on.
+
+  # Pi hostname -> the two player panels that Pi drives (one per HDMI screen).
+  # A player id is the team letter (a/b) + 1-based player number; player N
+  # controls robot joint index N-1. Only rpi5-11 is installed/confirmed today;
+  # the rest follow the same convention and are placeholders to adjust on site.
+  hosts:
+    rpi5-11:
+      ip: "192.168.0.11"
+      players: ["a1", "a2"]
+    rpi5-12:
+      ip: "192.168.0.12"
+      players: ["a3", "a4"]
+    rpi5-13:
+      ip: "192.168.0.13"
+      players: ["a5", "a6"]
+    rpi5-21:
+      ip: "192.168.0.21"
+      players: ["b1", "b2"]
+    rpi5-22:
+      ip: "192.168.0.22"
+      players: ["b3", "b4"]
+    rpi5-23:
+      ip: "192.168.0.23"
+      players: ["b5", "b6"]
