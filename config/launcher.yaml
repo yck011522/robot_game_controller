@@ -18,7 +18,8 @@
 # default_profile: dev_random_trajectory_rewind_batch
 # dev_two_teams_led_integration - Real Team A + Team B haptic/robot with real light_column.
 # default_profile: dev_team_a_led_integration
-default_profile: dev_two_teams_led_integration
+# default_profile: dev_two_teams_led_integration
+default_profile: record_two_teams_session
 
 # Maps a logical process name to the python module the launcher spawns
 # for it. Default for anything not listed here is `apps.<name>`, which

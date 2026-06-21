@@ -68,8 +68,12 @@ subsystems:
     heartbeat_age_max: 1100
 
   state_broadcaster:
-    # Match the game_controller state.full publish rate (60 Hz): the
-    # broadcaster re-emits the latest snapshot once per tick over UDP.
-    fps_target: 60.0
+    # Poll/wake rate only. The broadcaster is event-driven: it drains every new
+    # state.full from the bus and emits one UDP datagram per state (so output
+    # tracks the 60 Hz controller 1:1, never re-sending an unchanged frame).
+    # Kept above 60 Hz so each new state is picked up within a few ms.
+    # Session recording (when a profile enables display_broadcast_recording)
+    # writes those same frames to a gzip-compressed .jsonl.gz file.
+    fps_target: 120.0
     fps_min: 30.0
     heartbeat_age_max: 1100

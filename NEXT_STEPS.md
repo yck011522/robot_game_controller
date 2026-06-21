@@ -244,7 +244,8 @@ Order of reading for a fresh session:
    - [src/main.py](src/main.py) — compatibility stub; use `apps.launcher`.
    - [archive/game_controller.py](archive/game_controller.py) — archived single-process GC + game loop.
    - [src/game_settings.py](src/game_settings.py) — current shared state object.
-   - [src/state_publisher.py](src/state_publisher.py) — current UDP broadcaster.
+   - [src/apps/state_broadcaster/__main__.py](src/apps/state_broadcaster/__main__.py) — current UDP display broadcaster (with optional session recording).
+   - [src/apps/state_replayer/__main__.py](src/apps/state_replayer/__main__.py) — offline replay of a recorded session over UDP.
    - [src/gamemaster_ui.py](src/gamemaster_ui.py) — current Tk UI to be replaced.
    - [archive/jogging_controller.py](archive/jogging_controller.py) — archived single-process jogging logic.
    - [src/robot_interface.py](src/robot_interface.py)

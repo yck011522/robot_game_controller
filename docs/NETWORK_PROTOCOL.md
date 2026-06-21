@@ -1,5 +1,17 @@
 # Network Protocol — Game State Broadcast
 
+> **DEPRECATED.** This document describes the legacy single-process broadcaster
+> (`state_publisher.py`, UDP port 9000, flat `joints`/`scores` schema), which
+> has been removed. The live system now uses the multi-process
+> `apps.state_broadcaster` (tier 8), which fans out the full `state.full` body
+> on the port configured in `config/device_ports_and_addr.yaml`
+> (`display_broadcast`). The wire format is defined in
+> [src/core/display_protocol.py](../src/core/display_protocol.py) and the
+> receiver reference is [src/apps/display_viewer/__main__.py](../src/apps/display_viewer/__main__.py).
+> Sessions can be recorded (`display_broadcast_recording` profile block) and
+> replayed with `apps.state_replayer`. The sections below are retained only for
+> historical context.
+
 This document describes the UDP broadcast mechanism used to publish game state
 from the Game Master Controller PC to Raspberry Pi display nodes.  Copy this
 file into the display node repository as the definitive protocol reference.

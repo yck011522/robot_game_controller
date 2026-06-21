@@ -9,8 +9,10 @@ Run (pytest is not installed in this env; use unittest):
 
 from __future__ import annotations
 
+import gzip
 import socket
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -23,6 +25,12 @@ from core.device_connection import (  # noqa: E402
     resolve_display_players,
 )
 from core.display_protocol import decode_datagram, encode_datagram  # noqa: E402
+from core.state_recording import (  # noqa: E402
+    RecordingWriter,
+    default_recording_path,
+    iter_frames,
+    read_header,
+)
 
 
 class DatagramFormatTests(unittest.TestCase):
@@ -85,6 +93,66 @@ class ConfigLoaderTests(unittest.TestCase):
     def test_resolve_players_case_insensitive(self) -> None:
         self.assertEqual(resolve_display_players("RPI5-11"), ("a1", "a2"))
         self.assertIsNone(resolve_display_players("not-a-pi"))
+
+
+class RecordingRoundTripTests(unittest.TestCase):
+    """A recorded session writes a header/frames/footer and replays cleanly."""
+
+    def test_writer_reader_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "session.jsonl"
+            states = [
+                {"active_stage": "idle", "teams": {"a": {"score": i}}}
+                for i in range(5)
+            ]
+            with RecordingWriter(path, meta={"profile": "unit", "port": 49200}) as w:
+                for i, st in enumerate(states):
+                    w.append(st, seq=i, ts_wall_ns=1000 + i)
+                self.assertEqual(w.frame_count, len(states))
+
+            header = read_header(path)
+            self.assertEqual(header["type"], "header")
+            self.assertEqual(header["profile"], "unit")
+            self.assertEqual(header["port"], 49200)
+
+            frames = list(iter_frames(path))
+            self.assertEqual(len(frames), len(states))
+            self.assertEqual([f["seq"] for f in frames], list(range(len(states))))
+            self.assertEqual([f["state"] for f in frames], states)
+
+    def test_frames_feed_encode_datagram(self) -> None:
+        # Each recorded frame must round-trip back through the live wire format
+        # so the replayer can emit it verbatim to the displays.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "session.jsonl"
+            state = {"active_stage": "play", "teams": {"b": {"score": 9}}}
+            with RecordingWriter(path) as w:
+                w.append(state, seq=7, ts_wall_ns=42)
+
+            frame = next(iter_frames(path))
+            raw = encode_datagram(frame["state"], seq=frame["seq"])
+            decoded = decode_datagram(raw)
+            self.assertIsNotNone(decoded)
+            assert decoded is not None
+            self.assertEqual(decoded["state"], state)
+
+    def test_close_is_idempotent_and_writes_footer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "session.jsonl"
+            w = RecordingWriter(path)
+            w.append({"active_stage": "idle"}, seq=0, ts_wall_ns=0)
+            w.close()
+            w.close()  # second close must not raise
+            # Footer line is present but excluded from the frame iterator.
+            with gzip.open(path, "rt", encoding="utf-8") as fh:
+                lines = fh.read().strip().splitlines()
+            self.assertIn('"type":"footer"', lines[-1])
+            self.assertEqual(len(list(iter_frames(path))), 1)
+
+    def test_default_recording_path_is_sanitized(self) -> None:
+        path = default_recording_path("logs/x", "dev/two teams")
+        self.assertTrue(path.name.endswith("_dev_two_teams.jsonl.gz"))
+        self.assertEqual(path.parent, Path("logs/x"))
 
 
 if __name__ == "__main__":
