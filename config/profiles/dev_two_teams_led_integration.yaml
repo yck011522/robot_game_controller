@@ -1,0 +1,169 @@
+# Two-team real-hardware bring-up profile ("development two teams LED integration").
+#
+# Based on dev_team_a_led_integration.yaml, but with BOTH teams enabled on real
+# hardware so a full head-to-head match can be exercised against the physical
+# rig:
+#
+#   * real Team A AND Team B haptic dials + real robots (real_rtde),
+#   * weight_sensor_io DISABLED (null) -- scores seeded from sim_bucket_values,
+#   * light_column ENABLED (real) on COM45/COM39/COM42 for both team strips,
+#   * bucket_controller ENABLED (real) so buckets physically dump for both teams.
+#
+# Hardware addressing comes from config/device_ports_and_addr.yaml:
+#   * haptic_a COM23/25/21/28/55/56, haptic_b COM53/52/51/50/49/48,
+#   * robot a 192.168.0.3:30004, robot b 192.168.0.2:30004.
+#
+# Boot stage is "daydreaming"; turn a dial to wake to idle, scroll a dial up to
+# start the tutorial, then watch both the console STAGE banners and the LEDs.
+
+profile_name: dev_two_teams_led_integration
+description: "Team A + Team B real haptic/robot + real light_column (two-team LED integration bring-up)"
+
+active_teams: [a, b]
+
+subsystems:
+  haptic_io:
+    a: real
+    b: real
+
+  robot_io:
+    a: real_rtde
+    b: real_rtde
+    # a: sim_pybullet
+    # b: sim_pybullet
+
+  jogging_planner:
+    a: in_process
+    b: in_process
+
+  weight_sensor_io: null      # disabled for the LED integration test
+  light_column: real          # arena LED strips driven by the game state
+  display_broadcaster: null
+  scoreboard_broadcaster: null
+  bucket_controller: real     # real bucket motors so buckets physically dump
+  button_controller: null
+  safety_barrier_controller: null
+
+  collision_workers:
+    count: 8
+
+  collision_broker: null
+
+  event_recorder: null
+  gamemaster_ui: null
+  bus_broker:
+    impl: real
+
+tuning:
+  haptic:
+    gear_ratio: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+    # Robot-joint bounds in degrees; runtime converts these to dial-space
+    # C-frame min/max values using gear_ratio before sending the firmware.
+    bounds_deg_min: [-180, -180, -180, -180, -180, -180]
+    bounds_deg_max: [180, 180, 180, 180, 180, 180]
+    bounds_kp: 20.0             # Wall stiffness once a dial angle is outside min/max bounds; raise for a firmer boundary.
+    tracking_kp: 10.0           # Position tracking spring toward the robot-aligned target; raise carefully to reduce lag.
+    tracking_kd: 0.1            # Velocity damping for tracking; raise if the dial oscillates around the target.
+    tracking_max_torque: 5.0    # Torque cap for tracking force; lower for safer/lighter hand feel.
+    oob_kick:
+      enabled: true             # Enables pulsed corrective kicks while outside bounds; set false to disable kick pulses only.
+      amplitude: 2.0            # Kick pulse strength in firmware torque units; raise in small steps if kicks feel too weak.
+      pulse_interval_ms: 40     # Gap between kick pulses; lower for more frequent pulses.
+    telemetry_interval_ms: 10
+    # Real dials are absolute-position devices. Map dial angle to absolute
+    # robot joint target (via gear_ratio), not delta-velocity semantics.
+    input_mode: absolute
+  robot:
+    q_limits_min_deg: [-180, -180, -180, -180, -180, -180]
+    q_limits_max_deg: [180, 180, 180, 180, 180, 180]
+    max_velocity_deg_s: [15, 20, 30, 40, 50, 50]
+    max_acceleration_deg_s2: [45, 95, 95, 115, 115, 115]
+    headless: false
+    initial_pose_deg: [0.0, -90.0, 90.0, 0.0, 0.0, 0.0]
+  collision:
+    check_self: true
+    check_world: true
+    timeout_ms: 200
+    retries: 2
+    bundle_size: 1
+  jogging:
+    n_forward_steps: 16
+    forward_step_deg: 1.0
+    path_cutoff_deg: 3.0
+    forward_bundle_size: 1
+    probe_half_deg: 10
+    prox_floor: 0.6
+    forward_timeout_ms: 40
+  safety_barrier:
+    bypass_channels:
+      SBarr11: false
+      SBarr12: false
+      SBarr21: false
+      SBarr22: false
+      SBarr31: false
+      SBarr32: false
+      SBarr41: false
+      SBarr42: false
+  light_column:
+    # Per-team strip colors (#RRGGBB or [r, g, b]). Team A blue, Team B red.
+    team_colors:
+      a: "#0000FF"
+      b: "#FF0000"
+    breathing_period_s: 3.0          # daydreaming dim<->bright cycle length (s)
+    breathing_min_brightness: 0.10   # lowest brightness reached while breathing (0..1)
+    play_startup_blackout_s: 0.5     # all-dark hold at the very start of play (s)
+    endgame_flash_window_s: 10.0      # final-countdown white-flash window (s)
+    endgame_flash_period_s: 2.0      # flash cycle length within that window (s)
+    endgame_flash_on_s: 1.0          # white "on" slice of each flash cycle (s)
+    conclusion_post_count_hold_s: 1.0 # hold score bars before crowning winner (s)
+    # Tutorial progress is published per-player by the game controller (0..100%)
+    # and consumed directly here, so the light columns need no scroll-scale tuning.
+  game:
+    # --- Core game ---
+    duration_s: 60                  # play-stage length (seconds)
+    sum_score_rate_unit_per_s: 100
+    sim_bucket_values:
+      a: [120, 80, 40]              # seed scores (no weight sensors in this profile)
+      b: [120, 80, 40]              # seed scores for Team B (no weight sensors)
+
+    # --- State machine bring-up ---
+    start_stage: daydreaming        # boot into attract mode (LED breathing visible immediately)
+    tutorial_duration_s: 20         # tutorial countdown length (seconds)
+    reset_duration_s: 3.0           # fallback hold; only used if rewind_enabled is false
+    # --- Geometric rewind (replaces the flat reset timer) ---
+    rewind_enabled: true            # rewind the recorded play path instead of a fixed reset hold
+    rewind_speed_fraction: 0.60     # rewind at 60% of each max_velocity_deg_s
+    rewind_arrival_tolerance_deg: 0.5  # all six measured joints must be within this to finish
+    idle_timeout_s: 60              # idle -> daydreaming after this much quiet (seconds)
+    daydream_to_idle_dial_deg: 60   # any dial moved this far (dial-space deg) wakes to idle
+    idle_to_tutorial_dial_deg: 180  # any dial moved this far (dial-space deg) starts tutorial
+    # Movement-detection (rolling window): wake/tutorial triggers compare each
+    # dial's peak-to-peak range over the last movement_window_s seconds against
+    # the *_dial_deg thresholds above, so slow drift around a set point never
+    # accumulates into a false trigger. movement_glitch_trim discards that many
+    # most-extreme samples at each end of the window before measuring, rejecting
+    # brief encoder glitches. Detection only arms after a full clean window is
+    # collected post startup-alignment. Raise window for more drift rejection;
+    # raise trim if dials glitch in longer bursts.
+    movement_window_s: 2.0          # rolling window length (seconds)
+    movement_glitch_trim: 3         # extreme samples dropped per end (glitch reject)
+    # --- Tutorial scroll (dial-space, deci-degrees; decideg = deg * 10) ---
+    # Each player scrolls their haptic dial to watch the tutorial. On tutorial
+    # entry every dial is digitally reseat to 0 and bounded to
+    # tutorial_scroll_dial_bound. Progress 0..100% maps linearly start -> end
+    # (direction is flipped: scrolling toward the negative end advances).
+    tutorial_scroll_dial_start_end: [0, -10000]   # [start, end] dial pos (decideg)
+    tutorial_scroll_dial_bound: [-10010, 10]      # [min, max] soft bounds (decideg)
+    # Progress percentages at which the dial snaps to a detent. Each tick the
+    # haptic tracking target is set to the nearest detent to the measured
+    # position, so players feel a lock at each step. There is no 0% detent, so
+    # the dial pulls toward the first (10%) detent the instant the tutorial
+    # begins.
+    tutorial_detents_pct: [10, 30, 40, 70, 100]
+
+  rewind_shortcut:
+    enabled: true                   # smooth/optimize the rewind path before replaying it
+    optimization_budget_s: 3.0      # search wall-time budget before rewind begins
+    collision_step_deg: 1.0         # certify every proposed edge at <=1 degree
+    collision_batch_size: 8         # keep all eight collision workers occupied
+    random_seed: null               # fresh production shortcut search each game
