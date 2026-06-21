@@ -14,7 +14,9 @@ DEFAULT_CLIENT_TIMEOUT_S = 0.05  # Per-Modbus request timeout from the validated
 DEFAULT_READ_RETRIES = 1  # One retry gives resilience while keeping the cycle rate predictable.
 DEFAULT_RETRY_DELAY_S = 0.0005  # Delay before retrying one failed load-cell request.
 DEFAULT_INTER_REQUEST_DELAY_S = 0.0  # The validated script ran cleanly with no extra quiet gap.
-DEFAULT_TARE_CYCLES = 20  # Startup/reset tare cycles averaged into transparent offsets.
+DEFAULT_TARE_CYCLES = 10  # Startup/reset tare samples per cell (averaged after trimming outliers).
+DEFAULT_TARE_OUTLIER_TRIM = 4  # Most-extreme samples discarded per cell before averaging (split low/high).
+
 
 
 class WeightSensorRuntime:
@@ -39,23 +41,49 @@ class WeightSensorRuntime:
         self._last_cycle_duration_ms = 0.0
         self._last_tare_reason: str | None = None
 
-    def tare(self, *, samples: int = DEFAULT_TARE_CYCLES, reason: str = "startup") -> None:
-        """Average several raw cycles and use them as transparent tare offsets."""
+    def tare(
+        self,
+        *,
+        samples: int = DEFAULT_TARE_CYCLES,
+        outlier_trim: int = DEFAULT_TARE_OUTLIER_TRIM,
+        reason: str = "startup",
+    ) -> None:
+        """Collect several raw samples per cell and use a trimmed mean as offset.
 
-        sums = {slave: 0.0 for slave in self.config.slave_addresses}
-        counts = {slave: 0 for slave in self.config.slave_addresses}
+        Rather than a plain average, each cell's raw samples are sorted and the
+        most-extreme readings are discarded (``outlier_trim`` total, split as
+        ``outlier_trim // 2`` lowest + the remainder highest) before averaging
+        the rest. With the defaults (``samples=10``, ``outlier_trim=4``) this
+        drops the 2 lowest and 2 highest of 10 samples and averages the middle 6,
+        rejecting transient spikes/dropouts that would otherwise bias the zero.
+
+        Trimming is skipped automatically when there are too few good samples to
+        leave at least one remaining (e.g. a short ``samples=2`` test cycle),
+        falling back to a plain mean. Cells that returned no good reading keep
+        their previous offset.
+
+        Args:
+            samples: Raw read cycles to collect per cell (>= 1).
+            outlier_trim: Total extreme samples to drop per cell before averaging.
+            reason: Tag stored in the snapshot for diagnostics (e.g. "startup").
+        """
+
+        raw_samples: dict[int, list[float]] = {
+            slave: [] for slave in self.config.slave_addresses
+        }
         for _ in range(max(1, int(samples))):
             for slave_address in self.config.slave_addresses:
                 reading = self._read_one(slave_address, apply_tare=False)
                 if reading.ok:
-                    sums[slave_address] += reading.grams_raw
-                    counts[slave_address] += 1
+                    raw_samples[slave_address].append(reading.grams_raw)
                 self._inter_request_sleep()
         for slave_address in self.config.slave_addresses:
-            if counts[slave_address] > 0:
-                self._tare_offsets_g[slave_address] = sums[slave_address] / counts[slave_address]
+            offset = _trimmed_mean(raw_samples[slave_address], max(0, int(outlier_trim)))
+            if offset is not None:
+                self._tare_offsets_g[slave_address] = offset
         self._tare_seq += 1
         self._last_tare_reason = reason
+
 
     def sample_cycle(self) -> None:
         """Read every configured load cell once and update latest readings."""
@@ -149,3 +177,24 @@ class WeightSensorRuntime:
 
         if DEFAULT_INTER_REQUEST_DELAY_S > 0.0:
             time.sleep(DEFAULT_INTER_REQUEST_DELAY_S)
+
+
+def _trimmed_mean(values: list[float], trim: int) -> float | None:
+    """Return the mean of ``values`` after dropping the most-extreme samples.
+
+    ``trim`` is the total number of samples to discard, split as ``trim // 2``
+    from the low end and the remainder from the high end (so an odd trim drops
+    one extra high sample). Trimming is skipped when it would leave fewer than
+    one sample, in which case the plain mean of all values is returned. Returns
+    ``None`` for an empty list so the caller can keep the previous offset.
+    """
+
+    if not values:
+        return None
+    ordered = sorted(values)
+    if trim > 0 and (len(ordered) - trim) >= 1:
+        low = trim // 2
+        high = trim - low
+        ordered = ordered[low: len(ordered) - high]
+    return sum(ordered) / len(ordered)
+

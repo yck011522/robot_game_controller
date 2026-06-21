@@ -59,6 +59,23 @@ serial_settings:
       B1: 4 # Team B left/front bucket motor address.
       B2: 5 # Team B left/back bucket motor address.
       B3: 6 # Team B right bucket motor address.
+  scoreboard:
+    baudrate: 115200 # USB-serial/RS485 speed for the AtomS3 LED scoreboard panels on COM40.
+
+# Per-bucket LED scoreboard panels (32x8 NeoPixel tiles, daisy-chained on COM40).
+# The scoreboard_broadcaster subsystem is a pure consumer of state.full: it maps
+# each bucket's published value/stage to a text command addressed to one panel.
+scoreboard:
+  # Bucket label -> 1-based panel index used in the "/display/<N>/..." command
+  # syntax. Text destined for bucket A1 is therefore sent to display 2, etc.
+  # These are physical wiring positions; change them if panels are re-cabled.
+  bucket_displays:
+    A1: 2 # Team A bucket 1 text renders on panel 2.
+    A2: 3 # Team A bucket 2 text renders on panel 3.
+    A3: 5 # Team A bucket 3 text renders on panel 5.
+    B1: 6 # Team B bucket 1 text renders on panel 6.
+    B2: 4 # Team B bucket 2 text renders on panel 4.
+    B3: 1 # Team B bucket 3 text renders on panel 1.
 
 # Physical and semantic mapping for the 16 independently controlled strips.
 # Strip references use "controller.channel" with channels 1 and 2.

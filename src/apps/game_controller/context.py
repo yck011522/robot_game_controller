@@ -277,6 +277,16 @@ def _game_config(node: Any) -> dict[str, Any]:
         "start_stage": _coerce_start_stage(
             data.get("start_stage"), data.get("force_stage")
         ),
+        # score_min_increment_g: weight deadband (grams). A bucket's summed
+        # live load-cell reading must reach at least this many grams before it
+        # counts toward the score (the on-board "counter" increments); readings
+        # below it publish as 0, rejecting empty-bucket drift / noise. 0 disables
+        # the deadband (every gram counts). Raise if light debris registers a
+        # score; lower for finer sensitivity. Only affects real weight-sensor
+        # play, not sim_bucket_values seeding.
+        "score_min_increment_g": max(
+            0.0, _coerce_positive_float(data.get("score_min_increment_g"), 0.0)
+        ),
     }
 
 

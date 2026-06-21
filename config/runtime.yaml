@@ -43,6 +43,14 @@ subsystems:
     fps_min: 80.0
     heartbeat_age_max: 1100
 
+  scoreboard_broadcaster:
+    # Pure consumer of state.full that pushes text to the per-bucket LED panels
+    # over one RS485 port. A modest rate is plenty: panels only change on stage
+    # transitions and on the conclusion count-down (throttled per panel).
+    fps_target: 15.0
+    fps_min: 10.0
+    heartbeat_age_max: 1100
+
   safety_barrier_controller:
     fps_target: 18.0
     fps_min: 5.0

@@ -9,8 +9,16 @@ from core.device_connection import load_serial_settings
 from subsystems.weight_sensor.common import BUCKET_CELL_MAP
 
 
-def _initial_weight_state(*, enabled: bool) -> dict[str, Any]:
-    """Return the GameController's local weight-sensor cache."""
+def _initial_weight_state(*, enabled: bool, min_increment_g: float = 0.0) -> dict[str, Any]:
+    """Return the GameController's local weight-sensor cache.
+
+    Args:
+        enabled: Whether a real weight-sensor feed is expected for this profile.
+        min_increment_g: Per-bucket weight deadband in grams. A bucket whose
+            summed live load-cell reading is below this counts as 0 (rejecting
+            empty-bucket drift / noise). 0 disables the deadband. Sourced from
+            the ``game.score_min_increment_g`` profile tuning.
+    """
 
     return {
         "enabled": enabled,
@@ -18,10 +26,12 @@ def _initial_weight_state(*, enabled: bool) -> dict[str, Any]:
         "cell_ok": {},
         "errors": {},
         "bucket_cell_map": _load_weight_bucket_cell_map(),
+        "min_increment_g": max(0.0, float(min_increment_g)),
         "last_recv_mono_s": None,
         "tare_seq": 0,
         "cycle_seq": 0,
     }
+
 
 
 def _update_weight_state(state: dict[str, Any], body: dict[str, Any]) -> None:
@@ -60,7 +70,13 @@ def _apply_weight_bucket_values(
 def _bucket_values_from_weight(
     team: str, weight_state: dict[str, Any]
 ) -> list[float] | None:
-    """Return three 1-based bucket sums for a team from the latest 12 cells."""
+    """Return three 1-based bucket sums for a team from the latest 12 cells.
+
+    Each bucket sum is gated by the ``min_increment_g`` deadband stored in
+    ``weight_state``: a bucket whose summed reading is below the threshold is
+    reported as 0.0 so empty-bucket drift never increments the score. A 0 (or
+    missing) threshold disables the gate.
+    """
 
     cells_g = weight_state.get("cells_g")
     if not isinstance(cells_g, dict) or not cells_g:
@@ -68,14 +84,21 @@ def _bucket_values_from_weight(
     bucket_cell_map = weight_state.get("bucket_cell_map")
     if not isinstance(bucket_cell_map, dict):
         return None
+    try:
+        min_increment_g = max(0.0, float(weight_state.get("min_increment_g", 0.0)))
+    except (TypeError, ValueError):
+        min_increment_g = 0.0
     values: list[float] = []
     for label in _team_bucket_labels(team):
         cell_ids = bucket_cell_map.get(label, [])
         total_g = 0.0
         for cell_id in cell_ids:
             total_g += max(0.0, float(cells_g.get(str(cell_id), 0.0)))
+        if total_g < min_increment_g:
+            total_g = 0.0
         values.append(total_g)
     return values[:3]
+
 
 
 def _state_full_weight_sensor(weight_state: dict[str, Any]) -> dict[str, Any]:

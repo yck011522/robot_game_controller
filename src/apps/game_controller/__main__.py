@@ -371,7 +371,10 @@ def main(argv: list[str] | None = None) -> int:
         "last_reply_by_source": {},
     }
     safety_state = _initial_safety_state(enabled=safety_enabled)
-    weight_state = _initial_weight_state(enabled=weight_sensor_enabled)
+    weight_state = _initial_weight_state(
+        enabled=weight_sensor_enabled,
+        min_increment_g=game_cfg.get("score_min_increment_g", 0.0),
+    )
 
     # Run the boot-stage entry effects (banner + seeding) once teams exist.
     _enter_stage(
