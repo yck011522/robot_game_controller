@@ -145,7 +145,7 @@ tuning:
     inter_command_delay_s: 0.0      # 0 flushes all queued lines each tick; raise to pace RS485
   game:
     # --- Core game ---
-    duration_s: 60                  # play-stage length (seconds)
+    duration_s: 240                  # play-stage length (seconds)
     sum_score_rate_unit_per_s: 100
     sim_bucket_values:
       a: [120, 80, 40]              # seed scores (no weight sensors in this profile)
@@ -158,14 +158,14 @@ tuning:
 
     # --- State machine bring-up ---
     start_stage: daydreaming        # boot into attract mode (LED breathing visible immediately)
-    tutorial_duration_s: 40         # tutorial countdown length (seconds)
+    tutorial_duration_s: 60         # tutorial countdown length (seconds)
     reset_duration_s: 3.0           # fallback hold; only used if rewind_enabled is false
     # --- Geometric rewind (replaces the flat reset timer) ---
     rewind_enabled: true            # rewind the recorded play path instead of a fixed reset hold
     rewind_speed_fraction: 0.60     # rewind at 60% of each max_velocity_deg_s
     rewind_arrival_tolerance_deg: 0.5  # all six measured joints must be within this to finish
     idle_timeout_s: 60              # idle -> daydreaming after this much quiet (seconds)
-    daydream_to_idle_dial_deg: 60   # any dial moved this far (dial-space deg) wakes to idle
+    daydream_to_idle_dial_deg: 80   # any dial moved this far (dial-space deg) wakes to idle
     idle_to_tutorial_dial_deg: 180  # any dial moved this far (dial-space deg) starts tutorial
     # Movement-detection (rolling window): wake/tutorial triggers compare each
     # dial's peak-to-peak range over the last movement_window_s seconds against
@@ -183,13 +183,13 @@ tuning:
     # tutorial_scroll_dial_bound. Progress 0..100% maps linearly start -> end
     # (direction is flipped: scrolling toward the negative end advances).
     tutorial_scroll_dial_start_end: [0, -10000]   # [start, end] dial pos (decideg)
-    tutorial_scroll_dial_bound: [-10010, 10]      # [min, max] soft bounds (decideg)
+    tutorial_scroll_dial_bound: [-10050, 50]      # [min, max] soft bounds (decideg)
     # Progress percentages at which the dial snaps to a detent. Each tick the
     # haptic tracking target is set to the nearest detent to the measured
     # position, so players feel a lock at each step. There is no 0% detent, so
     # the dial pulls toward the first (10%) detent the instant the tutorial
     # begins.
-    tutorial_detents_pct: [10, 30, 40, 70, 100]
+    tutorial_detents_pct: [0, 25, 50, 75, 100]
 
   rewind_shortcut:
     enabled: true                   # smooth/optimize the rewind path before replaying it

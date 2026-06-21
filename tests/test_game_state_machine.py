@@ -260,6 +260,38 @@ def test_tutorial_to_play_on_skip() -> None:
     assert ss["skip_requested"] is False  # cleared on stage entry
 
 
+def test_tutorial_to_play_when_all_active_players_reach_97_percent() -> None:
+    """One-team and two-team games advance once every active player is at 97%."""
+
+    for team_count in (1, 2):
+        teams = _make_teams()
+        if team_count == 2:
+            teams["b"] = _make_team()
+            teams["b"]["team"] = "b"
+        ss = _enter("tutorial", teams)
+        for team_state in teams.values():
+            team_state["tutorial_progress"] = [97.0] * 6
+
+        gc._tick_stage_state(ss, teams, GAME_CFG, _secs(0.1))
+
+        assert ss["stage"] == "play"
+
+
+def test_tutorial_waits_when_any_active_player_is_below_97_percent() -> None:
+    """A single incomplete player on either active team keeps the timer running."""
+
+    teams = _make_teams()
+    teams["b"] = _make_team()
+    teams["b"]["team"] = "b"
+    ss = _enter("tutorial", teams)
+    teams["a"]["tutorial_progress"] = [100.0] * 6
+    teams["b"]["tutorial_progress"] = [97.0] * 5 + [96.99]
+
+    gc._tick_stage_state(ss, teams, GAME_CFG, _secs(0.1))
+
+    assert ss["stage"] == "tutorial"
+
+
 # --- play -----------------------------------------------------------------
 
 

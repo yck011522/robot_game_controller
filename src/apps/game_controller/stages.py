@@ -59,6 +59,10 @@ _CONCLUSION_ANNOUNCEMENT_READY = frozenset(
     }
 )
 
+# A dial can stop just short of the configured physical endpoint. Treat 97%
+# as tutorial completion so that endpoint tolerance cannot hold up the game.
+TUTORIAL_COMPLETION_THRESHOLD_PCT = 97.0
+
 
 def _tick_stage_state(
     stage_state: dict[str, Any],
@@ -117,7 +121,7 @@ def _tick_stage_state(
 
     if stage == "tutorial":
         # Timed; skippable; also exits early once every active player has
-        # scrolled to 100% tutorial progress. Progress is computed in the
+        # reached the tutorial completion threshold. Progress is computed in the
         # per-team motion loop (which runs earlier this tick) and cached on
         # each team's ``tutorial_progress``.
         skip = bool(stage_state.get("skip_requested"))
@@ -129,7 +133,10 @@ def _tick_stage_state(
             if skip:
                 reason = "skip"
             elif all_done:
-                reason = "all players reached 100%"
+                reason = (
+                    "all players reached "
+                    f"{TUTORIAL_COMPLETION_THRESHOLD_PCT:g}%"
+                )
             else:
                 reason = "tutorial timer expired"
             _enter_stage(stage_state, teams, "play", game_cfg, now_ns, reason=reason)
@@ -191,13 +198,14 @@ def _tick_stage_state(
 
 
 def _all_tutorial_progress_complete(teams: dict[str, dict]) -> bool:
-    """Return True once every active team's six dials are at 100% progress.
+    """Return True once every active player's progress reaches the threshold.
 
     Reads the per-team ``tutorial_progress`` list (0..100 per dial) that the
     runtime loop refreshes each tutorial tick. Returns False when there are no
     teams or any team has not yet populated progress, so a fresh tutorial never
-    exits before the players have actually scrolled. A small epsilon absorbs
-    float rounding around the 100% endpoint.
+    exits before the players have actually scrolled. The runtime ``teams``
+    mapping contains active teams only, so inactive configured teams do not
+    participate in this check.
     """
 
     if not teams:
@@ -206,7 +214,10 @@ def _all_tutorial_progress_complete(teams: dict[str, dict]) -> bool:
         progress = st.get("tutorial_progress")
         if not isinstance(progress, list) or len(progress) < 6:
             return False
-        if any(float(p) < 99.999 for p in progress[:6]):
+        if any(
+            float(player_progress) < TUTORIAL_COMPLETION_THRESHOLD_PCT
+            for player_progress in progress[:6]
+        ):
             return False
     return True
 

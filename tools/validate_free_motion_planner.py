@@ -1,4 +1,4 @@
-"""Generate reusable reset cases and validate the free-motion planner.
+bounds"""Generate reusable reset cases and validate the free-motion planner.
 
 Generation classifies each unique random configuration through the planner
 in direct-only mode. Directly reachable starts accumulate in the easy JSON;
