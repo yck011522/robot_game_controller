@@ -877,6 +877,12 @@ def main(argv: list[str] | None = None) -> int:
                     haptic_cfg,
                     now=time.perf_counter(),
                 )
+            # Re-tare the load cells at the start of EVERY game. The buckets are
+            # empty the instant play begins (nothing dropped yet), so this
+            # captures a fresh empty-bucket baseline each round - the once-at-
+            # startup / once-at-conclusion-exit tare alone left game 2+ reading
+            # against a stale zero.
+            _publish_weight_tare("play_entry")
             if batch_session is not None:
                 batch_session.mark_play_started()
         if stage_before_tick != "conclusion" and stage_state["stage"] == "conclusion":
