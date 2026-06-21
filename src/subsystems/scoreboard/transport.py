@@ -59,6 +59,17 @@ def cmd_mode(display: int, mode: int) -> bytes:
     return f"/display/{display}/mode {int(mode)}\n".encode("ascii")
 
 
+def cmd_scroll_continuous(on: bool) -> bytes:
+    """Build the global command that enables or disables repeated scrolling.
+
+    The panel firmware otherwise runs mode-1 scrolling only once and leaves the
+    final line static. Enabling this setting makes every panel repeat its text
+    stack until a later per-panel mode command selects static mode.
+    """
+
+    return f"/scrollcontinuous {1 if on else 0}\n".encode("ascii")
+
+
 def cmd_text(display: int, text: str) -> bytes:
     """Build the set-text command for one panel.
 

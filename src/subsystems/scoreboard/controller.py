@@ -41,6 +41,7 @@ from subsystems.scoreboard.transport import (
     cmd_color,
     cmd_enable,
     cmd_mode,
+    cmd_scroll_continuous,
     cmd_text,
     cmd_text_brightness,
 )
@@ -269,16 +270,19 @@ class ScoreboardController:
 
         The panels are NVS-backed, so a previous run can leave a board scrolling
         or dimmed. This pushes, for **every** mapped panel: max brightness
-        (display + text layer), static mode, and a blanked text layer. It also
-        primes the diff baseline (``_queued``) to ``_BLANK`` so the hardware and
-        the controller's model agree - the first real content then only emits the
-        fields that differ from blank/static.
+        (display + text layer), static mode, and a blanked text layer. Continuous
+        scrolling is enabled globally so the reset-stage ``GAME,OVER`` animation
+        repeats until the stage changes and a static mode command is sent. The
+        method also primes the diff baseline (``_queued``) to ``_BLANK`` so the
+        hardware and controller model agree; the first real content then only
+        emits fields that differ from blank/static.
 
         Call once from the process ``setup`` (after the transport opens); the
         queued lines go out on the first :meth:`pump`.
         """
 
         level = self._config.init_brightness
+        self._send_queue.append(cmd_scroll_continuous(True))
         for n in self._displays:
             self._send_queue.append(cmd_brightness(n, level))
             self._send_queue.append(cmd_text_brightness(n, level))
