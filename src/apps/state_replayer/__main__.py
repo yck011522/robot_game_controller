@@ -44,17 +44,25 @@ Arguments
            pause (operator away) from stalling playback. Default 1.0.
 --start-at-s : start playback from this session-relative timestamp in seconds
            (for example 120.0 starts at t=+120 s in the recording).
+--end-at-s : stop playback at this session-relative timestamp in seconds.
+           When used with --loop, each pass replays only [start_at_s, end_at_s].
+--player : player selector for stage-specific status details. Default is A1
+           (aliases like team1player1 and t1p1 are accepted).
 --loop   : restart from the beginning when the recording ends (Ctrl-C to stop).
 """
 
 from __future__ import annotations
 
 import argparse
+import math
+import re
+import shutil
 import signal
 import socket
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 _SRC = Path(__file__).resolve().parents[2]
 if str(_SRC) not in sys.path:
@@ -66,7 +74,7 @@ from core.state_recording import iter_frames, read_header  # noqa: E402
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
-    """Parse the replayer CLI arguments."""
+    """Parse CLI arguments for the UDP state replayer."""
 
     ap = argparse.ArgumentParser(
         description="Replay a recorded display-broadcast session over UDP."
@@ -102,6 +110,17 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="Start playback from this session-relative timestamp in seconds.",
     )
     ap.add_argument(
+        "--end-at-s",
+        type=float,
+        default=None,
+        help="Stop playback at this session-relative timestamp in seconds.",
+    )
+    ap.add_argument(
+        "--player",
+        default="team1player1",
+        help="Player selector for status details (examples: a1, b4, team1player1, t2p3).",
+    )
+    ap.add_argument(
         "--loop",
         action="store_true",
         help="Loop the recording until interrupted.",
@@ -121,25 +140,133 @@ def _resolve_endpoint(ns: argparse.Namespace) -> tuple[str, int]:
     return str(dest), int(port)
 
 
-def _print_status(elapsed_s: float, state: dict) -> None:
-    """Overwrite a single console line with the latest replayed frame.
+def _parse_player(player_text: str) -> tuple[str, int, str]:
+    """Return (team_key, zero_based_joint_index, normalized_label)."""
 
-    Shows the session-relative timestamp (seconds since the recording's first
-    frame), the current game state, and the stage timer pulled from the
-    ``state.full`` body. Uses a carriage return (no newline) so successive
-    frames repaint the same line instead of scrolling the console.
-    """
+    text = str(player_text or "").strip().lower()
+    m = re.fullmatch(r"([ab])\s*([1-6])", text)
+    if m:
+        team = m.group(1)
+        number = int(m.group(2))
+        return team, number - 1, f"{team}{number}"
 
-    # `stage` is "paused" while paused, otherwise the active stage name;
-    # fall back to active_stage / "?" so a partial frame still prints.
-    stage = state.get("stage") or state.get("active_stage") or "?"
+    m = re.fullmatch(r"(?:team)?\s*([12])\s*(?:player|p)?\s*([1-6])", text)
+    if m:
+        team = "a" if m.group(1) == "1" else "b"
+        number = int(m.group(2))
+        return team, number - 1, f"{team}{number}"
+
+    # Fallback required by request: default to Team A Player 1.
+    return "a", 0, "a1"
+
+
+def _team_block(state: dict[str, Any], team: str) -> dict[str, Any]:
+    """Return the selected team block, tolerating missing/partial payloads."""
+
+    teams = state.get("teams")
+    if not isinstance(teams, dict):
+        return {}
+    block = teams.get(team)
+    return block if isinstance(block, dict) else {}
+
+
+def _array_value(seq: Any, index: int) -> Any:
+    """Read one list/tuple value by index, returning None on mismatch."""
+
+    if isinstance(seq, (list, tuple)) and 0 <= index < len(seq):
+        return seq[index]
+    return None
+
+
+def _dial_deg(team_block: dict[str, Any], index: int) -> float | None:
+    """Return dial angle in degrees for one player index, if present."""
+
+    haptic = team_block.get("haptic")
+    if not isinstance(haptic, dict):
+        return None
+    dial_deg = _array_value(haptic.get("dial_deg"), index)
+    if isinstance(dial_deg, (int, float)):
+        return float(dial_deg)
+    dial_rad = _array_value(haptic.get("dial_pos_rad"), index)
+    if isinstance(dial_rad, (int, float)):
+        return math.degrees(float(dial_rad))
+    return None
+
+
+def _robot_joint_deg(team_block: dict[str, Any], index: int) -> float | None:
+    """Return robot joint angle in degrees for one player index, if present."""
+
+    robot = team_block.get("robot")
+    if not isinstance(robot, dict):
+        return None
+    q_rad = _array_value(robot.get("q_rad"), index)
+    if isinstance(q_rad, (int, float)):
+        return math.degrees(float(q_rad))
+    return None
+
+
+def _fmt_num(value: Any, *, decimals: int = 1) -> str:
+    """Format numeric values compactly for one-line status output."""
+
+    if isinstance(value, (int, float)):
+        return f"{float(value):.{decimals}f}"
+    return "--"
+
+
+def _fmt_buckets(team_block: dict[str, Any]) -> str:
+    """Format first three bucket values as b=[x,y,z], tolerant of short arrays."""
+
+    buckets = team_block.get("buckets")
+    if not isinstance(buckets, list):
+        return "b=[--,--,--]"
+    vals: list[str] = []
+    for i in range(3):
+        vals.append(_fmt_num(_array_value(buckets, i), decimals=0))
+    return f"b=[{vals[0]},{vals[1]},{vals[2]}]"
+
+
+def _print_status(elapsed_s: float, state: dict[str, Any], player_label: str) -> None:
+    """Overwrite one status line with selected player details by stage."""
+
+    team, joint_index, normalized = _parse_player(player_label)
+    team_block = _team_block(state, team)
+    # active_stage is the lifecycle stage; stage may read "paused".
+    active_stage = str(state.get("active_stage") or state.get("stage") or "?")
     timer = state.get("countdown_s")
     timer_str = f"{float(timer):4.0f}s" if isinstance(timer, (int, float)) else "  --"
+
+    detail = ""
+    if active_stage == "idle":
+        detail = f"dial_deg={_fmt_num(_dial_deg(team_block, joint_index))}"
+    elif active_stage == "tutorial":
+        haptic = team_block.get("haptic") if isinstance(team_block.get("haptic"), dict) else {}
+        progress = _array_value(haptic.get("tutorial_progress_pct") if isinstance(haptic, dict) else None, joint_index)
+        detail = f"tutorial_pct={_fmt_num(progress)}"
+    elif active_stage == "play":
+        detail = (
+            f"dial_deg={_fmt_num(_dial_deg(team_block, joint_index))} "
+            f"joint_deg={_fmt_num(_robot_joint_deg(team_block, joint_index))} "
+            f"{_fmt_buckets(team_block)}"
+        )
+    elif active_stage == "conclusion":
+        total = team_block.get("summed_score")
+        detail = f"{_fmt_buckets(team_block)} total={_fmt_num(total, decimals=0)}"
+
     line = (
-        f"[state_replayer] t=+{elapsed_s:7.1f}s  stage={str(stage):<12} timer={timer_str}"
+        f"[state_replayer] t=+{elapsed_s:7.1f}s  stage={active_stage:<12} "
+        f"player={normalized:<2} timer={timer_str} {detail}".rstrip()
     )
-    # Trailing spaces clear any leftover characters from a longer prior line.
-    print("\r" + line + "    ", end="", flush=True)
+
+    # Clamp to terminal width so long status text does not soft-wrap into new
+    # lines (which defeats carriage-return single-line updates in cmd.exe).
+    width = shutil.get_terminal_size(fallback=(120, 30)).columns
+    max_body = max(20, width - 1)
+    if len(line) > max_body:
+        line = line[: max(0, max_body - 3)] + "..."
+
+    # Clear to end of line in a width-aware way before rewriting the status.
+    clear_pad = " " * max(1, width - len(line))
+    print("\r" + line + clear_pad, end="", flush=True)
 
 
 def _play_once(
@@ -151,6 +278,8 @@ def _play_once(
     speed: float,
     max_gap_s: float,
     start_at_s: float,
+    end_at_s: float | None,
+    player: str,
     start_seq: int,
     stop: dict,
 ) -> tuple[int, int]:
@@ -169,6 +298,7 @@ def _play_once(
     record_origin_wall_ns: int | None = None  # ts_wall_ns of first frame in file
     speed = max(1e-6, speed)
     start_at_s = max(0.0, float(start_at_s))
+    end_at_s = max(0.0, float(end_at_s)) if end_at_s is not None else None
     printed_status = False  # whether any status line was painted this pass
     sent_count = 0
 
@@ -190,6 +320,10 @@ def _play_once(
         )
         if record_elapsed_s < start_at_s:
             continue
+        if end_at_s is not None and record_elapsed_s > end_at_s:
+            # Frames are recorded in chronological order, so once we pass the
+            # requested end bound this pass is complete.
+            break
 
         if base_wall_ns is None or not isinstance(ts_wall_ns, int):
             base_wall_ns = ts_wall_ns if isinstance(ts_wall_ns, int) else None
@@ -220,7 +354,7 @@ def _play_once(
 
         # Session-relative timestamp = this frame's recorded time minus the
         # first frame's; 0 when the recording carried no wall clock.
-        _print_status(record_elapsed_s, state)
+        _print_status(record_elapsed_s, state, player)
         printed_status = True
         sent_count += 1
 
@@ -240,10 +374,22 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     dest, port = _resolve_endpoint(ns)
+    start_at_s = max(0.0, float(ns.start_at_s))
+    end_at_s = max(0.0, float(ns.end_at_s)) if ns.end_at_s is not None else None
+    if end_at_s is not None and end_at_s < start_at_s:
+        print(
+            f"[state_replayer] ERROR: --end-at-s ({end_at_s}) must be >= --start-at-s ({start_at_s})",
+            file=sys.stderr,
+            flush=True,
+        )
+        return 2
+
     header = read_header(path)
     print(
         f"[state_replayer] file={path} profile={header.get('profile', '?')} "
-        f"dest={dest}:{port} speed={ns.speed} start_at_s={ns.start_at_s} loop={ns.loop}",
+        f"dest={dest}:{port} speed={ns.speed} start_at_s={start_at_s} "
+        f"end_at_s={end_at_s if end_at_s is not None else '-'} "
+        f"player={_parse_player(ns.player)[2]} loop={ns.loop}",
         flush=True,
     )
 
@@ -272,13 +418,15 @@ def main(argv: list[str] | None = None) -> int:
                 port,
                 speed=ns.speed,
                 max_gap_s=ns.max_gap_s,
-                start_at_s=ns.start_at_s,
+                start_at_s=start_at_s,
+                end_at_s=end_at_s,
+                player=ns.player,
                 start_seq=seq,
                 stop=stop,
             )
             if sent_count <= 0:
                 print(
-                    f"[state_replayer] WARNING: no frames at/after start_at_s={ns.start_at_s}; stopping",
+                    f"[state_replayer] WARNING: no frames in requested window start_at_s={start_at_s} end_at_s={end_at_s if end_at_s is not None else '-'}; stopping",
                     flush=True,
                 )
                 break
