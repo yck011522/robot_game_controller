@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import time
-from typing import Any
+from typing import Any, Callable
 
 from core.device_connection import load_serial_settings
 from subsystems.weight_sensor.common import BUCKET_CELL_MAP
+
+PLAY_TARE_ZERO_TOLERANCE_G = 2.0
+PLAY_TARE_RETRY_INTERVAL_S = 0.1
+PLAY_TARE_MAX_RETRIES = 10
 
 
 def _initial_weight_state(*, enabled: bool, min_increment_g: float = 0.0) -> dict[str, Any]:
@@ -30,6 +34,22 @@ def _initial_weight_state(*, enabled: bool, min_increment_g: float = 0.0) -> dic
         "last_recv_mono_s": None,
         "tare_seq": 0,
         "cycle_seq": 0,
+        # True between publishing the play-entry tare request and verifying
+        # near-zero tared telemetry. While true, bucket scores stay at zero.
+        "play_tare_pending": False,
+        # Tare sequence observed when the play-entry command was requested; the
+        # next accepted telemetry must have a larger sequence number.
+        "play_tare_start_seq": 0,
+        # Per-cell absolute gram tolerance for accepting a play-entry tare.
+        "play_tare_zero_tolerance_g": PLAY_TARE_ZERO_TOLERANCE_G,
+        # Seconds to wait after an acknowledged but non-zero tare before retry.
+        "play_tare_retry_interval_s": PLAY_TARE_RETRY_INTERVAL_S,
+        # Automatic retries after the initial play-entry tare command.
+        "play_tare_max_retries": PLAY_TARE_MAX_RETRIES,
+        # Number of retry commands already sent for the current play entry.
+        "play_tare_retry_count": 0,
+        # Monotonic timestamp when the latest play-entry tare command was sent.
+        "play_tare_last_request_mono_s": None,
     }
 
 
@@ -54,6 +74,120 @@ def _update_weight_state(state: dict[str, Any], body: dict[str, Any]) -> None:
     state["last_recv_mono_s"] = time.perf_counter()
 
 
+def _begin_play_weight_tare(
+    weight_state: dict[str, Any],
+    teams: dict[str, dict[str, Any]],
+) -> bool:
+    """Start the game-start tare handshake and blank live bucket values.
+
+    Called by ``game_controller`` exactly when it enters ``play``. The caller
+    owns publishing ``cmd.weight.tare``; this helper only marks local state so
+    stale load-cell readings cannot be copied into team bucket values while the
+    asynchronous tare command is still in flight.
+
+    Args:
+        weight_state: Controller-local cache returned by
+            :func:`_initial_weight_state`.
+        teams: Active team dictionaries whose bucket values are published in
+            ``state.full`` and consumed by the scoreboard.
+
+    Returns:
+        True when a real/sim weight-sensor feed is enabled and the caller should
+        publish the tare command; False when this profile uses seeded bucket
+        values and no weight tare is needed.
+    """
+
+    if not bool(weight_state.get("enabled", False)):
+        return False
+    weight_state["play_tare_pending"] = True
+    weight_state["play_tare_start_seq"] = int(weight_state.get("tare_seq", 0) or 0)
+    weight_state["play_tare_retry_count"] = 0
+    weight_state["play_tare_last_request_mono_s"] = None
+    for team_state in teams.values():
+        bucket_count = len(team_state.get("bucket_values") or []) or 3
+        team_state["bucket_values"] = [0.0] * bucket_count
+        team_state["score"] = 0
+    return True
+
+
+def _mark_play_weight_tare_published(
+    weight_state: dict[str, Any], *, now_s: float
+) -> None:
+    """Record when the latest play-entry tare command was published.
+
+    Called by ``game_controller`` immediately after it sends ``cmd.weight.tare``
+    for a play-entry tare. The retry timer starts from this timestamp, not from
+    the earlier local bucket blanking step.
+
+    Args:
+        weight_state: Controller-local cache returned by
+            :func:`_initial_weight_state`.
+        now_s: Monotonic seconds from ``time.perf_counter()``.
+    """
+
+    if bool(weight_state.get("play_tare_pending", False)):
+        weight_state["play_tare_last_request_mono_s"] = float(now_s)
+
+
+def _tick_play_weight_tare_verification(
+    weight_state: dict[str, Any],
+    *,
+    now_s: float,
+    publish_tare: Callable[[], None],
+) -> str | None:
+    """Verify the play-entry tare and retry briefly if readings are non-zero.
+
+    Called once per ``game_controller`` tick after fresh ``telem.weight`` has
+    been drained. A tare is accepted only when a newer tare sequence has arrived
+    and every configured load cell is within ``play_tare_zero_tolerance_g`` of
+    zero. If readings stay outside tolerance, the helper republishes the same
+    tare command every
+    ``play_tare_retry_interval_s`` until ``play_tare_max_retries`` is reached.
+
+    Args:
+        weight_state: Controller-local cache returned by
+            :func:`_initial_weight_state`.
+        now_s: Monotonic seconds from ``time.perf_counter()``.
+        publish_tare: Callback that publishes one ``cmd.weight.tare`` command.
+
+    Returns:
+        A console-ready warning message when verification gives up, otherwise
+        ``None``.
+    """
+
+    if not bool(weight_state.get("enabled", False)):
+        return None
+    if not bool(weight_state.get("play_tare_pending", False)):
+        return None
+    if not _play_weight_tare_complete(weight_state):
+        return None
+    ok, detail = _play_tare_cells_near_zero(weight_state)
+    if ok:
+        weight_state["play_tare_pending"] = False
+        return None
+    retry_count = int(weight_state.get("play_tare_retry_count", 0) or 0)
+    max_retries = int(weight_state.get("play_tare_max_retries", PLAY_TARE_MAX_RETRIES) or 0)
+    last_request_s = weight_state.get("play_tare_last_request_mono_s")
+    if last_request_s is not None:
+        interval_s = float(
+            weight_state.get("play_tare_retry_interval_s", PLAY_TARE_RETRY_INTERVAL_S)
+            or 0.0
+        )
+        if float(now_s) - float(last_request_s) < interval_s:
+            return None
+    if retry_count >= max_retries:
+        weight_state["play_tare_pending"] = False
+        return (
+            "[game_controller] WARNING play-entry weight tare did not settle "
+            f"after {max_retries} retries; continuing. {detail}"
+        )
+    weight_state["play_tare_retry_count"] = retry_count + 1
+    weight_state["play_tare_start_seq"] = int(weight_state.get("tare_seq", 0) or 0)
+    weight_state["play_tare_last_request_mono_s"] = float(now_s)
+    publish_tare()
+    return None
+
+
 def _apply_weight_bucket_values(
     team_state: dict[str, Any], weight_state: dict[str, Any]
 ) -> None:
@@ -61,10 +195,74 @@ def _apply_weight_bucket_values(
 
     if not bool(weight_state.get("enabled", False)):
         return
+    if bool(weight_state.get("play_tare_pending", False)):
+        if not _play_weight_tare_complete(weight_state):
+            return
+        weight_state["play_tare_pending"] = False
     values = _bucket_values_from_weight(team_state["team"], weight_state)
     if values is None:
         return
     team_state["bucket_values"] = values
+
+
+def _play_weight_tare_complete(weight_state: dict[str, Any]) -> bool:
+    """Return True after telemetry reports a newer tare sequence."""
+
+    tare_seq = int(weight_state.get("tare_seq", 0) or 0)
+    start_seq = int(weight_state.get("play_tare_start_seq", 0) or 0)
+    return tare_seq > start_seq
+
+
+def _play_tare_cells_near_zero(weight_state: dict[str, Any]) -> tuple[bool, str]:
+    """Return whether every configured load cell is close enough to zero."""
+
+    cells_g = weight_state.get("cells_g")
+    if not isinstance(cells_g, dict) or not cells_g:
+        return False, "no tared cell readings received"
+    tolerance_g = float(
+        weight_state.get("play_tare_zero_tolerance_g", PLAY_TARE_ZERO_TOLERANCE_G)
+        or 0.0
+    )
+    cell_ids = _configured_weight_cell_ids(weight_state)
+    if not cell_ids:
+        cell_ids = sorted(str(key) for key in cells_g.keys())
+    worst_cell = None
+    worst_abs_g = 0.0
+    missing: list[str] = []
+    for cell_id in cell_ids:
+        if cell_id not in cells_g:
+            missing.append(cell_id)
+            continue
+        value_abs_g = abs(float(cells_g.get(cell_id, 0.0)))
+        if value_abs_g > worst_abs_g:
+            worst_abs_g = value_abs_g
+            worst_cell = cell_id
+    if missing:
+        return False, f"missing cells={missing[:4]} tolerance_g={tolerance_g:.1f}"
+    if worst_abs_g <= tolerance_g:
+        return True, f"max_abs_g={worst_abs_g:.1f} tolerance_g={tolerance_g:.1f}"
+    return (
+        False,
+        f"cell={worst_cell} max_abs_g={worst_abs_g:.1f} tolerance_g={tolerance_g:.1f}",
+    )
+
+
+def _configured_weight_cell_ids(weight_state: dict[str, Any]) -> list[str]:
+    """Return sorted string load-cell IDs from the configured bucket map."""
+
+    bucket_cell_map = weight_state.get("bucket_cell_map")
+    if not isinstance(bucket_cell_map, dict):
+        return []
+    cell_ids: set[str] = set()
+    for cells in bucket_cell_map.values():
+        if not isinstance(cells, (list, tuple)):
+            continue
+        for cell_id in cells:
+            cell_ids.add(str(cell_id))
+    return sorted(
+        cell_ids,
+        key=lambda item: (0, int(item)) if item.isdigit() else (1, item),
+    )
 
 
 def _bucket_values_from_weight(

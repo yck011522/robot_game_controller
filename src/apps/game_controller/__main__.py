@@ -83,8 +83,11 @@ from apps.game_controller.stages import (  # noqa: E402
 )
 from apps.game_controller.weight import (  # noqa: E402
     _apply_weight_bucket_values,
+    _begin_play_weight_tare,
     _initial_weight_state,
+    _mark_play_weight_tare_published,
     _team_bucket_labels,
+    _tick_play_weight_tare_verification,
     _update_weight_state,
 )
 
@@ -375,6 +378,34 @@ def main(argv: list[str] | None = None) -> int:
         enabled=weight_sensor_enabled,
         min_increment_g=game_cfg.get("score_min_increment_g", 0.0),
     )
+    # Booting directly into play needs the same tare as a normal transition,
+    # but the PUB/SUB sockets are more reliable once the process loop is ticking.
+    play_entry_tare_publish_pending = False
+
+    def _publish_weight_tare() -> None:
+        """Publish one tare command for the weight_sensor_io process."""
+
+        nonlocal weight_tare_seq
+        if not weight_sensor_enabled:
+            return
+        request_id = f"weight-tare-{weight_tare_seq}"
+        env = bus.make_envelope(proc.proc)
+        env.update({"request_id": request_id})
+        bus.publish(pub, WEIGHT_TARE_TOPIC, env)
+        weight_tare_seq += 1
+
+    def _request_play_entry_weight_tare(*, publish_now: bool = True) -> None:
+        """Blank buckets and publish the play-entry tare command if enabled."""
+
+        nonlocal play_entry_tare_publish_pending
+        if _begin_play_weight_tare(weight_state, teams):
+            if publish_now:
+                _publish_weight_tare()
+                _mark_play_weight_tare_published(
+                    weight_state, now_s=time.perf_counter()
+                )
+            else:
+                play_entry_tare_publish_pending = True
 
     # Run the boot-stage entry effects (banner + seeding) once teams exist.
     _enter_stage(
@@ -387,6 +418,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     if batch_session is not None and stage_state["stage"] == "play":
         batch_session.mark_play_started()
+    if stage_state["stage"] == "play":
+        _request_play_entry_weight_tare(publish_now=False)
     last_batch_shutdown_s = 0.0
 
     def _prepare_next_batch_game() -> None:
@@ -454,20 +487,8 @@ def main(argv: list[str] | None = None) -> int:
         bus.publish(pub, BUCKET_COMMAND_TOPIC, env)
         bucket_command_seq += 1
 
-    def _publish_weight_tare(reason: str) -> None:
-        """Publish one tare command for the weight_sensor_io process."""
-
-        nonlocal weight_tare_seq
-        if not weight_sensor_enabled:
-            return
-        request_id = f"weight-tare-{weight_tare_seq}"
-        env = bus.make_envelope(proc.proc)
-        env.update({"request_id": request_id, "reason": reason})
-        bus.publish(pub, WEIGHT_TARE_TOPIC, env)
-        weight_tare_seq += 1
-
     def tick(p: Proc) -> None:
-        nonlocal state_seq
+        nonlocal state_seq, play_entry_tare_publish_pending
         # Tick flow summary:
         # 1) Ingest operator inputs + safety + latest telem from haptic/robot.
         # 2) Publish assistive haptic command (cmd.haptic.<team>) with the
@@ -477,6 +498,12 @@ def main(argv: list[str] | None = None) -> int:
         # 4) Publish one authoritative state.full snapshot for UIs and
         #    downstream process consumers.
         now_ns = time.perf_counter_ns()
+        if play_entry_tare_publish_pending:
+            _publish_weight_tare()
+            _mark_play_weight_tare_published(
+                weight_state, now_s=time.perf_counter()
+            )
+            play_entry_tare_publish_pending = False
         _drain_operator_input_requests(
             operator_input_rep,
             on_msg=lambda body: _handle_operator_input_request(
@@ -504,6 +531,13 @@ def main(argv: list[str] | None = None) -> int:
             _drain_latest(
                 weight_sub, on_msg=lambda body: _update_weight_state(weight_state, body)
             )
+        tare_warning = _tick_play_weight_tare_verification(
+            weight_state,
+            now_s=time.perf_counter(),
+            publish_tare=_publish_weight_tare,
+        )
+        if tare_warning is not None:
+            print(tare_warning, flush=True)
         _refresh_safety_block(control_state, safety_state, safety_telem_age_max_s)
 
         if bool(control_state.get("recovery_active", False)):
@@ -882,7 +916,7 @@ def main(argv: list[str] | None = None) -> int:
             # captures a fresh empty-bucket baseline each round - the once-at-
             # startup / once-at-conclusion-exit tare alone left game 2+ reading
             # against a stale zero.
-            _publish_weight_tare("play_entry")
+            _request_play_entry_weight_tare()
             if batch_session is not None:
                 batch_session.mark_play_started()
         if stage_before_tick != "conclusion" and stage_state["stage"] == "conclusion":
@@ -914,7 +948,7 @@ def main(argv: list[str] | None = None) -> int:
             _publish_bucket_command("close_all", reason="conclusion_reset")
             # TODO(reset-flow): tare after close_all completes once bucket
             # close completion is tracked by GC.
-            _publish_weight_tare("conclusion_reset")
+            _publish_weight_tare()
 
         countdown_s = _stage_countdown_s(stage_state, game_cfg, now_ns)
 
