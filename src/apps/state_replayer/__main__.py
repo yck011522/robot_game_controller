@@ -42,6 +42,8 @@ Arguments
            0.5 = half). Frame delays are divided by this value.
 --max-gap-s : cap on the sleep between two frames (s); stops a long recording
            pause (operator away) from stalling playback. Default 1.0.
+--start-at-s : start playback from this session-relative timestamp in seconds
+           (for example 120.0 starts at t=+120 s in the recording).
 --loop   : restart from the beginning when the recording ends (Ctrl-C to stop).
 """
 
@@ -94,6 +96,12 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="Maximum sleep between frames in seconds (caps long recorded pauses).",
     )
     ap.add_argument(
+        "--start-at-s",
+        type=float,
+        default=0.0,
+        help="Start playback from this session-relative timestamp in seconds.",
+    )
+    ap.add_argument(
         "--loop",
         action="store_true",
         help="Loop the recording until interrupted.",
@@ -142,9 +150,10 @@ def _play_once(
     *,
     speed: float,
     max_gap_s: float,
+    start_at_s: float,
     start_seq: int,
     stop: dict,
-) -> int:
+) -> tuple[int, int]:
     """Send every frame of one pass through the recording over UDP.
 
     Frames are paced from their recorded ``ts_wall_ns`` (scaled by ``speed``)
@@ -155,10 +164,13 @@ def _play_once(
     """
 
     seq = start_seq
-    base_wall_ns: int | None = None  # ts_wall_ns of the first frame this pass
-    base_mono: float | None = None  # perf_counter anchor for the first frame
+    base_wall_ns: int | None = None  # ts_wall_ns of first sent frame this pass
+    base_mono: float | None = None  # perf_counter anchor for first sent frame
+    record_origin_wall_ns: int | None = None  # ts_wall_ns of first frame in file
     speed = max(1e-6, speed)
+    start_at_s = max(0.0, float(start_at_s))
     printed_status = False  # whether any status line was painted this pass
+    sent_count = 0
 
     for frame in iter_frames(path):
         if stop["requested"]:
@@ -167,6 +179,17 @@ def _play_once(
         if not isinstance(state, dict):
             continue
         ts_wall_ns = frame.get("ts_wall_ns")
+
+        if record_origin_wall_ns is None and isinstance(ts_wall_ns, int):
+            record_origin_wall_ns = ts_wall_ns
+
+        record_elapsed_s = (
+            (ts_wall_ns - record_origin_wall_ns) / 1e9
+            if isinstance(ts_wall_ns, int) and record_origin_wall_ns is not None
+            else 0.0
+        )
+        if record_elapsed_s < start_at_s:
+            continue
 
         if base_wall_ns is None or not isinstance(ts_wall_ns, int):
             base_wall_ns = ts_wall_ns if isinstance(ts_wall_ns, int) else None
@@ -197,18 +220,14 @@ def _play_once(
 
         # Session-relative timestamp = this frame's recorded time minus the
         # first frame's; 0 when the recording carried no wall clock.
-        elapsed_s = (
-            (ts_wall_ns - base_wall_ns) / 1e9
-            if isinstance(ts_wall_ns, int) and base_wall_ns is not None
-            else 0.0
-        )
-        _print_status(elapsed_s, state)
+        _print_status(record_elapsed_s, state)
         printed_status = True
+        sent_count += 1
 
     if printed_status:
         # End the overwriting status line so later messages start fresh.
         print(flush=True)
-    return seq
+    return seq, sent_count
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -224,7 +243,7 @@ def main(argv: list[str] | None = None) -> int:
     header = read_header(path)
     print(
         f"[state_replayer] file={path} profile={header.get('profile', '?')} "
-        f"dest={dest}:{port} speed={ns.speed} loop={ns.loop}",
+        f"dest={dest}:{port} speed={ns.speed} start_at_s={ns.start_at_s} loop={ns.loop}",
         flush=True,
     )
 
@@ -246,16 +265,23 @@ def main(argv: list[str] | None = None) -> int:
     passes = 0
     try:
         while not stop["requested"]:
-            seq = _play_once(
+            seq, sent_count = _play_once(
                 udp,
                 path,
                 dest,
                 port,
                 speed=ns.speed,
                 max_gap_s=ns.max_gap_s,
+                start_at_s=ns.start_at_s,
                 start_seq=seq,
                 stop=stop,
             )
+            if sent_count <= 0:
+                print(
+                    f"[state_replayer] WARNING: no frames at/after start_at_s={ns.start_at_s}; stopping",
+                    flush=True,
+                )
+                break
             passes += 1
             print(f"[state_replayer] pass {passes} complete ({seq} datagrams sent)", flush=True)
             if not ns.loop:
