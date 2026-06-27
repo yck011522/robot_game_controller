@@ -54,7 +54,9 @@ subsystems:
 
 tuning:
   haptic:
-    gear_ratio: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+    # Negative gear ratio flips dial -> robot direction in absolute-input mode:
+    # turning the dial in the positive direction now decrements the robot joint.
+    gear_ratio: [-0.1, -0.1, -0.1, -0.1, -0.1, -0.1]
     # Robot-joint bounds in degrees; runtime converts these to dial-space
     # C-frame min/max values using gear_ratio before sending the firmware.
     bounds_deg_min: [-180, -180, -180, -180, -180, -180]
@@ -178,10 +180,10 @@ tuning:
     movement_window_s: 2.0          # rolling window length (seconds)
     movement_glitch_trim: 3         # extreme samples dropped per end (glitch reject)
     # --- Tutorial scroll (dial-space, deci-degrees; decideg = deg * 10) ---
-    # Each player scrolls their haptic dial to watch the tutorial. On tutorial
-    # entry every dial is digitally reseat to 0 and bounded to
-    # tutorial_scroll_dial_bound. Progress 0..100% maps linearly start -> end
-    # (direction is flipped: scrolling toward the negative end advances).
+    # Each player scrolls their haptic dial to watch the tutorial. Keep the
+    # original tutorial dial direction even though gameplay uses negative
+    # gear_ratio above: tutorial progress is a raw dial-space interaction and
+    # does not currently follow gear-ratio sign.
     tutorial_scroll_dial_start_end: [0, -10000]   # [start, end] dial pos (decideg)
     tutorial_scroll_dial_bound: [-10050, 50]      # [min, max] soft bounds (decideg)
     # Progress percentages at which the dial snaps to a detent. Each tick the

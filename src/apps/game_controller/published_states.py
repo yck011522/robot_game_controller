@@ -131,6 +131,9 @@ def _team_state_full_payload(
         },
     }
 
+    dial_pos_rad = list(team_state.get("last_dial") or [])
+    gear_ratio = list(haptic_cfg.get("gear_ratio") or [])
+
     return {
         "robot": {
             "q_target_rad": team_state["last_target"],
@@ -140,12 +143,27 @@ def _team_state_full_payload(
             "status": team_state.get("robot_status", {}),
         },
         "haptic": {
-            "dial_pos_rad": team_state["last_dial"],
+            "dial_pos_rad": dial_pos_rad,
             # Per-controller dial angle in degrees (A1-A6). Single source of
             # truth for both the dashboard and the light columns so they never
             # disagree on a unit conversion.
             "dial_deg": [
-                math.degrees(float(v)) for v in (team_state["last_dial"] or [])
+                math.degrees(float(v)) for v in dial_pos_rad
+            ],
+            # Dial angle mapped through the per-axis gear ratio into the
+            # equivalent robot-joint angle in degrees. This keeps the raw
+            # dial-space telemetry above while also publishing a display-ready
+            # robot-space interpretation that respects direction flips.
+            "dial_robot_deg": [
+                math.degrees(
+                    float(dial_pos_rad[i])
+                    * (
+                        float(gear_ratio[i])
+                        if i < len(gear_ratio) and abs(float(gear_ratio[i])) > 1e-9
+                        else 1.0
+                    )
+                )
+                for i in range(len(dial_pos_rad))
             ],
             "dial_vel_rad_s": team_state["last_dial_vel"],
             "connected": team_state["last_haptic_connected"],

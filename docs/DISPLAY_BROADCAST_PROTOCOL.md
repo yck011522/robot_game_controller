@@ -146,7 +146,7 @@ team
 |   |-- q_rad: array[number] (6 values)
 |   `-- status: object
 |-- haptic
-|   |-- dial_pos_rad, dial_deg, dial_vel_rad_s: array[number] (6 values)
+|   |-- dial_pos_rad, dial_deg, dial_robot_deg, dial_vel_rad_s: array[number] (6 values)
 |   |-- connected: array[boolean] (6 values)
 |   |-- board_loop_hz: array[number] (6 values)
 |   |-- tutorial_progress_pct: array[number] (6 values, nominally 0..100)
@@ -185,7 +185,10 @@ For player `aN` or `bN`, select team `a` or `b` and zero-based array index
 `N - 1`. For example, player `b4` uses `teams.b.robot.q_rad[3]`,
 `teams.b.haptic.dial_deg[3]`, and
 `teams.b.haptic.tutorial_progress_pct[3]`. Angles ending in `_rad` are radians;
-`dial_deg`, `_deg`, and `_pct` fields already carry the units in their names.
+`dial_deg`, `dial_robot_deg`, `_deg`, and `_pct` fields already carry the units
+in their names. `dial_deg` is the raw dial-space angle. `dial_robot_deg` is
+that same measured dial position mapped through the configured per-axis
+`gear_ratio`, so it reflects robot-space direction flips and scaling.
 
 Display-oriented interpretations:
 
