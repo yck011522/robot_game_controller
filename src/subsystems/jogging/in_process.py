@@ -82,7 +82,10 @@ _DEFAULT_MAX_ACCEL_DPS2 = [50.0, 50.0, 50.0, 80.0, 80.0, 80.0]
 #   forward_step_deg       : spacing between forward-path points
 #   path_cutoff_deg        : path_scalar=0 if first hit within this
 #   forward_bundle_size    : configs per worker request (parallelism)
-#   probe_half_deg         : prox probes span +/- this many degrees
+#   probe_half_deg         : prox probes span +/- this many degrees (dense, 1deg)
+#   probe_far_offsets_deg  : extra SPARSE prox probe magnitudes beyond the dense
+#                            band (mirrored to +/-); widen the tested/visualized
+#                            range cheaply. Empty -> dense band only.
 #   prox_floor             : prox_scalar never drops below this
 #   forward_timeout_ms     : hard deadline; missing -> path_scalar=0
 _DEFAULTS_JOG = {
@@ -91,6 +94,7 @@ _DEFAULTS_JOG = {
     "path_cutoff_deg": 3.0,
     "forward_bundle_size": 3,
     "probe_half_deg": 10,
+    "probe_far_offsets_deg": [],
     "prox_floor": 0.5,
     "forward_timeout_ms": 25,
 }
@@ -136,10 +140,24 @@ class InProcessPlanner:
         self._fwd_bundle_size = max(1, int(jog["forward_bundle_size"]))
         self._probe_half_deg = int(jog["probe_half_deg"])
         self._prox_floor = float(jog["prox_floor"])
-        self._probe_offsets_deg = (
+        # Sparse probes BEYOND the dense +/-probe_half_deg band. Given as
+        # positive degree magnitudes (under tuning.jogging.probe_far_offsets_deg);
+        # each is mirrored to +/-. They widen the tested/visualized range without
+        # the 1deg density (and per-tick collision cost) of the near band.
+        # Magnitudes <= probe_half_deg are dropped (already covered densely);
+        # duplicates are removed. Empty list -> dense band only (legacy behavior).
+        self._probe_far_deg = sorted({
+            int(v) for v in (jog.get("probe_far_offsets_deg") or [])
+            if int(v) > self._probe_half_deg
+        })
+        near_offsets = (
             list(range(-self._probe_half_deg, 0)) +
             list(range(1, self._probe_half_deg + 1))
         )
+        far_offsets = [-d for d in self._probe_far_deg] + list(self._probe_far_deg)
+        # Kept SORTED so the zone builder's min-consecutive-diff half_step and the
+        # parallel prox_hits ordering stay well-defined across mixed spacings.
+        self._probe_offsets_deg = sorted(near_offsets + far_offsets)
         self._probe_offsets_rad = [math.radians(d) for d in self._probe_offsets_deg]
         self._n_probes = len(self._probe_offsets_deg)
 

@@ -92,6 +92,10 @@ tuning:
     path_cutoff_deg: 3.0
     forward_bundle_size: 1
     probe_half_deg: 10
+    # Sparse probes beyond the dense +/-10deg band (mirrored to +/-). Widen the
+    # visualized/tested proximity range without 1deg density far out. Keep this
+    # list short -- each entry adds 2 collision checks per axis proximity tick.
+    probe_far_offsets_deg: [15, 20, 30, 45, 60]
     prox_floor: 0.6
     forward_timeout_ms: 40
   safety_barrier:

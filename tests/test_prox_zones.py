@@ -147,3 +147,46 @@ def test_payload_anchors_each_axis_on_last_q() -> None:
     assert zones[1]["blocked_below_till_deg"] is None
     # Axis 2 stale -> invalid.
     assert zones[2]["valid"] is False
+
+
+# Dense near band (+/-1..10, 1deg) plus sparse far probes (+/-15,20,30,45,60),
+# mirroring tuning.jogging.probe_far_offsets_deg. Kept sorted as the planner does.
+_SPARSE_FAR = [15.0, 20.0, 30.0, 45.0, 60.0]
+_OFFSETS_FAR = sorted(
+    _OFFSETS + [-d for d in _SPARSE_FAR] + list(_SPARSE_FAR)
+)
+
+
+def _hits_at_far(*offsets: float) -> list[bool]:
+    """Build a hit mask over _OFFSETS_FAR, True at the given offsets."""
+    wanted = set(offsets)
+    return [off in wanted for off in _OFFSETS_FAR]
+
+
+def test_sparse_far_no_hits_green_reaches_far_edge() -> None:
+    # With no hits the green window spans to the outermost sparse probe (+/-60)
+    # plus half the *dense* step (0.5), so the broad range is visualized.
+    zone = ps._prox_zone_for_axis(0.0, _OFFSETS_FAR, _hits_at_far(), age_ticks=0)
+    assert zone["valid"] is True
+    assert zone["free_min_deg"] == -60.5
+    assert zone["free_max_deg"] == 60.5
+    assert zone["blocked_above_till_deg"] is None
+    assert zone["blocked_below_till_deg"] is None
+
+
+def test_sparse_far_hit_uses_dense_half_step_and_reds_to_far_edge() -> None:
+    # A single far hit at +20 collapses red from just inside +20 out to the
+    # tested top edge (+60.5). half_step stays 0.5 (min dense spacing), so the
+    # green/red boundary is +19.5 even though the far probes are 5-15deg apart.
+    zone = ps._prox_zone_for_axis(0.0, _OFFSETS_FAR, _hits_at_far(20.0), age_ticks=0)
+    assert zone["free_max_deg"] == 19.5
+    assert zone["blocked_above_till_deg"] == 60.5
+    assert zone["free_min_deg"] == -60.5
+    assert zone["blocked_below_till_deg"] is None
+
+
+def test_sparse_far_near_hit_dominates_far_hit() -> None:
+    # Near hit (+3) and far hit (+45) both present: band collapses to nearest.
+    zone = ps._prox_zone_for_axis(0.0, _OFFSETS_FAR, _hits_at_far(3.0, 45.0), age_ticks=0)
+    assert zone["free_max_deg"] == 2.5
+    assert zone["blocked_above_till_deg"] == 60.5
