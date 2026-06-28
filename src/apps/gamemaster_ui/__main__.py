@@ -114,9 +114,12 @@ class TeamMock:
     path_scalar: float
     final_scalar: float
     first_hit_deg: float
-    prox_probe_offsets_deg: list[float]
-    prox_hits: list[list[bool]]
-    prox_age_ticks: list[int]
+    # Per-joint absolute-degree proximity bands from state.full
+    # collision.prox_zones (or None when an axis has no fresh test). Each entry
+    # is the dict produced by published_states._prox_zone_for_axis: green free
+    # band edges plus optional red blocked-band edges, all in absolute joint
+    # degrees. This is the shared ground truth the display receivers also use.
+    prox_zones: list[Any]
 
 
 @dataclass
@@ -491,9 +494,7 @@ class DashboardMockup:
             path_scalar=0.0,
             final_scalar=0.0,
             first_hit_deg=0.0,
-            prox_probe_offsets_deg=[],
-            prox_hits=[[] for _ in range(6)],
-            prox_age_ticks=[9999] * 6,
+            prox_zones=[None] * 6,
         )
 
     def _team_from_state(self, team: str, team_body: Any) -> TeamMock:
@@ -510,15 +511,11 @@ class DashboardMockup:
         tutorial_progress = _coerce_float_list(haptic.get("tutorial_progress_pct"), 6, 0.0)
         hit = collision.get("first_hit") if isinstance(collision.get("first_hit"), dict) else {}
         q_actual_deg = [math.degrees(v) for v in q_actual]
-        prox_probe_offsets_deg = _coerce_float_list(collision.get("prox_probe_offsets_deg"), 20, 0.0)
-        raw_prox_hits = collision.get("prox_hits") if isinstance(collision.get("prox_hits"), list) else []
-        prox_hits = [
-            [bool(v) for v in axis_hits] if isinstance(axis_hits, list) else []
-            for axis_hits in raw_prox_hits[:6]
+        raw_zones = collision.get("prox_zones") if isinstance(collision.get("prox_zones"), list) else []
+        prox_zones: list[Any] = [
+            raw_zones[axis] if axis < len(raw_zones) and isinstance(raw_zones[axis], dict) else None
+            for axis in range(6)
         ]
-        while len(prox_hits) < 6:
-            prox_hits.append([])
-        prox_age_ticks = [int(v) for v in _coerce_float_list(collision.get("prox_age_ticks"), 6, 9999.0)]
         buckets = _coerce_float_list(team_body.get("buckets"), 3, 0.0)
         return TeamMock(
             name=team.upper(),
@@ -538,9 +535,7 @@ class DashboardMockup:
             path_scalar=float(collision.get("path_scalar", 0.0) or 0.0),
             final_scalar=float(collision.get("final_scalar", 0.0) or 0.0),
             first_hit_deg=float(hit.get("distance_deg", 0.0) or 0.0),
-            prox_probe_offsets_deg=prox_probe_offsets_deg,
-            prox_hits=prox_hits,
-            prox_age_ticks=prox_age_ticks,
+            prox_zones=prox_zones,
         )
 
     def _normalize_joint(self, q_rad: float, axis: int) -> float:
@@ -943,10 +938,12 @@ class DashboardMockup:
         self._label(surface, badge, hint_x, rect.y + 56, 30, badge_color, bold=True, align="right" if align == "left" else "left")
 
     def _draw_lane_proximity(self, surface: pygame.Surface, rect: pygame.Rect, axis: int, team: TeamMock, connected: bool) -> None:
-        rail_gap = 8
         rail_w = 10
         left_rail = pygame.Rect(rect.x + 8, rect.y + 10, rail_w, rect.h - 20)
         right_rail = pygame.Rect(rect.right - 8 - rail_w, rect.y + 10, rail_w, rect.h - 20)
+        # Default grey rails: everything is "untested" until a fresh zone says
+        # otherwise. Green/red bands are painted on top only where collision
+        # tests were actually performed.
         for rail in (left_rail, right_rail):
             pygame.draw.rect(surface, COLORS["grid"], rail)
 
@@ -956,36 +953,36 @@ class DashboardMockup:
             surface.blit(off_overlay, (rect.x + 10, rect.y + 10))
             return
 
-        probe_offsets = team.prox_probe_offsets_deg
-        probe_hits = team.prox_hits[axis] if axis < len(team.prox_hits) else []
-        probe_age = team.prox_age_ticks[axis] if axis < len(team.prox_age_ticks) else 9999
-        if not probe_offsets or not probe_hits or probe_age > 12:
+        zone = team.prox_zones[axis] if axis < len(team.prox_zones) else None
+        if not isinstance(zone, dict) or not zone.get("valid"):
             muted = pygame.Surface((rect.w - 20, rect.h - 20), pygame.SRCALPHA)
             muted.fill((120, 120, 120, 20))
             surface.blit(muted, (rect.x + 10, rect.y + 10))
             return
 
-        step_deg = 1.0
-        if len(probe_offsets) >= 2:
-            diffs = [abs(probe_offsets[i + 1] - probe_offsets[i]) for i in range(len(probe_offsets) - 1) if abs(probe_offsets[i + 1] - probe_offsets[i]) > 1e-6]
-            if diffs:
-                step_deg = min(diffs)
+        def _paint_band(lo_deg: float, hi_deg: float, color: tuple[int, int, int]) -> tuple[int, int]:
+            # Map an absolute-degree band [lo_deg, hi_deg] onto both rails.
+            lo_norm = self._normalize_joint_deg(min(lo_deg, hi_deg), axis)
+            hi_norm = self._normalize_joint_deg(max(lo_deg, hi_deg), axis)
+            top = min(_value_to_lane_y(lo_norm, rect), _value_to_lane_y(hi_norm, rect))
+            bottom = max(_value_to_lane_y(lo_norm, rect), _value_to_lane_y(hi_norm, rect))
+            seg_h = max(4, bottom - top)
+            pygame.draw.rect(surface, color, pygame.Rect(left_rail.x, top, rail_w, seg_h))
+            pygame.draw.rect(surface, color, pygame.Rect(right_rail.x, top, rail_w, seg_h))
+            return top, top + seg_h
+
+        free_min = zone.get("free_min_deg")
+        free_max = zone.get("free_max_deg")
+        blocked_above = zone.get("blocked_above_till_deg")
+        blocked_below = zone.get("blocked_below_till_deg")
 
         red_ranges: list[tuple[int, int]] = []
-        for offset_deg, is_hit in zip(probe_offsets, probe_hits):
-            center_deg = team.actual_deg[axis] + float(offset_deg)
-            lo = self._normalize_joint_deg(center_deg - step_deg * 0.5, axis)
-            hi = self._normalize_joint_deg(center_deg + step_deg * 0.5, axis)
-            top = min(_value_to_lane_y(lo, rect), _value_to_lane_y(hi, rect))
-            bottom = max(_value_to_lane_y(lo, rect), _value_to_lane_y(hi, rect))
-            seg_h = max(8, bottom - top)
-            left_seg = pygame.Rect(left_rail.x, top, rail_w, seg_h)
-            right_seg = pygame.Rect(right_rail.x, top, rail_w, seg_h)
-            seg_color = COLORS["danger"] if is_hit else COLORS["success"]
-            pygame.draw.rect(surface, seg_color, left_seg)
-            pygame.draw.rect(surface, seg_color, right_seg)
-            if is_hit:
-                red_ranges.append((top, top + seg_h))
+        if free_min is not None and free_max is not None:
+            _paint_band(float(free_min), float(free_max), COLORS["success"])
+        if blocked_above is not None and free_max is not None:
+            red_ranges.append(_paint_band(float(free_max), float(blocked_above), COLORS["danger"]))
+        if blocked_below is not None and free_min is not None:
+            red_ranges.append(_paint_band(float(blocked_below), float(free_min), COLORS["danger"]))
 
         if red_ranges:
             hatch_top = min(r[0] for r in red_ranges)

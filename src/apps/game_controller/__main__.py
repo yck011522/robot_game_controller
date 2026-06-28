@@ -21,6 +21,7 @@ from subsystems.jogging.in_process import InProcessPlanner  # noqa: E402
 from subsystems.rewind.in_process import RewindController  # noqa: E402
 from subsystems.rewind.shortcut import ShortcutSettings  # noqa: E402
 from subsystems.motion_planning.trajectory_timing import SegmentMover  # noqa: E402
+from subsystems.robot.joint_limits import resolve_joint_limits_rad  # noqa: E402
 from apps.game_controller.batch_validation import (  # noqa: E402
     BatchValidationSession,
     batch_validation_settings,
@@ -133,6 +134,18 @@ def main(argv: list[str] | None = None) -> int:
     ) / 1000.0
     robot_show_poses = _load_robot_show_poses_deg()
     robot_tuning = proc.profile.tuning.get("robot", {})
+    # Per-axis hard joint limits in degrees, used to clamp the published
+    # proximity zones so a band never advertises motion the robot cannot reach.
+    # Falls back to +/-180 per axis if the profile omits limits (e.g. a
+    # team-less skeleton run); resolve_joint_limits_rad otherwise raises.
+    try:
+        _q_min_rad, _q_max_rad = resolve_joint_limits_rad(robot_tuning)
+        joint_limits_deg = (
+            [math.degrees(v) for v in _q_min_rad],
+            [math.degrees(v) for v in _q_max_rad],
+        )
+    except (ValueError, TypeError):
+        joint_limits_deg = ([-180.0] * 6, [180.0] * 6)
     max_velocity_deg_s = robot_tuning.get(
         "max_velocity_deg_s", [20.0, 20.0, 20.0, 30.0, 30.0, 30.0]
     )
@@ -965,6 +978,7 @@ def main(argv: list[str] | None = None) -> int:
                 pause_reason=pause_reason,
                 soft_paused=soft_paused,
                 countdown_s=countdown_s,
+                joint_limits_deg=joint_limits_deg,
             )
         )
         if batch_session is not None:

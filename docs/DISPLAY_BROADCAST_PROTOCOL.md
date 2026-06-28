@@ -156,9 +156,10 @@ team
 |   |-- in_collision: boolean
 |   |-- first_hit: object | null
 |   |-- path_scalar, prox_scalar, final_scalar: number
+|   |-- prox_zones: array (6 per-axis zone objects)
 |   |-- prox_probe_offsets_deg: array[number]
 |   |-- prox_hits: array
-|   `-- prox_age_ticks: integer
+|   `-- prox_age_ticks: array[integer]
 |-- planner: object
 |-- rewind
 |   |-- enabled: boolean
@@ -205,6 +206,57 @@ Display-oriented interpretations:
 
 An optional `batch_validation` object may appear at the top of `state` in
 automated validation profiles. It is not part of normal display behavior.
+
+### Proximity collision zones
+
+`teams.<team>.collision.prox_zones` is the recommended source for drawing each
+joint's nearby collision picture. It is an array of six per-axis objects, one
+per robot joint, indexed the same way as the other per-joint arrays (index
+`N - 1` for player `aN`/`bN`). The game controller probes a small window of
+joint angles just above and below each joint's current position, then collapses
+the result into three display bands expressed in **absolute joint degrees**, so
+a receiver never has to add the current angle itself.
+
+Each axis object has this shape:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `valid` | boolean | `false` means there is no fresh collision test for this joint (stale or missing). Draw the whole lane as the neutral "untested" background and ignore the remaining fields. |
+| `free_min_deg` | number \| null | Lower edge of the green (collision-free) band, in absolute joint degrees. |
+| `free_max_deg` | number \| null | Upper edge of the green band, in absolute joint degrees. |
+| `blocked_above_till_deg` | number \| null | Outer (upper) edge of the red band above the green band. `null` means no collision was found above, so there is no red band on that side. |
+| `blocked_below_till_deg` | number \| null | Outer (lower) edge of the red band below the green band. `null` means no collision was found below. |
+
+The tested window spans only a few degrees around the current joint angle, so
+the red bands intentionally stop at `blocked_above_till_deg` and
+`blocked_below_till_deg` rather than continuing to the edge of the lane.
+Everything beyond those edges was never collision-checked and must be shown as
+the neutral background, not as free space. When a side has no red band, the
+green band already reaches the outer edge of the tested window, and the area
+beyond it is likewise untested background.
+
+These values share the same space and units as the current joint angle, which is
+`teams.<team>.robot.q_rad[N-1]` converted to degrees, so the bands and the
+current-position marker can be placed on one common angular scale.
+
+To render one joint lane:
+
+1. Fill the lane with the neutral "untested" background color.
+2. If `valid` is `false`, stop here.
+3. Draw a green band from `free_min_deg` to `free_max_deg`.
+4. If `blocked_above_till_deg` is not `null`, draw a red band from
+   `free_max_deg` to `blocked_above_till_deg`.
+5. If `blocked_below_till_deg` is not `null`, draw a red band from
+   `blocked_below_till_deg` to `free_min_deg`.
+
+This yields the natural cases: a fully free window (green only), a collision
+above or below (green plus one red band), or collisions on both sides
+(red-green-red). The current joint angle always falls inside the green band and
+may be drawn as a position marker on top of the bands.
+
+The raw `prox_probe_offsets_deg`, `prox_hits`, and `prox_age_ticks` fields remain
+available for diagnostics, but `prox_zones` already encodes the same information
+in display-ready form and is the preferred input for visualization.
 
 ## 4. Pi and player assignment
 
