@@ -308,6 +308,17 @@ def main(argv: list[str] | None = None) -> int:
                 max_velocity_rad_s=max_velocity_rad_s,
                 speed_fraction=game_cfg["conclusion_speed_fraction"],
             ),
+            # Daydreaming SKIP return-to-start motion. The future attract-mode
+            # robot animation will reuse this same interrupt path: request the
+            # return, drive one straight joint-space segment to robot_begin_pose,
+            # then let the stage machine enter idle.
+            "daydream_return_mover": SegmentMover(
+                max_velocity_rad_s=max_velocity_rad_s,
+                speed_fraction=game_cfg["rewind_speed_fraction"],
+            ),
+            "daydream_return_requested": False,
+            "daydream_return_active": False,
+            "daydream_return_done": False,
             "conclusion_done": False,
             "conclusion_sum_remainder_units": 0.0,
             "last_tick_t": time.perf_counter(),
@@ -364,7 +375,7 @@ def main(argv: list[str] | None = None) -> int:
         # empty here and re-initialized on every stage entry by `_enter_stage`.
         "dial_window": {},
         "dial_arm": {},
-        # Set by the UI / physical SKIP control; consumed in play & tutorial.
+        # Set by the UI / physical SKIP control; consumed by skippable stages.
         "skip_requested": False,
         # Edge tracker so PAUSE banners only print on on/off transitions.
         "prev_paused": False,
@@ -591,6 +602,14 @@ def main(argv: list[str] | None = None) -> int:
                 )
 
             if st["last_q"] is None:
+                if (
+                    stage_state["stage"] == "daydreaming"
+                    and bool(stage_state.get("skip_requested", False))
+                ):
+                    # No measured pose means there is no safe segment to drive.
+                    # Mark complete so SKIP can still leave attract mode instead
+                    # of hanging forever before robot telemetry appears.
+                    st["daydream_return_done"] = True
                 _reset_haptic_bounds_to_static(st, haptic_cfg)
                 _reset_team_motion_outputs(st, q_target_rad=None)
                 st["score"] = int(sum(st["bucket_values"]))
@@ -599,6 +618,15 @@ def main(argv: list[str] | None = None) -> int:
             if bool(st.get("haptic_required", False)) and not bool(
                 st.get("haptic_seeded", False)
             ):
+                if (
+                    stage_state["stage"] == "daydreaming"
+                    and bool(stage_state.get("skip_requested", False))
+                ):
+                    # Respect the existing startup guard: without haptic
+                    # telemetry the normal loop does not move the robot. Treat
+                    # the return as complete so the operator can still skip the
+                    # attract page.
+                    st["daydream_return_done"] = True
                 _reset_haptic_bounds_to_static(st, haptic_cfg)
                 _publish_hold_current_pose(pub, p.proc, team, st)
                 continue
@@ -735,6 +763,19 @@ def main(argv: list[str] | None = None) -> int:
                         pub, p.proc, team, st, dt, conclusion_certifier
                     ):
                         continue
+                if (
+                    stage_state["stage"] == "daydreaming"
+                    and bool(stage_state.get("skip_requested", False))
+                    and _drive_daydream_return_to_start(
+                        pub,
+                        p.proc,
+                        team,
+                        st,
+                        dt,
+                        _robot_begin_pose_rad(robot_show_poses.get(team, {})),
+                    )
+                ):
+                    continue
                 _publish_hold_current_pose(pub, p.proc, team, st)
                 continue
 
@@ -1008,6 +1049,106 @@ def main(argv: list[str] | None = None) -> int:
         operator_input_rep.close(0)
 
     return proc.run(tick, teardown=teardown)
+
+
+def _robot_begin_pose_rad(pose_cfg: dict[str, list[float]]) -> list[float]:
+    """Return a team's ``robot_begin_pose`` from show-pose config in radians.
+
+    Called by the daydreaming SKIP return path before publishing each
+    straight-line target segment. ``pose_cfg`` is one team's entry from
+    ``config/robot_show_poses.yaml`` as loaded by ``_load_robot_show_poses_deg``.
+    Missing or malformed entries fall back per joint to the same neutral begin
+    pose used by the show-pose loader.
+    """
+
+    raw_pose = pose_cfg.get("robot_begin_pose") if isinstance(pose_cfg, dict) else None
+    fallback_deg = [0.0, -90.0, 90.0, 0.0, 0.0, 0.0]
+    if not isinstance(raw_pose, list):
+        raw_pose = fallback_deg
+    pose_deg: list[float] = []
+    for index in range(6):
+        fallback = fallback_deg[index]
+        try:
+            pose_deg.append(float(raw_pose[index]))
+        except (IndexError, TypeError, ValueError):
+            pose_deg.append(fallback)
+    return [math.radians(value) for value in pose_deg]
+
+
+def _drive_daydream_return_to_start(
+    pub: zmq.Socket,
+    producer: str,
+    team: str,
+    state: dict[str, Any],
+    dt_s: float,
+    begin_pose_rad: list[float],
+) -> bool:
+    """Publish one tick of daydreaming SKIP return-to-start motion.
+
+    Called from the main per-team tick while the active stage is daydreaming
+    and ``stage_state['skip_requested']`` is set. It seeds the team's
+    ``daydream_return_mover`` from the measured current joint pose, advances a
+    straight joint-space segment toward ``robot_begin_pose``, publishes the
+    resulting ``cmd.robot.target.<team>``, and marks ``daydream_return_done``
+    once the mover reaches its retimed goal.
+
+    Args:
+        pub: Bus PUB socket used by the game controller.
+        producer: Envelope producer name, usually ``"game_controller"``.
+        team: Team id whose robot command topic will be published.
+        state: Per-team runtime state dict, mutated in place.
+        dt_s: Seconds elapsed since the previous tick; controls segment timing.
+        begin_pose_rad: Six-joint ``robot_begin_pose`` target in radians.
+
+    Returns:
+        True when a robot target was published and the caller should not also
+        publish a hold command; False when already complete or when no safe
+        motion target was available.
+    """
+
+    if bool(state.get("daydream_return_done", False)):
+        return False
+
+    mover = state.get("daydream_return_mover")
+    q_actual = state.get("last_q")
+    if mover is None or not isinstance(q_actual, list) or len(q_actual) < 6:
+        state["daydream_return_done"] = True
+        return False
+
+    if not bool(state.get("daydream_return_active", False)):
+        mover.begin(list(q_actual[:6]), list(begin_pose_rad[:6]))
+        state["daydream_return_active"] = True
+        state["daydream_return_done"] = False
+        print(
+            f"[game_controller] daydreaming skip return started team={team} "
+            f"duration_s={mover.duration_s:.2f}",
+            flush=True,
+        )
+
+    q_target = mover.advance(dt_s)
+    if not q_target:
+        state["daydream_return_done"] = True
+        return False
+
+    _reset_team_motion_outputs(state, q_target_rad=list(q_target))
+    env = bus.make_envelope(producer)
+    env.update(
+        {
+            "team": team,
+            "q_target_rad": list(q_target),
+            "clamps": {"path": 1.0, "prox": 1.0, "final": 1.0},
+        }
+    )
+    bus.publish(pub, f"cmd.robot.target.{team}", env)
+
+    if mover.arrived:
+        state["daydream_return_done"] = True
+        state["daydream_return_active"] = False
+        print(
+            f"[game_controller] daydreaming skip return arrived team={team}",
+            flush=True,
+        )
+    return True
 
 
 def _drain_latest(sub: zmq.Socket, *, on_msg) -> None:

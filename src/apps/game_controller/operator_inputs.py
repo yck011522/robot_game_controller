@@ -102,7 +102,7 @@ def _handle_operator_input_request(
         record_last_action = True
     elif action in ("skip", "end_game"):
         stage = stage_state.get("stage")
-        if stage not in ("play", "tutorial"):
+        if stage not in ("daydreaming", "idle", "tutorial", "play"):
             ok, error, action = False, f"skip not allowed in stage '{stage}'", "skip"
         else:
             stage_state["skip_requested"] = True

@@ -7,12 +7,12 @@
 serial_ports:
   # Team haptic dial boards. Empty means "configured disconnected"; runtime
   # will not scan unrelated COM ports during launcher startup.
-  haptic_a: ["COM23", "COM25", "COM21", "COM28", "COM55", "COM56"]
+  haptic_a: ["COM23", "COM25", "COM21", "COM28", "COM55", "COM60"]
   haptic_b: ["COM53", "COM52", "COM51", "COM50", "COM49", "COM48"]
 
   # Shared serial hardware.
   light_column_1_3: "COM45" # CH1/A
-  light_column_4_5: "COM39" # CH2/B
+  light_column_4_5: "COM39" # CH2/B7522
   light_column_6_8: "COM42" # CH3/C
   safety_barrier: "COM43" # CH4/D
   weight_sensor: "COM46" # CH5/E
@@ -72,8 +72,8 @@ scoreboard:
   bucket_displays:
     A1: 2 # Team A bucket 1 text renders on panel 2.
     A2: 3 # Team A bucket 2 text renders on panel 3.
-    A3: 5 # Team A bucket 3 text renders on panel 5.
-    B1: 6 # Team B bucket 1 text renders on panel 6.
+    A3: 6 # Team A bucket 3 text renders on panel 5.
+    B1: 5 # Team B bucket 1 text renders on panel 6.
     B2: 4 # Team B bucket 2 text renders on panel 4.
     B3: 1 # Team B bucket 3 text renders on panel 1.
 

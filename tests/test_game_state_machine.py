@@ -159,6 +159,36 @@ def test_daydreaming_ignores_subthreshold_movement() -> None:
     assert ss["stage"] == "daydreaming"
 
 
+def test_daydreaming_skip_waits_for_return_to_start() -> None:
+    """SKIP requests a return-to-start move before attract mode exits."""
+
+    teams = _make_teams()
+    ss = _enter("daydreaming", teams)
+
+    ss["skip_requested"] = True
+    gc._tick_stage_state(ss, teams, GAME_CFG, _secs(0.1))
+    assert ss["stage"] == "daydreaming"
+    assert teams["a"]["daydream_return_requested"] is True
+
+    teams["a"]["daydream_return_done"] = True
+    gc._tick_stage_state(ss, teams, GAME_CFG, _secs(0.2))
+    assert ss["stage"] == "idle"
+    assert ss["skip_requested"] is False
+
+
+def test_daydreaming_return_uses_robot_begin_pose() -> None:
+    pose_rad = gc._robot_begin_pose_rad({"robot_begin_pose": [0, -116, 116, -35, 95, 180]})
+
+    assert pose_rad == [
+        math.radians(0),
+        math.radians(-116),
+        math.radians(116),
+        math.radians(-35),
+        math.radians(95),
+        math.radians(180),
+    ]
+
+
 def test_daydreaming_ignores_slow_drift() -> None:
     """Slow drift around a set point rolls off the window and never wakes.
 
@@ -237,6 +267,17 @@ def test_idle_to_daydreaming_on_timeout() -> None:
 
     gc._tick_stage_state(ss, teams, GAME_CFG, _secs(3.5))  # past idle_timeout 3s
     assert ss["stage"] == "daydreaming"
+
+
+def test_idle_to_tutorial_on_skip() -> None:
+    teams = _make_teams()
+    ss = _enter("idle", teams)
+    ss["skip_requested"] = True
+
+    gc._tick_stage_state(ss, teams, GAME_CFG, _secs(0.1))
+
+    assert ss["stage"] == "tutorial"
+    assert ss["skip_requested"] is False
 
 
 # --- tutorial -------------------------------------------------------------
@@ -354,27 +395,28 @@ def _control_state() -> dict:
     return {"soft_pause": False, "last_action": None, "last_action_ts_mono_ns": None}
 
 
-def test_skip_rejected_outside_play_or_tutorial() -> None:
+def test_skip_rejected_in_reset_and_conclusion() -> None:
     teams = _make_teams()
-    ss = _enter("idle", teams)
-    reply = gc._handle_operator_input_request(
-        _control_state(),
-        ss,
-        teams,
-        {"action": "skip"},
-        0,
-        producer="test_game_state_machine",
-        recovery_timeout_s=gc.RECOVERY_TIMEOUT_S,
-    )
-    assert reply["ok"] is False
-    assert reply["result"]["action"] == "skip"
-    assert ss["skip_requested"] is False
-    assert "idle" in str(reply["error"] or "")
+    for stage in ("reset", "conclusion"):
+        ss = _enter(stage, teams)
+        reply = gc._handle_operator_input_request(
+            _control_state(),
+            ss,
+            teams,
+            {"action": "skip"},
+            0,
+            producer="test_game_state_machine",
+            recovery_timeout_s=gc.RECOVERY_TIMEOUT_S,
+        )
+        assert reply["ok"] is False, stage
+        assert reply["result"]["action"] == "skip"
+        assert ss["skip_requested"] is False
+        assert stage in str(reply["error"] or "")
 
 
-def test_skip_accepted_in_play_and_tutorial() -> None:
+def test_skip_accepted_in_skippable_stages() -> None:
     teams = _make_teams()
-    for stage in ("play", "tutorial"):
+    for stage in ("daydreaming", "idle", "tutorial", "play"):
         ss = _enter(stage, teams)
         reply = gc._handle_operator_input_request(
             _control_state(),

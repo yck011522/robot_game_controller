@@ -124,7 +124,7 @@ The game can be paused at any time by the E-stop (software E-stop, the hardwired
 - Multi-function displays show ambient / attract visuals.
 - Monitor the dials for any significant movement.
 
-**Exit:** If any controller is moved significantly, the robots return to the ready position and we enter **Idle**.
+**Exit:** If any controller is moved significantly, the robots return to the ready position and we enter **Idle**. Pressing **Skip** also exits Daydreaming: the robots first move in a straight joint-space line back to `robot_begin_pose`, then the game enters **Idle**.
 
 ------
 
@@ -141,6 +141,7 @@ The game can be paused at any time by the E-stop (software E-stop, the hardwired
 **Exit:**
 
 - **To Tutorial:** if a player moves any one dial upwards by a set amount (e.g. ~360° on the controller), on either team.
+- **To Tutorial via operator:** if the gamemaster presses **Skip**.
 - **To Daydreaming:** if Idle persists for too long without significant controller movement (e.g. ~1 minute), drop back to Daydreaming.
 
 ------

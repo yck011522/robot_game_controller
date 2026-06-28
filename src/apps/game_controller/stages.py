@@ -80,6 +80,25 @@ def _tick_stage_state(
     stage = stage_state["stage"]
 
     if stage == "daydreaming":
+        # Operator SKIP exits attract mode through a robot-safe return-to-start
+        # handshake. The runtime loop owns the straight joint-space motion
+        # because it has the live robot pose and bus publisher; this pure stage
+        # machine only requests the move and waits for each active team to mark
+        # ``daydream_return_done``. A future slow daydreaming animation should
+        # set the same return flags when interrupted so the stage still lands in
+        # idle from robot_begin_pose.
+        if bool(stage_state.get("skip_requested", False)):
+            for st in teams.values():
+                st["daydream_return_requested"] = True
+            if not teams or all(
+                bool(st.get("daydream_return_done", False))
+                for st in teams.values()
+            ):
+                _enter_stage(
+                    stage_state, teams, "idle", game_cfg, now_ns, reason="skip"
+                )
+            return
+
         # Attract mode. Wake to idle as soon as any dial is turned past the
         # configured threshold. No timer here.
         _update_dial_window(stage_state, teams, game_cfg, now_ns)
@@ -96,6 +115,10 @@ def _tick_stage_state(
         return
 
     if stage == "idle":
+        if bool(stage_state.get("skip_requested", False)):
+            _enter_stage(stage_state, teams, "tutorial", game_cfg, now_ns, reason="skip")
+            return
+
         # Ready state. A big "scroll up" starts the tutorial; otherwise a long
         # quiet period drops back to daydreaming. No countdown shown.
         _update_dial_window(stage_state, teams, game_cfg, now_ns)
@@ -278,6 +301,11 @@ def _enter_stage(
         for st in teams.values():
             st["tutorial_progress"] = [0.0] * 6
             st["tutorial_reset_pending"] = True
+    elif new_stage == "daydreaming":
+        for st in teams.values():
+            st["daydream_return_requested"] = False
+            st["daydream_return_active"] = False
+            st["daydream_return_done"] = False
     elif new_stage == "reset" and bool(game_cfg.get("rewind_enabled", False)):
         for st in teams.values():
             rewind = st.get("rewind")
