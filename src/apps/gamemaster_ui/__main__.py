@@ -8,7 +8,7 @@ Controls
 --------
 P   : play / resume
 Space: soft e-stop
-E   : end game
+S   : skip ahead
 F   : toggle fullscreen fit-to-monitor
 Esc : quit
 """
@@ -75,7 +75,7 @@ LAYOUT_NAME = "Central Spine Broadcast Tech"
 
 CONTROL_ACTION_LABELS = {
     "play_resume": "PLAY/RESUME",
-    "end_game": "END GAME",
+    "end_game": "SKIP",
     "soft_estop": "E-STOP",
 }
 
@@ -191,7 +191,7 @@ class DashboardMockup:
         self._last_control_ack: dict[str, Any] | None = None
         self._last_control_error: dict[str, Any] | None = None
         self._next_heartbeat_t = time.perf_counter() + (1.0 / HEARTBEAT_HZ)
-        pygame.display.set_caption("Observer dashboard | P play/resume | Space soft e-stop | E end game")
+        pygame.display.set_caption("Observer dashboard | P play/resume | Space soft e-stop | S skip")
 
     def run(self) -> int:
         try:
@@ -210,7 +210,7 @@ class DashboardMockup:
                             self._request_control_action("play_resume", source="keyboard")
                         elif event.key == pygame.K_SPACE:
                             self._request_control_action("soft_estop", source="keyboard")
-                        elif event.key == pygame.K_e:
+                        elif event.key == pygame.K_s:
                             self._request_control_action("end_game", source="keyboard")
                     if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                         logical_pos = self._screen_to_logical(event.pos)
@@ -675,7 +675,7 @@ class DashboardMockup:
         self._label(surface, LAYOUT_NAME, 60, 42, 38, COLORS["text"], bold=True)
         self._label(surface, f"{LAYOUT_STYLE['name']} | central spine family", 60, 88, 24, COLORS["cyan"], bold=True)
         self._label(surface, "Logical canvas 3840x2160, scaled to current window", 60, 118, 22, COLORS["muted"])
-        self._label(surface, "Keys: P play/resume | Space soft e-stop | E end game | F fullscreen | Esc quit", 60, 148, 20, COLORS["muted"])
+        self._label(surface, "Keys: P play/resume | Space soft e-stop | S skip | F fullscreen | Esc quit", 60, 148, 20, COLORS["muted"])
         self._label(surface, f"UI {ui_proc.hz:4.1f} Hz", LOGICAL_SIZE[0] - 60, 44, 28, ui_fps_color, bold=True, align="right")
         if ui_fps_min is None:
             detail = f"target {self._target_fps:.0f}"
@@ -906,9 +906,9 @@ class DashboardMockup:
             },
             {
                 "action": "end_game",
-                "label": "END GAME",
-                "detail": "Jump immediately to conclusion scoring.",
-                "shortcut": "E",
+                "label": "SKIP",
+                "detail": "Skip ahead from the current stage.",
+                "shortcut": "S",
                 "rect": pygame.Rect(left + button_w + gap, top, button_w, button_h),
                 "fill": COLORS["panel_soft"],
                 "outline": COLORS["warning"],
