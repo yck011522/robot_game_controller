@@ -151,7 +151,7 @@ tuning:
     inter_command_delay_s: 0.0      # 0 flushes all queued lines each tick; raise to pace RS485
   game:
     # --- Core game ---
-    duration_s: 240                  # play-stage length (seconds)
+    duration_s: 300                  # play-stage length (seconds)
     sum_score_rate_unit_per_s: 100
     sim_bucket_values:
       a: [120, 80, 40]              # seed scores (no weight sensors in this profile)
@@ -164,7 +164,7 @@ tuning:
 
     # --- State machine bring-up ---
     start_stage: daydreaming        # boot into attract mode (LED breathing visible immediately)
-    tutorial_duration_s: 60         # tutorial countdown length (seconds)
+    tutorial_duration_s: 90         # tutorial countdown length (seconds)
     reset_duration_s: 3.0           # fallback hold; only used if rewind_enabled is false
     # --- Geometric rewind (replaces the flat reset timer) ---
     rewind_enabled: true            # rewind the recorded play path instead of a fixed reset hold
