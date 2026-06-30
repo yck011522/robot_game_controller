@@ -157,8 +157,8 @@ tuning:
     # original tutorial dial direction even though gameplay uses negative
     # gear_ratio above: tutorial progress is a raw dial-space interaction and
     # does not currently follow gear-ratio sign.
-    tutorial_scroll_dial_start_end: [0, -10000]   # [start, end] dial pos (decideg)
-    tutorial_scroll_dial_bound: [-10050, 50]      # [min, max] soft bounds (decideg)
+    tutorial_scroll_dial_start_end: [0, -20000]   # [start, end] dial pos (decideg)
+    tutorial_scroll_dial_bound: [-20100, 50]      # [min, max] soft bounds (decideg)
     # Progress percentages at which the dial snaps to a detent. Each tick the
     # haptic tracking target is set to the nearest detent to the measured
     # position, so players feel a lock at each step. There is no 0% detent, so
