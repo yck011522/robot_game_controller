@@ -26,6 +26,7 @@ import time
 from typing import Any
 
 from core import bus
+from core.console import log_line
 from subsystems.motion_planning.collision_client import CollisionWorkerClient
 from subsystems.motion_planning.planner_core import discretize_joint_line
 
@@ -237,9 +238,9 @@ class ConclusionCertifier:
             # On any failure (timeout, transport error) mark every pending team
             # as NOT certified so __main__ hard-stops them rather than moving
             # an uncertified arm.
-            print(
-                f"[conclusion-certify] failed: {type(exc).__name__}: {exc}",
-                flush=True,
+            log_line(
+                "conclusion-certify",
+                f"failed: {type(exc).__name__}: {exc}",
             )
             with self._lock:
                 for team in list(self._results):
@@ -293,10 +294,10 @@ def drive_conclusion_team_motion(
         # its pose, abandon the rest of the show, and let the game still finish.
         if not st.get("conclusion_hardstopped"):
             st["conclusion_hardstopped"] = True
-            print(
-                f"[conclusion] team={team} path NOT collision-free; "
+            log_line(
+                "conclusion",
+                f"team={team} path NOT collision-free; "
                 f"hard-stopping conclusion motion at phase={phase}",
-                flush=True,
             )
         st["conclusion_phase"] = None
         st["conclusion_target_pose_name"] = None

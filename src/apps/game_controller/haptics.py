@@ -8,6 +8,7 @@ from typing import Any
 import zmq
 
 from core import bus
+from core.console import log_line
 
 from apps.game_controller.context import (
     DEFAULT_HAPTIC_BOUNDS_DEG_MAX,
@@ -544,10 +545,7 @@ def _begin_play_sync(
     sync["last_reseat_mono_s"] = float(now)
     sync["settled_streak"] = 0
     sync["attempts"] = int(sync.get("attempts", 0)) + 1
-    print(
-        f"[game_controller] play-sync reseat team={team} attempt={sync['attempts']}",
-        flush=True,
-    )
+    log_line("game_controller", f"play-sync reseat team={team} attempt={sync['attempts']}")
     return True
 
 
@@ -585,10 +583,7 @@ def _tick_play_sync(
     required_ticks = int(haptic_cfg.get("startup_settle_streak_ticks", 3))
     if int(sync.get("settled_streak", 0)) >= max(1, required_ticks):
         sync["pending"] = False
-        print(
-            f"[game_controller] play-sync done team={team} max_err_rad={max_err:.4f}",
-            flush=True,
-        )
+        log_line("game_controller", f"play-sync done team={team} max_err_rad={max_err:.4f}")
         return True
 
     last_reseat_s = float(sync.get("last_reseat_mono_s", 0.0) or 0.0)
@@ -640,9 +635,10 @@ def _tick_startup_alignment(
         haptic_cfg.get("startup_settle_streak_ticks", 3)
     ):
         align["done"] = True
-        print(
-            f"[game_controller] startup-align done team={team} attempts={int(align.get('attempts', 0))} max_err_rad={max_err:.4f}",
-            flush=True,
+        log_line(
+            "game_controller",
+            f"startup-align done team={team} "
+            f"attempts={int(align.get('attempts', 0))} max_err_rad={max_err:.4f}",
         )
         return
 
@@ -663,10 +659,10 @@ def _tick_startup_alignment(
     align["attempts"] = attempts + 1
     align["last_reseat_mono_s"] = now
     align["settled_streak"] = 0
-    print(
-        f"[game_controller] startup-align reseat team={team} attempt={align['attempts']} "
+    log_line(
+        "game_controller",
+        f"startup-align reseat team={team} attempt={align['attempts']} "
         f"j6_robot={q_robot[5]:.4f} j6_dial={q_dial[5]:.4f} max_err_rad={max_err:.4f}",
-        flush=True,
     )
 
 

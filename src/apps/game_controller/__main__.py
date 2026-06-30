@@ -15,6 +15,7 @@ if str(_SRC) not in sys.path:
 import zmq  # noqa: E402
 
 from core import bus  # noqa: E402
+from core.console import log_line  # noqa: E402
 from core.config import default_runtime_setting  # noqa: E402
 from core.proc import Proc, banner  # noqa: E402
 from subsystems.jogging.in_process import InProcessPlanner  # noqa: E402
@@ -129,12 +130,12 @@ def main(argv: list[str] | None = None) -> int:
             daydream_segments = load_first_play_segment(
                 latest_recording, list(active_teams)
             )
-            print(
-                f"[game_controller] daydream playback from {latest_recording.name}: "
+            log_line(
+                "game_controller",
+                f"daydream playback from {latest_recording.name}: "
                 + ", ".join(
                     f"{t}={len(daydream_segments.get(t, []))}pts" for t in active_teams
                 ),
-                flush=True,
             )
     batch_cfg = batch_validation_settings(
         proc.profile.tuning.get("batch_validation")
@@ -332,21 +333,12 @@ def main(argv: list[str] | None = None) -> int:
                 max_velocity_rad_s=max_velocity_rad_s,
                 speed_fraction=game_cfg["conclusion_speed_fraction"],
             ),
-            # Daydreaming / interrupted return-to-start motion. The future
-            # attract-mode robot animation will reuse this same interrupt path:
-            # request the return, drive one straight joint-space segment to
-            # robot_begin_pose, then let the stage machine enter idle.
-            "daydream_return_mover": SegmentMover(
-                max_velocity_rad_s=max_velocity_rad_s,
-                speed_fraction=game_cfg["rewind_speed_fraction"],
-            ),
             "daydream_return_requested": False,
-            "daydream_return_active": False,
             "daydream_return_done": False,
             # Attract-mode player: replays this team's recorded game and rewinds
             # (smoothed) before looping. None when daydream playback is off or no
-            # recording exists, falling back to LED breathing + interrupted
-            # return-to-start motion.
+            # recording exists; in that case daydreaming is LED-breathing only
+            # and interrupts can go directly to idle.
             "daydream_player": _build_daydream_player(
                 daydream_cfg,
                 daydream_segments,
@@ -393,6 +385,7 @@ def main(argv: list[str] | None = None) -> int:
             # dial to 0 and installs the tutorial bounds, then clears it.
             "tutorial_reset_pending": False,
         }
+    _disable_incomplete_daydream_players(teams, daydream_cfg)
     banner(proc.proc, f"teams={active_teams} collision_check={collision_enabled}")
 
     state_seq = 0
@@ -598,7 +591,10 @@ def main(argv: list[str] | None = None) -> int:
             publish_tare=_publish_weight_tare,
         )
         if tare_warning is not None:
-            print(tare_warning, flush=True)
+            log_line(
+                "game_controller",
+                str(tare_warning).removeprefix("[game_controller] ").strip(),
+            )
         _refresh_safety_block(control_state, safety_state, safety_telem_age_max_s)
 
         if bool(control_state.get("recovery_active", False)):
@@ -806,26 +802,18 @@ def main(argv: list[str] | None = None) -> int:
                     # Pure attract-mode behavior: forward playback / natural
                     # loop rewind only. Interrupt rewind ownership is in the
                     # dedicated daydream_interrupted stage.
+                    _restart_daydream_loop_if_ready(teams)
                     if _drive_daydream_playback(
                         pub, p.proc, team, st, dt, float(now_ns) / 1e9
                     ):
                         continue
                 if stage_state["stage"] == "daydream_interrupted":
-                    # Interrupt rewind stage: finish return-to-start (or the
-                    # player-owned rewind) before allowing idle.
+                    # Interrupt rewind stage: recorded daydream players own the
+                    # smoothed reversed path before idle is allowed. When no
+                    # all-team playback was loaded, the stage machine skips
+                    # this state and goes directly to idle.
                     if _drive_daydream_playback(
                         pub, p.proc, team, st, dt, float(now_ns) / 1e9
-                    ):
-                        continue
-                    if stage_state.get("daydream_interrupt_reason") == "skip" and (
-                        _drive_daydream_return_to_start(
-                            pub,
-                            p.proc,
-                            team,
-                            st,
-                            dt,
-                            _robot_begin_pose_rad(robot_show_poses.get(team, {})),
-                        )
                     ):
                         continue
                 _publish_hold_current_pose(pub, p.proc, team, st)
@@ -953,10 +941,10 @@ def main(argv: list[str] | None = None) -> int:
         )
 
         if paused != bool(stage_state.get("prev_paused", False)):
-            print(
-                f"[game_controller] PAUSE {'ON' if paused else 'OFF'}"
+            log_line(
+                "game_controller",
+                f"PAUSE {'ON' if paused else 'OFF'}"
                 + (f" reason={pause_reason}" if paused else ""),
-                flush=True,
             )
             stage_state["prev_paused"] = paused
 
@@ -972,10 +960,10 @@ def main(argv: list[str] | None = None) -> int:
             if batch_rewind_complete and not batch_session.shutdown_requested:
                 completed_index = batch_session.game_index
                 start_next = batch_session.record_completed_game(teams)
-                print(
-                    f"[batch-validation] completed game={completed_index}/"
+                log_line(
+                    "batch-validation",
+                    f"completed game={completed_index}/"
                     f"{batch_cfg.game_count} report={batch_cfg.output_jsonl}",
-                    flush=True,
                 )
                 if start_next:
                     _prepare_next_batch_game()
@@ -1091,6 +1079,9 @@ def main(argv: list[str] | None = None) -> int:
             batch_session.close()
         for st in teams.values():
             st["rewind"].close()
+            daydream_player = st.get("daydream_player")
+            if daydream_player is not None:
+                daydream_player.close()
             st["planner"].close()
             st["sub_haptic"].close(0)
             st["sub_actual"].close(0)
@@ -1125,8 +1116,67 @@ def _build_daydream_player(
     samples = segments.get(source_team) or []
     if len(samples) < 2:
         return None
+    return DaydreamPlayer(
+        samples=samples,
+        max_velocity_rad_s=max_velocity_rad_s,
+        rewind_speed_fraction=daydream_cfg["rewind_speed_fraction"],
+        arrival_tolerance_rad=math.radians(daydream_cfg["rewind_arrival_tolerance_deg"]),
+        shortcut_settings=_daydream_shortcut_settings(
+            daydream_cfg,
+            collision_enabled,
+            shortcut_worker_limit,
+        ),
+        team=team,
+    )
+
+
+def _disable_incomplete_daydream_players(
+    teams: dict[str, dict], daydream_cfg: dict[str, Any]
+) -> None:
+    """Disable daydream robot playback unless every active team has a player.
+
+    Called once after all per-team state is built. Daydream movement is an
+    all-team attract-mode feature: if playback is disabled, no recording was
+    loaded, or any active team lacks a usable segment, all players are cleared
+    and daydreaming becomes LED-only until wake/skip goes directly to idle.
+    """
+
+    if not teams:
+        return
+    players = {
+        team: state.get("daydream_player")
+        for team, state in teams.items()
+    }
+    if daydream_cfg["enabled"] and all(player is not None for player in players.values()):
+        return
+    missing = [team for team, player in players.items() if player is None]
+    for state in teams.values():
+        player = state.get("daydream_player")
+        if player is not None:
+            player.close()
+        state["daydream_player"] = None
+    if daydream_cfg["enabled"]:
+        log_line(
+            "game_controller",
+            "daydream playback disabled: missing valid player for "
+            + ", ".join(missing or list(players)),
+        )
+
+
+def _daydream_shortcut_settings(
+    daydream_cfg: dict[str, Any],
+    collision_enabled: bool,
+    shortcut_worker_limit: int,
+) -> ShortcutSettings:
+    """Build profile-driven shortcut settings for every daydream rewind path.
+
+    Called when constructing recorded daydream players. ``collision_enabled``
+    and ``shortcut_worker_limit`` are runtime gates; the profile's nested
+    ``daydream.rewind_shortcut`` block remains the single tuning source.
+    """
+
     sc = daydream_cfg["rewind_shortcut"]
-    shortcut = ShortcutSettings(
+    return ShortcutSettings(
         enabled=bool(sc["enabled"] and collision_enabled and shortcut_worker_limit > 0),
         optimization_budget_s=sc["optimization_budget_s"],
         collision_step_rad=math.radians(sc["collision_step_deg"]),
@@ -1134,14 +1184,29 @@ def _build_daydream_player(
         worker_limit=max(1, shortcut_worker_limit),
         random_seed=sc["random_seed"],
     )
-    return DaydreamPlayer(
-        samples=samples,
-        max_velocity_rad_s=max_velocity_rad_s,
-        rewind_speed_fraction=daydream_cfg["rewind_speed_fraction"],
-        arrival_tolerance_rad=math.radians(daydream_cfg["rewind_arrival_tolerance_deg"]),
-        shortcut_settings=shortcut,
-        team=team,
-    )
+
+
+def _restart_daydream_loop_if_ready(teams: dict[str, dict]) -> None:
+    """Restart all daydream players only after every active team is waiting.
+
+    Called on daydreaming ticks before publishing per-team playback targets.
+    A player enters ``loop_waiting`` after its natural smoothed rewind reaches
+    the play-entry pose. Restarting all waiting players together prevents a
+    shorter team trajectory from beginning the next loop while another team is
+    still returning.
+    """
+
+    players = [
+        state.get("daydream_player")
+        for state in teams.values()
+        if state.get("daydream_player") is not None
+    ]
+    if not players:
+        return
+    if not all(player.phase == "loop_waiting" for player in players):
+        return
+    for player in players:
+        player.start_forward()
 
 
 def _drive_daydream_playback(
@@ -1157,9 +1222,10 @@ def _drive_daydream_playback(
     Forward pass follows the recording verbatim; reaching its end (or an
     interrupt via ``daydream_return_requested``) triggers a smoothed rewind back
     to the play-entry pose. On natural completion it loops; on interrupt it sets
-    ``daydream_return_done`` so the stage machine advances to idle. Returns True
-    when a robot target was published (caller skips the hold-pose publish),
-    False when no player is configured (caller breathes / holds instead).
+    ``daydream_return_done`` so the stage machine advances to idle. During
+    shortcut optimization this function publishes a hold and still returns True,
+    because the recorded player owns the interrupted return even before a
+    rewind target is ready. Returns False only when no player is configured.
 
     Args:
         pub: Bus PUB socket.
@@ -1177,20 +1243,23 @@ def _drive_daydream_playback(
     q_target: list[float] | None = None
     if interrupt:
         if not bool(state.get("daydream_rewind_started", False)):
-            player.begin_rewind(now_s=now_s)
+            player.begin_rewind(now_s=now_s, current_q_rad=state.get("last_q"))
             state["daydream_rewind_started"] = True
         q_target = player.rewind_target(dt_s=dt_s, q_actual_rad=state.get("last_q"))
         if player.rewind_complete:
             state["daydream_return_done"] = True
-    elif player.phase == "rewinding":
+    elif player.phase in ("rewinding", "loop_waiting"):
         q_target = player.rewind_target(dt_s=dt_s, q_actual_rad=state.get("last_q"))
-        if player.rewind_complete:
-            player.start_forward()
+        if player.rewind_complete and player.phase == "rewinding":
+            player.wait_for_loop_restart()
     else:
         q_target, finished = player.forward_target(dt_s)
         if finished:
             player.begin_rewind(now_s=now_s)
     if not q_target:
+        if interrupt:
+            _publish_hold_current_pose(pub, producer, team, state)
+            return True
         return False
     _reset_team_motion_outputs(state, q_target_rad=list(q_target))
     env = bus.make_envelope(producer)
@@ -1202,106 +1271,6 @@ def _drive_daydream_playback(
         }
     )
     bus.publish(pub, f"cmd.robot.target.{team}", env)
-    return True
-
-
-def _robot_begin_pose_rad(pose_cfg: dict[str, list[float]]) -> list[float]:
-    """Return a team's ``robot_begin_pose`` from show-pose config in radians.
-
-    Called by the daydream-interrupted return path before publishing each
-    straight-line target segment. ``pose_cfg`` is one team's entry from
-    ``config/robot_show_poses.yaml`` as loaded by ``_load_robot_show_poses_deg``.
-    Missing or malformed entries fall back per joint to the same neutral begin
-    pose used by the show-pose loader.
-    """
-
-    raw_pose = pose_cfg.get("robot_begin_pose") if isinstance(pose_cfg, dict) else None
-    fallback_deg = [0.0, -90.0, 90.0, 0.0, 0.0, 0.0]
-    if not isinstance(raw_pose, list):
-        raw_pose = fallback_deg
-    pose_deg: list[float] = []
-    for index in range(6):
-        fallback = fallback_deg[index]
-        try:
-            pose_deg.append(float(raw_pose[index]))
-        except (IndexError, TypeError, ValueError):
-            pose_deg.append(fallback)
-    return [math.radians(value) for value in pose_deg]
-
-
-def _drive_daydream_return_to_start(
-    pub: zmq.Socket,
-    producer: str,
-    team: str,
-    state: dict[str, Any],
-    dt_s: float,
-    begin_pose_rad: list[float],
-) -> bool:
-    """Publish one tick of daydream-interrupted return-to-start motion.
-
-    Called from the main per-team tick while the active stage is
-    ``daydream_interrupted``. It seeds the team's ``daydream_return_mover``
-    from the measured current joint pose, advances a straight joint-space
-    segment toward ``robot_begin_pose``, publishes the resulting
-    ``cmd.robot.target.<team>``, and marks ``daydream_return_done`` once the
-    mover reaches its retimed goal.
-
-    Args:
-        pub: Bus PUB socket used by the game controller.
-        producer: Envelope producer name, usually ``"game_controller"``.
-        team: Team id whose robot command topic will be published.
-        state: Per-team runtime state dict, mutated in place.
-        dt_s: Seconds elapsed since the previous tick; controls segment timing.
-        begin_pose_rad: Six-joint ``robot_begin_pose`` target in radians.
-
-    Returns:
-        True when a robot target was published and the caller should not also
-        publish a hold command; False when already complete or when no safe
-        motion target was available.
-    """
-
-    if bool(state.get("daydream_return_done", False)):
-        return False
-
-    mover = state.get("daydream_return_mover")
-    q_actual = state.get("last_q")
-    if mover is None or not isinstance(q_actual, list) or len(q_actual) < 6:
-        state["daydream_return_done"] = True
-        return False
-
-    if not bool(state.get("daydream_return_active", False)):
-        mover.begin(list(q_actual[:6]), list(begin_pose_rad[:6]))
-        state["daydream_return_active"] = True
-        state["daydream_return_done"] = False
-        print(
-            f"[game_controller] daydream interrupt return started team={team} "
-            f"duration_s={mover.duration_s:.2f}",
-            flush=True,
-        )
-
-    q_target = mover.advance(dt_s)
-    if not q_target:
-        state["daydream_return_done"] = True
-        return False
-
-    _reset_team_motion_outputs(state, q_target_rad=list(q_target))
-    env = bus.make_envelope(producer)
-    env.update(
-        {
-            "team": team,
-            "q_target_rad": list(q_target),
-            "clamps": {"path": 1.0, "prox": 1.0, "final": 1.0},
-        }
-    )
-    bus.publish(pub, f"cmd.robot.target.{team}", env)
-
-    if mover.arrived:
-        state["daydream_return_done"] = True
-        state["daydream_return_active"] = False
-        print(
-            f"[game_controller] daydream interrupt return arrived team={team}",
-            flush=True,
-        )
     return True
 
 

@@ -22,6 +22,7 @@ from typing import Any
 from compas_fab.robots import Duration, JointTrajectory, JointTrajectoryPoint
 from compas_robots.model import Joint
 
+from core.console import log_line
 from subsystems.motion_planning.collision_client import CollisionWorkerClient
 from subsystems.motion_planning.trajectory_timing import (
     retime_path,
@@ -250,10 +251,10 @@ class RewindController:
         )
         self._shortcut_seed = seed
         self._status = "optimizing"
-        print(
-            f"[rewind-shortcut] team={self.team} start points={len(path_rad)} "
+        log_line(
+            "rewind-shortcut",
+            f"team={self.team} start points={len(path_rad)} "
             f"workers={settings.worker_limit} seed={seed}",
-            flush=True,
         )
         self._shortcut_thread = threading.Thread(
             target=self._run_shortcut,
@@ -334,9 +335,9 @@ class RewindController:
             else [list(q) for q in self._raw_rewind_path]
         )
         if error:
-            print(
-                f"[rewind-shortcut] team={self.team} error={error}; using raw path",
-                flush=True,
+            log_line(
+                "rewind-shortcut",
+                f"team={self.team} error={error}; using raw path",
             )
         elif result is not None:
             reduction = (
@@ -344,8 +345,9 @@ class RewindController:
                 * (result.original_point_count - result.shortened_point_count)
                 / max(1, result.original_point_count)
             )
-            print(
-                f"[rewind-shortcut] team={self.team} done "
+            log_line(
+                "rewind-shortcut",
+                f"team={self.team} done "
                 f"points={result.original_point_count}->{result.shortened_point_count} "
                 f"reduction={reduction:.1f}% duration="
                 f"{result.original_duration_s:.2f}s->{result.shortened_duration_s:.2f}s "
@@ -353,7 +355,6 @@ class RewindController:
                 f"free={result.collision_free_candidates} "
                 f"rejected={result.collision_rejections} "
                 f"checks={result.configurations_sent} elapsed={result.elapsed_s:.3f}s",
-                flush=True,
             )
         self._install_rewind_path(path)
         self._shortcut_thread = None

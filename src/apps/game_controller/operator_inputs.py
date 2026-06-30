@@ -11,6 +11,7 @@ from typing import Any
 import zmq
 
 from core import bus
+from core.console import log_line
 
 
 def _drain_operator_input_requests(rep: zmq.Socket, *, on_msg) -> None:
@@ -111,7 +112,7 @@ def _handle_operator_input_request(
             ok, error, action = False, f"skip not allowed in stage '{stage}'", "skip"
         else:
             stage_state["skip_requested"] = True
-            print(f"[game_controller] SKIP requested in stage '{stage}'", flush=True)
+            log_line("game_controller", f"SKIP requested in stage '{stage}'")
             action = "skip"
             record_last_action = True
     else:

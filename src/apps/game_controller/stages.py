@@ -21,6 +21,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
+from core.console import log_line
 from apps.game_controller.context import (
     DEFAULT_BUCKET_VALUES,
     DEFAULT_LOOK_POSE_DEG,
@@ -82,13 +83,10 @@ def _tick_stage_state(
 
     if stage == "daydreaming":
         # Operator SKIP or a dial wake both exit attract mode through a
-        # robot-safe smoothed rewind: the runtime loop owns the motion (it has
-        # the live pose, recorded trajectory, and bus publisher); this pure
-        # stage machine only requests the return and waits for every active team
-        # to mark ``daydream_return_done``. Teams replaying a recorded game
-        # rewind from wherever they are; teams without a player return straight
-        # to robot_begin_pose. With no player at all, the wake transitions to
-        # idle immediately as before.
+        # robot-safe smoothed rewind when all active teams have recorded
+        # daydream players. If playback was disabled or no all-team recording
+        # was loaded, there is no daydream robot movement to unwind and wake /
+        # skip goes directly to idle.
         # Wake when any dial is pushed off its commanded tracking target. The
         # dials are spring-tracked to the robot (held still, or following the
         # attract-mode playback), so this single deviation test distinguishes a
@@ -112,30 +110,26 @@ def _tick_stage_state(
             )
         if bool(stage_state.get("daydream_interrupted", False)):
             reason = stage_state.get("daydream_interrupt_reason", "wake")
-            # A SKIP (legacy straight-line return) or any recorded-game player
-            # owns a robot-safe return first: request it and wait in the
-            # dedicated interrupted state until every team is ready to finish
-            # the rewind. A dial wake without any player goes idle immediately
-            # (LED-breathing-only profiles).
-            has_player = any(
+            has_all_players = bool(teams) and all(
                 st.get("daydream_player") is not None for st in teams.values()
             )
-            if has_player or bool(stage_state.get("skip_requested", False)):
-                for st in teams.values():
-                    st["daydream_return_requested"] = True
-                if teams and not all(
-                    bool(st.get("daydream_return_done", False))
-                    for st in teams.values()
-                ):
-                    _enter_stage(
-                        stage_state,
-                        teams,
-                        "daydream_interrupted",
-                        game_cfg,
-                        now_ns,
-                        reason=reason,
-                    )
-                    return
+            if not has_all_players:
+                _enter_stage(stage_state, teams, "idle", game_cfg, now_ns, reason=reason)
+                return
+            for st in teams.values():
+                st["daydream_return_requested"] = True
+            if teams and not all(
+                bool(st.get("daydream_return_done", False)) for st in teams.values()
+            ):
+                _enter_stage(
+                    stage_state,
+                    teams,
+                    "daydream_interrupted",
+                    game_cfg,
+                    now_ns,
+                    reason=reason,
+                )
+                return
             _enter_stage(stage_state, teams, "idle", game_cfg, now_ns, reason=reason)
             return
         return
@@ -347,7 +341,6 @@ def _enter_stage(
         stage_state["daydream_interrupt_reason"] = None
         for st in teams.values():
             st["daydream_return_requested"] = False
-            st["daydream_return_active"] = False
             st["daydream_return_done"] = False
             st["daydream_rewind_started"] = False
             player = st.get("daydream_player")
@@ -356,7 +349,6 @@ def _enter_stage(
     elif new_stage == "daydream_interrupted":
         for st in teams.values():
             st["daydream_return_requested"] = True
-            st["daydream_return_active"] = False
             st["daydream_return_done"] = False
             st["daydream_rewind_started"] = False
     elif new_stage == "reset" and bool(game_cfg.get("rewind_enabled", False)):
@@ -369,10 +361,9 @@ def _enter_stage(
         for st in teams.values():
             _enter_conclusion(st, now_ns)
 
-    print(
-        f"[game_controller] STAGE {old_stage} -> {new_stage}"
-        + (f"  ({reason})" if reason else ""),
-        flush=True,
+    log_line(
+        "game_controller",
+        f"STAGE {old_stage} -> {new_stage}" + (f"  ({reason})" if reason else ""),
     )
 
 
@@ -469,11 +460,11 @@ def _update_dial_window(
                 for j in range(6):
                     low, high = _robust_range(_joint_series(buf, j), trim)
                     ranges_deg.append(round(math.degrees(high - low), 1))
-                print(
-                    f"[game_controller] movement-detect armed team={team} "
+                log_line(
+                    "game_controller",
+                    f"movement-detect armed team={team} "
                     f"window_s={window_s:.2f} trim={trim} "
                     f"range_deg={ranges_deg}",
-                    flush=True,
                 )
 
 
@@ -601,17 +592,16 @@ def _maybe_log_movement_progress(
 
     delta, detail = _max_dial_delta_detail(stage_state, teams, game_cfg)
     if detail is None:
-        print(
-            f"[game_controller] {label}: movement detection not armed yet "
-            f"(collecting window)",
-            flush=True,
+        log_line(
+            "game_controller",
+            f"{label}: movement detection not armed yet (collecting window)",
         )
         return
     team, joint, _low, _high = detail
-    print(
-        f"[game_controller] {label}: max dial range team {team} J{joint + 1} "
+    log_line(
+        "game_controller",
+        f"{label}: max dial range team {team} J{joint + 1} "
         f"{math.degrees(delta):.1f}deg / thr {math.degrees(threshold_rad):.0f}deg",
-        flush=True,
     )
 
 

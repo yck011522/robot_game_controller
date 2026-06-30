@@ -134,7 +134,7 @@ def _arm(ss: dict, teams: dict, start_s: float = 0.1, step_s: float = 0.1) -> fl
 # --- daydreaming ----------------------------------------------------------
 
 
-def test_daydreaming_to_idle_on_dial_movement() -> None:
+def test_daydreaming_dial_movement_goes_idle_without_player() -> None:
     teams = _make_teams()
     ss = _enter("daydreaming", teams)
 
@@ -157,19 +157,14 @@ def test_daydreaming_ignores_subthreshold_movement() -> None:
     assert ss["stage"] == "daydreaming"
 
 
-def test_daydreaming_skip_waits_for_return_to_start() -> None:
-    """SKIP requests a return-to-start move before attract mode exits."""
+def test_daydreaming_skip_goes_idle_without_player() -> None:
+    """SKIP exits daydream directly when there is no recorded playback."""
 
     teams = _make_teams()
     ss = _enter("daydreaming", teams)
 
     ss["skip_requested"] = True
     gc._tick_stage_state(ss, teams, GAME_CFG, _secs(0.1))
-    assert ss["stage"] == "daydream_interrupted"
-    assert teams["a"]["daydream_return_requested"] is True
-
-    teams["a"]["daydream_return_done"] = True
-    gc._tick_stage_state(ss, teams, GAME_CFG, _secs(0.2))
     assert ss["stage"] == "idle"
     assert ss["skip_requested"] is False
 
@@ -198,17 +193,77 @@ def test_daydreaming_interrupt_recenters_still_goes_idle() -> None:
     assert ss["stage"] == "idle"
 
 
-def test_daydreaming_return_uses_robot_begin_pose() -> None:
-    pose_rad = gc._robot_begin_pose_rad({"robot_begin_pose": [0, -116, 116, -35, 95, 180]})
+def test_daydream_interrupt_player_wait_blocks_straight_return(monkeypatch) -> None:
+    """A recorded player owns interrupt motion while shortcut smoothing runs."""
 
-    assert pose_rad == [
-        math.radians(0),
-        math.radians(-116),
-        math.radians(116),
-        math.radians(-35),
-        math.radians(95),
-        math.radians(180),
-    ]
+    class _OptimizingPlayer:
+        """Minimal player stub that has armed rewind but has no target yet."""
+
+        rewind_complete = False
+
+        def __init__(self) -> None:
+            self.current_q_rad = None
+
+        def begin_rewind(self, *, now_s: float, current_q_rad=None) -> bool:
+            self.current_q_rad = current_q_rad
+            return True
+
+        def rewind_target(self, *, dt_s: float, q_actual_rad):
+            return None
+
+    player = _OptimizingPlayer()
+    hold_calls = []
+    state = {
+        "daydream_player": player,
+        "daydream_return_requested": True,
+        "daydream_rewind_started": False,
+        "daydream_return_done": False,
+        "last_q": [0.25, 0.0, 0.0, 0.0, 0.0, 0.0],
+    }
+
+    def _fake_hold(pub, producer: str, team: str, team_state: dict) -> None:
+        hold_calls.append((producer, team, list(team_state["last_q"])))
+
+    monkeypatch.setattr(gc, "_publish_hold_current_pose", _fake_hold)
+
+    handled = gc._drive_daydream_playback(
+        None, "game_controller", "a", state, 0.016, 42.0
+    )
+
+    assert handled is True
+    assert state["daydream_rewind_started"] is True
+    assert state["daydream_return_done"] is False
+    assert player.current_q_rad == state["last_q"]
+    assert hold_calls == [("game_controller", "a", state["last_q"])]
+
+
+def test_daydream_loop_restart_waits_for_all_players() -> None:
+    """One team cannot start the next playback loop before the other is ready."""
+
+    class _LoopPlayer:
+        def __init__(self, phase: str) -> None:
+            self.phase = phase
+            self.starts = 0
+
+        def start_forward(self) -> None:
+            self.phase = "forward"
+            self.starts += 1
+
+    player_a = _LoopPlayer("loop_waiting")
+    player_b = _LoopPlayer("rewinding")
+    teams = {
+        "a": {"daydream_player": player_a},
+        "b": {"daydream_player": player_b},
+    }
+
+    gc._restart_daydream_loop_if_ready(teams)
+    assert player_a.starts == 0
+    assert player_b.starts == 0
+
+    player_b.phase = "loop_waiting"
+    gc._restart_daydream_loop_if_ready(teams)
+    assert player_a.starts == 1
+    assert player_b.starts == 1
 
 
 def test_single_frame_glitch_does_not_wake_idle() -> None:

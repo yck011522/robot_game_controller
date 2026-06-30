@@ -101,6 +101,22 @@ def _team_q_rad(team_block: Any) -> list[float] | None:
         return None
 
 
+def _valid_q_rad(value: list[float] | None) -> list[float] | None:
+    """Return a six-joint float copy for daydream playback internals.
+
+    Called when the runtime supplies live robot telemetry for an interrupted
+    rewind. Malformed or missing telemetry returns ``None`` so the player falls
+    back to the already-sampled recorded path.
+    """
+
+    if not isinstance(value, list) or len(value) < _AXES:
+        return None
+    try:
+        return [float(v) for v in value[:_AXES]]
+    except (TypeError, ValueError):
+        return None
+
+
 class DaydreamPlayer:
     """Replay one team's recorded play path, then smoothed rewind, then loop.
 
@@ -145,6 +161,7 @@ class DaydreamPlayer:
         self._arrival_tolerance_rad = float(arrival_tolerance_rad)
         self._shortcut_settings = shortcut_settings or ShortcutSettings()
         # "forward" -> following recording; "rewinding" -> smoothed return;
+        # "loop_waiting" -> holding at play-entry until all teams are ready;
         # "idle" until first started.
         self._phase = "idle"
         self._forward_elapsed_s = 0.0
@@ -153,7 +170,7 @@ class DaydreamPlayer:
 
     @property
     def phase(self) -> str:
-        """Current playback phase: ``idle`` / ``forward`` / ``rewinding``."""
+        """Current playback phase: ``idle`` / ``forward`` / ``rewinding`` / ``loop_waiting``."""
 
         return self._phase
 
@@ -163,6 +180,17 @@ class DaydreamPlayer:
         self._phase = "forward"
         self._forward_elapsed_s = 0.0
         self._forward_index = 0
+
+    def wait_for_loop_restart(self) -> None:
+        """Hold at play-entry until the controller restarts every team together.
+
+        Called by the game controller after a natural daydream rewind completes.
+        The player keeps its completed rewind controller so
+        :meth:`rewind_target` can continue returning the play-entry target while
+        other teams finish their own rewind.
+        """
+
+        self._phase = "loop_waiting"
 
     def forward_target(self, dt_s: float) -> tuple[list[float], bool]:
         """Advance the forward pass and return ``(q_target, finished)``.
@@ -184,15 +212,30 @@ class DaydreamPlayer:
         finished = self._forward_elapsed_s >= self._times[-1]
         return target, finished
 
-    def begin_rewind(self, *, now_s: float) -> bool:
+    def begin_rewind(
+        self, *, now_s: float, current_q_rad: list[float] | None = None
+    ) -> bool:
         """Build a smoothed rewind from the current forward point to the start.
 
         Reverses only the already-played portion of the recording (so an
         interrupt rewinds from where the robot currently is back to the
-        play-entry pose). Returns True when a rewind path was armed.
+        play-entry pose). ``current_q_rad`` is supplied by the game controller
+        for interrupt rewinds so the optimized path starts at the measured pose
+        being held while the shortcut search runs. Returns True when a rewind
+        path was armed.
         """
 
         played = self._path[: self._forward_index + 1]
+        current_q = _valid_q_rad(current_q_rad)
+        if current_q is not None:
+            if played:
+                max_delta = max(
+                    abs(current_q[axis] - played[-1][axis]) for axis in range(_AXES)
+                )
+                if max_delta > 1e-9:
+                    played.append(current_q)
+            else:
+                played = [current_q]
         if len(played) < 2:
             self._phase = "rewinding"
             self._rewind = None
