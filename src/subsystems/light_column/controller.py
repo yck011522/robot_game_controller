@@ -170,6 +170,7 @@ class LedColumnController:
         # Stage -> render function dispatch table.
         self._renderers: dict[str, Callable[[dict[str, Any], float, float], None]] = {
             "daydreaming": self._render_daydreaming,
+            "daydream_interrupted": self._render_daydream_interrupted,
             "idle": self._render_idle,
             "tutorial": self._render_tutorial,
             "play": self._render_play,
@@ -244,13 +245,6 @@ class LedColumnController:
     ) -> None:
         """Attract mode: each team's strips solid team color, breathing slowly."""
 
-        # While an interrupted attract-mode rewind is settling the robots back to
-        # the play-entry pose, hold every column at 50% white so operators see a
-        # clear "returning, please wait" signal instead of the team breathing.
-        if bool(state.get("daydream_interrupt_rewind", False)):
-            self._fill_all(scale(WHITE, 0.5))
-            return
-
         period = self._config.breathing_period_s
         low = self._config.breathing_min_brightness
         # 0..1 sine that spends equal time bright and dim across the period.
@@ -260,6 +254,15 @@ class LedColumnController:
         for team in ("a", "b"):
             color = scale(self._config.team_colors[team], brightness)
             self._set_team(team, solid(color, self._n))
+
+    def _render_daydream_interrupted(
+        self, state: dict[str, Any], now_mono: float, now_wall: float
+    ) -> None:
+        """Interrupted attract mode: hold a clear white wait signal."""
+
+        # Rewind completion remains internal to the game controller stage
+        # machine; LEDs only key off the explicit interrupted stage.
+        self._fill_all(scale(WHITE, 0.5))
 
     def _render_idle(
         self, state: dict[str, Any], now_mono: float, now_wall: float

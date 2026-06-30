@@ -290,13 +290,6 @@ def _build_state_full_payload(
         "paused": paused,
         "pause_reason": pause_reason,
         "soft_estop": soft_paused,
-        "daydream_interrupt_rewind": (
-            stage_state.get("stage") == "daydreaming"
-            and bool(stage_state.get("daydream_interrupted", False))
-            and not all(
-                bool(st.get("daydream_return_done", False)) for st in teams.values()
-            )
-        ),
         "safety": {
             "barrier": _state_full_safety_barrier(safety_state),
         },

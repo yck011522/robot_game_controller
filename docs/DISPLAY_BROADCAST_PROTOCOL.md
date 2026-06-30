@@ -115,6 +115,7 @@ The bus-envelope fields inside `state` have these constraints:
 | Value | Display meaning |
 |---|---|
 | `daydreaming` | Attract/screensaver mode. |
+| `daydream_interrupted` | Attract mode was interrupted; robot return/rewind to start is in progress. |
 | `idle` | Waiting for a player to begin. |
 | `tutorial` | Interactive tutorial. |
 | `play` | Timed game in progress. |

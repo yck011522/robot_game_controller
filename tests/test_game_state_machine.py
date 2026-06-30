@@ -165,7 +165,7 @@ def test_daydreaming_skip_waits_for_return_to_start() -> None:
 
     ss["skip_requested"] = True
     gc._tick_stage_state(ss, teams, GAME_CFG, _secs(0.1))
-    assert ss["stage"] == "daydreaming"
+    assert ss["stage"] == "daydream_interrupted"
     assert teams["a"]["daydream_return_requested"] is True
 
     teams["a"]["daydream_return_done"] = True
@@ -175,7 +175,7 @@ def test_daydreaming_skip_waits_for_return_to_start() -> None:
 
 
 def test_daydreaming_interrupt_recenters_still_goes_idle() -> None:
-    """A latched wake finishes in idle even if the dial springs back mid-rewind."""
+    """A latched wake enters interrupted mode and then finishes in idle."""
 
     class _StubPlayer:
         def start_forward(self) -> None:
@@ -186,12 +186,12 @@ def test_daydreaming_interrupt_recenters_still_goes_idle() -> None:
     ss = _enter("daydreaming", teams)
     teams["a"]["last_dial"][0] = math.radians(950)  # > 900 deg residual -> wake
     gc._tick_stage_state(ss, teams, GAME_CFG, _secs(0.1))
-    assert ss["stage"] == "daydreaming"
+    assert ss["stage"] == "daydream_interrupted"
     assert teams["a"]["daydream_return_requested"] is True
 
     teams["a"]["last_dial"][0] = 0.0  # dial springs back below threshold
     gc._tick_stage_state(ss, teams, GAME_CFG, _secs(0.2))
-    assert ss["stage"] == "daydreaming"
+    assert ss["stage"] == "daydream_interrupted"
 
     teams["a"]["daydream_return_done"] = True
     gc._tick_stage_state(ss, teams, GAME_CFG, _secs(0.3))
@@ -395,9 +395,9 @@ def _control_state() -> dict:
     return {"soft_pause": False, "last_action": None, "last_action_ts_mono_ns": None}
 
 
-def test_skip_rejected_in_reset_and_conclusion() -> None:
+def test_skip_rejected_in_non_skippable_stages() -> None:
     teams = _make_teams()
-    for stage in ("reset", "conclusion"):
+    for stage in ("daydream_interrupted", "reset", "conclusion"):
         ss = _enter(stage, teams)
         reply = gc._handle_operator_input_request(
             _control_state(),

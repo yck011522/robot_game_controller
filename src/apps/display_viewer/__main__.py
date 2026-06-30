@@ -14,6 +14,7 @@ Per-stage screens
 -----------------
 * idle         : "Move the dial to begin" prompt.
 * daydreaming  : live gauge of this player's joint + dial position.
+* daydream_interrupted : wait / rewind screen while the robot returns to start.
 * tutorial     : long scrollable page driven by this player's progress (0-100%).
 * play         : robot joint + dial + proximity collision + speed override + timer.
 * reset        : "Game over - robot returning to start" + rewind progress.
@@ -262,6 +263,40 @@ def _render_daydreaming(surface, rect, fonts, accent, player, team_block) -> Non
           (rect.centerx, rect.bottom - rect.height // 7))
 
 
+def _render_daydream_interrupted(surface, rect, fonts, accent, player, team_block) -> None:
+    """Interrupted daydream screen: show rewind / wait messaging."""
+
+    _render_daydreaming(surface, rect, fonts, accent, player, team_block)
+    # Distinct visual treatment from plain daydreaming so interruption/rewind
+    # is obvious at a glance on Pi displays.
+    tint = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
+    tint.fill((200, 70, 30, 42))
+    surface.blit(tint, rect.topleft)
+    badge = pygame.Rect(rect.left + 16, rect.top + 16, rect.width - 32, 34)
+    pygame.draw.rect(surface, (180, 72, 24), badge, border_radius=6)
+    _text(
+        surface,
+        fonts["body"],
+        "DAYDREAM INTERRUPTED",
+        (255, 240, 228),
+        (badge.centerx, badge.centery),
+    )
+    _text(
+        surface,
+        fonts["body"],
+        "Stopping and rewinding",
+        FG,
+        (rect.centerx, rect.top + rect.height // 2),
+    )
+    _text(
+        surface,
+        fonts["small"],
+        "Please do not move away",
+        MUTED,
+        (rect.centerx, rect.top + rect.height // 2 + rect.height // 12),
+    )
+
+
 def _render_tutorial(surface, rect, fonts, accent, player, team_block) -> None:
     """Tutorial screen: a long page scrolled by this player's progress (0-100%)."""
 
@@ -453,6 +488,8 @@ def _render_panel(surface, rect, fonts, player, state) -> None:
         _render_idle(surface, rect, fonts, accent, player)
     elif stage == "daydreaming":
         _render_daydreaming(surface, rect, fonts, accent, player, team_block)
+    elif stage == "daydream_interrupted":
+        _render_daydream_interrupted(surface, rect, fonts, accent, player, team_block)
     elif stage == "tutorial":
         _render_tutorial(surface, rect, fonts, accent, player, team_block)
     elif stage == "play":

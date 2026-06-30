@@ -47,10 +47,19 @@ DEFAULT_HAPTIC_BOUNDS_DEG_MAX = [180.0] * 6
 # treated as stale (and the game pauses). Overridable per runtime config.
 DEFAULT_SAFETY_TELEM_AGE_MAX_MS = 1100.0
 
-# High-level game lifecycle, in order. `daydreaming <-> idle` is the only
-# two-way edge; the rest advance one way and loop back to idle after
-# conclusion. See docs/GAME_MECHANICS.md section 4 for the full description.
-STAGE_ORDER = ("daydreaming", "idle", "tutorial", "play", "reset", "conclusion")
+# High-level game lifecycle, in order. `daydreaming -> daydream_interrupted ->
+# idle` is the attract-mode path; the rest advance one way and loop back to
+# idle after conclusion. See docs/GAME_MECHANICS.md section 4 for the full
+# description.
+STAGE_ORDER = (
+    "daydreaming",
+    "daydream_interrupted",
+    "idle",
+    "tutorial",
+    "play",
+    "reset",
+    "conclusion",
+)
 
 
 # --- Config coercion / construction ----------------------------------------

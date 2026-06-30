@@ -82,7 +82,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Late imports keep `--help` cheap and avoid pulling in pybullet at
     # module import time (collision worker is the only consumer here).
-    from compas_fab.backends.exceptions import CollisionCheckError
+    from compas_fab.backends.exceptions import BackendError
     from subsystems.robot.shared_compas_scene import make_planner, UR10E_JOINT_NAMES
 
     rep: zmq.Socket | None = None
@@ -148,7 +148,7 @@ def main(argv: list[str] | None = None) -> int:
         reply_topic = "rep.collision_result"
         try:
             results, compute_ms, checks_processed = _check_bundle(
-                planner, rcs, cfg, UR10E_JOINT_NAMES, CollisionCheckError, body
+                planner, rcs, cfg, UR10E_JOINT_NAMES, BackendError, body
             )
             metric_state["checks_since_heartbeat"] += checks_processed
             reply = bus.make_envelope(p.proc, seq=int(body.get("request_id", 0)))
@@ -177,7 +177,7 @@ def main(argv: list[str] | None = None) -> int:
     return proc.run(tick, setup=setup, teardown=teardown)
 
 
-def _check_bundle(planner, rcs, cfg, joint_names, CollisionCheckError, body
+def _check_bundle(planner, rcs, cfg, joint_names, BackendError, body
                   ) -> tuple[list[dict], float, int]:
     """Run check_collision once per config in the bundle."""
     configs = body.get("configs_rad") or []
@@ -194,7 +194,7 @@ def _check_bundle(planner, rcs, cfg, joint_names, CollisionCheckError, body
         try:
             planner.check_collision(rcs, options={"verbose": False})
             results.append({"collision": False, "first_hit": None})
-        except CollisionCheckError as exc:
+        except BackendError as exc:
             # Exception message names the colliding pair(s); surface it
             # verbatim so callers can log without re-parsing.
             results.append({

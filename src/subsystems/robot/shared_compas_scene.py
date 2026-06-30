@@ -29,7 +29,8 @@ from typing import Tuple
 
 from compas.data import json_load
 from compas_fab.backends import PyBulletClient, PyBulletPlanner
-from compas_fab.backends.exceptions import CollisionCheckError
+from compas_fab.backends.exceptions import BackendError
+import compas_fab.robots  # noqa: F401  # Registers RobotCell / RobotCellState for json_load.
 
 
 _ASSETS_DIR = Path(__file__).resolve().parent / "assets"
@@ -135,7 +136,7 @@ def make_planner(*, connection_type: str = "direct", verbose: bool = False
     planner.set_robot_cell_state(robot_cell_state)
     try:
         planner.check_collision(robot_cell_state, options={"verbose": False})
-    except CollisionCheckError:
+    except BackendError:
         # Startup pose may already be in collision (curated scene); fine.
         pass
     return client, planner, robot_cell, robot_cell_state, stats

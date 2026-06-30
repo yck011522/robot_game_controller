@@ -1,9 +1,10 @@
 """game_controller stage machine: lifecycle transitions + conclusion scoring.
 
 This module owns the pure, hardware-free game state machine that advances the
-high-level lifecycle ``daydreaming -> idle -> tutorial -> play -> reset ->
-conclusion -> idle`` (``daydreaming <-> idle`` is the only two-way edge), plus
-the scripted per-team conclusion scoring sequence.
+high-level lifecycle ``daydreaming -> daydream_interrupted -> idle -> tutorial
+-> play -> reset -> conclusion -> idle`` (``daydreaming`` can branch to a
+dedicated interrupted wait state before reaching ``idle``), plus the scripted
+per-team conclusion scoring sequence.
 
 These functions operate only on plain dicts (``stage_state``, ``teams``,
 ``game_cfg``, ``pose_cfg``) and a monotonic ``now_ns`` clock, so they are unit
@@ -74,8 +75,8 @@ def _tick_stage_state(
 
     Called only while the game is NOT paused, so every timer and every
     movement-driven transition freezes during an e-stop / pause overlay.
-    Lifecycle: daydreaming -> idle -> tutorial -> play -> reset ->
-    conclusion -> idle. `daydreaming <-> idle` is the only two-way edge.
+    Lifecycle: daydreaming -> daydream_interrupted -> idle -> tutorial ->
+    play -> reset -> conclusion -> idle.
     """
     stage = stage_state["stage"]
 
@@ -112,9 +113,10 @@ def _tick_stage_state(
         if bool(stage_state.get("daydream_interrupted", False)):
             reason = stage_state.get("daydream_interrupt_reason", "wake")
             # A SKIP (legacy straight-line return) or any recorded-game player
-            # owns a robot-safe return first: request it and wait for every team
-            # to finish before idle. A dial wake without any player goes idle
-            # immediately (LED-breathing-only profiles).
+            # owns a robot-safe return first: request it and wait in the
+            # dedicated interrupted state until every team is ready to finish
+            # the rewind. A dial wake without any player goes idle immediately
+            # (LED-breathing-only profiles).
             has_player = any(
                 st.get("daydream_player") is not None for st in teams.values()
             )
@@ -125,8 +127,32 @@ def _tick_stage_state(
                     bool(st.get("daydream_return_done", False))
                     for st in teams.values()
                 ):
+                    _enter_stage(
+                        stage_state,
+                        teams,
+                        "daydream_interrupted",
+                        game_cfg,
+                        now_ns,
+                        reason=reason,
+                    )
                     return
             _enter_stage(stage_state, teams, "idle", game_cfg, now_ns, reason=reason)
+            return
+        return
+
+    if stage == "daydream_interrupted":
+        if teams and not all(
+            bool(st.get("daydream_return_done", False)) for st in teams.values()
+        ):
+            return
+        _enter_stage(
+            stage_state,
+            teams,
+            "idle",
+            game_cfg,
+            now_ns,
+            reason=stage_state.get("daydream_interrupt_reason", "wake"),
+        )
         return
 
     if stage == "idle":
@@ -327,6 +353,12 @@ def _enter_stage(
             player = st.get("daydream_player")
             if player is not None:
                 player.start_forward()
+    elif new_stage == "daydream_interrupted":
+        for st in teams.values():
+            st["daydream_return_requested"] = True
+            st["daydream_return_active"] = False
+            st["daydream_return_done"] = False
+            st["daydream_rewind_started"] = False
     elif new_stage == "reset" and bool(game_cfg.get("rewind_enabled", False)):
         for st in teams.values():
             rewind = st.get("rewind")
