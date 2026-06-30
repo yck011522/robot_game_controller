@@ -143,7 +143,7 @@ class BatchValidationTests(unittest.TestCase):
             / "profiles"
             / "dev_random_trajectory_rewind_batch.yaml"
         )
-        self.assertEqual(profile.tuning["game"]["tutorial_duration_s"], 2)
+        self.assertEqual(profile.tuning["tutorial"]["duration_s"], 2)
         self.assertEqual(profile.tuning["game"]["duration_s"], 120)
         self.assertEqual(profile.tuning["game"]["rewind_speed_fraction"], 1.0)
         self.assertEqual(profile.tuning["batch_validation"]["game_count"], 100)

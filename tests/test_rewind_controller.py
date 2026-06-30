@@ -18,7 +18,7 @@ SRC = REPO_ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from apps.game_controller.context import _game_config  # noqa: E402
+from apps.game_controller.context import _game_config, _tutorial_config  # noqa: E402
 from apps.game_controller.stages import _tick_stage_state  # noqa: E402
 from subsystems.rewind.in_process import RewindController  # noqa: E402
 
@@ -161,9 +161,9 @@ def test_enabled_reset_ignores_timer_and_waits_for_rewind_completion() -> None:
         "skip_requested": False,
     }
 
-    _tick_stage_state(stage_state, {"a": team}, config, int(10e9))
+    _tick_stage_state(stage_state, {"a": team}, config, _tutorial_config({}), int(10e9))
     assert stage_state["stage"] == "reset"
 
     completion.complete = True
-    _tick_stage_state(stage_state, {"a": team}, config, int(11e9))
+    _tick_stage_state(stage_state, {"a": team}, config, _tutorial_config({}), int(11e9))
     assert stage_state["stage"] == "conclusion"

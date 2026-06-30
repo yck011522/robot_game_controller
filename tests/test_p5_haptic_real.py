@@ -75,6 +75,11 @@ class _FakeSerial:
     def write(self, payload: bytes) -> int:
         line = payload.decode("ascii").strip()
         self._writes_by_port.setdefault(self.port, []).append(line)
+        parts = line.split(",")
+        if len(parts) >= 4 and parts[0] == "S":
+            self._buffer.extend(
+                f"S,{parts[1]},{parts[2]},{parts[3]}\n".encode("ascii")
+            )
         return len(payload)
 
 
@@ -190,6 +195,69 @@ def test_real_backend_static_bounds_convert_to_dial_space() -> None:
     assert math.isclose(bounds_min[0], math.radians(-1800.0), abs_tol=1e-9)
     assert math.isclose(bounds_max[0], math.radians(1800.0), abs_tol=1e-9)
     print("[test] real haptic static bounds gear conversion: OK")
+
+
+def test_real_backend_runtime_tracking_kp_write_is_confirmed_once() -> None:
+    """Runtime tracking KP changes should use sparse S writes, not C traffic."""
+
+    with TemporaryDirectory() as tmpdir:
+        original = device_connection.DEFAULT_DEVICE_CONNECTION_PATH
+        device_connection.clear_cache()
+        device_connection.DEFAULT_DEVICE_CONNECTION_PATH = Path(tmpdir) / "device_ports_and_addr.yaml"
+        _write_device_connection_config(
+            device_connection.DEFAULT_DEVICE_CONNECTION_PATH,
+            "  haptic_b: [COM21, COM22, COM23, COM24, COM25, COM26]\n",
+        )
+        scripts_by_port = {
+            f"COM{21 + idx}": f"T,{21 + idx},0,{100 + idx},{10 + idx},0,{1000 + idx},0\nI,2,{21 + idx}\nV,1,0.3.0\n"
+            for idx in range(6)
+        }
+        writes_by_port: dict[str, list[str]] = {}
+
+        def serial_factory():
+            return _FakeSerial(scripts_by_port, writes_by_port)
+
+        rig = RealHaptic(
+            team="b",
+            profile=_make_profile(),
+            serial_factory=serial_factory,
+        )
+        try:
+            rig.update_robot_actual([0.0] * 6)
+            rig.sample()
+            rig.request_parameter("tracking_kp", 2.0)
+            rig.sample()
+            writes_after_request = {
+                port: sum(
+                    1
+                    for line in lines
+                    if line.startswith("S,") and ",tracking_kp,2000" in line
+                )
+                for port, lines in writes_by_port.items()
+            }
+            rig.sample()
+            writes_after_confirm = {
+                port: sum(
+                    1
+                    for line in lines
+                    if line.startswith("S,") and ",tracking_kp,2000" in line
+                )
+                for port, lines in writes_by_port.items()
+            }
+            assert writes_after_request == {port: 1 for port in writes_by_port}
+            assert writes_after_confirm == writes_after_request
+
+            rig.close()
+            for port, lines in writes_by_port.items():
+                assert any(
+                    line.startswith("S,") and ",tracking_kp,12000" in line
+                    for line in lines
+                ), port
+            print("[test] runtime tracking_kp write confirmed once + restored: OK")
+        finally:
+            rig.close()
+            device_connection.DEFAULT_DEVICE_CONNECTION_PATH = original
+            device_connection.clear_cache()
 
 
 def test_config_rejects_profile_hardware_block() -> None:
@@ -317,6 +385,7 @@ def main() -> int:
     test_real_backend_discovers_and_drives()
     test_oob_kick_enable_defaults_to_protocol_enabled()
     test_real_backend_static_bounds_convert_to_dial_space()
+    test_real_backend_runtime_tracking_kp_write_is_confirmed_once()
     test_config_rejects_profile_hardware_block()
     test_device_config_rejects_bad_haptic_port_list()
     test_device_config_empty_disables_haptic_scan()

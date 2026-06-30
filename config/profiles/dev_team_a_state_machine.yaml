@@ -102,6 +102,12 @@ tuning:
       SBarr32: false
       SBarr41: false
       SBarr42: false
+  tutorial:
+    duration_s: 30                  # tutorial countdown length (seconds)
+    tracking_kp: 2.0                # Lower tutorial-only detent tracking spring; normal play uses tuning.haptic.tracking_kp.
+    tutorial_scroll_dial_start_end: [0, -36000] # [start, end] dial pos (decideg)
+    tutorial_scroll_dial_bound: [-36010, 10]    # [min, max] soft bounds (decideg)
+    tutorial_detents_pct: [0, 33.333, 66.667, 100]
   game:
     # --- Core game ---
     duration_s: 30                  # play-stage length (seconds); short for testing
@@ -111,7 +117,6 @@ tuning:
 
     # --- State machine bring-up ---
     start_stage: daydreaming        # boot into attract mode
-    tutorial_duration_s: 30         # tutorial countdown length (seconds)
     reset_duration_s: 3.0           # placeholder hold while robots "return to start"
     idle_timeout_s: 60              # idle -> daydreaming after this much quiet (seconds)
     daydream_to_idle_dial_deg: 30   # any dial moved this far (dial-space deg) wakes to idle
@@ -125,6 +130,3 @@ tuning:
     # collected post startup-alignment.
     movement_window_s: 2.0          # rolling window length (seconds)
     movement_glitch_trim: 3         # extreme samples dropped per end (glitch reject)
-    # Reserved for the tutorial scroll-with-detents haptic feel (parsed, not yet wired):
-    tutorial_scroll_max_deg: 3600
-    tutorial_detents_deg: [0, 1200, 2400, 3600]

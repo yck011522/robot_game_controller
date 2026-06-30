@@ -119,6 +119,7 @@ def _haptic_config(node: Any) -> dict[str, Any]:
         "gear_ratio": gear,
         "bounds_min_rad": bounds_min_dial_rad,
         "bounds_max_rad": bounds_max_dial_rad,
+        "tracking_kp": _coerce_positive_float(data.get("tracking_kp"), 10.0),
         "prox_bounds_stale_ticks": max(
             1, int(_coerce_positive_float(data.get("prox_bounds_stale_ticks"), 12.0))
         ),
@@ -172,15 +173,43 @@ def _publish_haptic_command(
     bus.publish(pub, f"cmd.haptic.{team}", env)
 
 
-def _tutorial_scroll_span_decideg(game_cfg: dict[str, Any]) -> tuple[float, float]:
+def _publish_haptic_parameter_command(
+    pub: zmq.Socket,
+    producer: str,
+    team: str,
+    *,
+    name: str,
+    value: float,
+) -> None:
+    """Request one sparse haptic runtime-parameter change for a team.
+
+    Called by the game controller on stage edges. The haptic_io process owns
+    translating this intent into firmware ``S`` writes, response validation,
+    and retry behavior, so the game loop does not stream parameter commands.
+    """
+
+    env = bus.make_envelope(producer)
+    env.update(
+        {
+            "team": team,
+            "name": str(name),
+            "value": float(value),
+        }
+    )
+    bus.publish(pub, f"cmd.haptic.param.{team}", env)
+
+
+def _tutorial_scroll_span_decideg(
+    tutorial_cfg: dict[str, Any],
+) -> tuple[float, float]:
     """Return the tutorial scroll (start, end) dial positions in deci-degrees."""
 
-    start = float(game_cfg.get("tutorial_scroll_dial_start_decideg", 0.0))
-    end = float(game_cfg.get("tutorial_scroll_dial_end_decideg", -10000.0))
+    start = float(tutorial_cfg.get("tutorial_scroll_dial_start_decideg", 0.0))
+    end = float(tutorial_cfg.get("tutorial_scroll_dial_end_decideg", -10000.0))
     return start, end
 
 
-def _tutorial_detent_targets_rad(game_cfg: dict[str, Any]) -> list[float]:
+def _tutorial_detent_targets_rad(tutorial_cfg: dict[str, Any]) -> list[float]:
     """Return tutorial detent dial positions (radians, dial-space), sorted.
 
     Detents are configured as progress percentages (``tutorial_detents_pct``).
@@ -189,8 +218,8 @@ def _tutorial_detent_targets_rad(game_cfg: dict[str, Any]) -> list[float]:
     bus (decideg -> deg -> rad).
     """
 
-    start, end = _tutorial_scroll_span_decideg(game_cfg)
-    pct_list = game_cfg.get("tutorial_detents_pct") or []
+    start, end = _tutorial_scroll_span_decideg(tutorial_cfg)
+    pct_list = tutorial_cfg.get("tutorial_detents_pct") or []
     out: list[float] = []
     for pct in pct_list:
         decideg = start + (end - start) * (float(pct) / 100.0)
@@ -198,18 +227,18 @@ def _tutorial_detent_targets_rad(game_cfg: dict[str, Any]) -> list[float]:
     return sorted(out)
 
 
-def _tutorial_bounds_rad(game_cfg: dict[str, Any]) -> tuple[list[float], list[float]]:
+def _tutorial_bounds_rad(tutorial_cfg: dict[str, Any]) -> tuple[list[float], list[float]]:
     """Return the constant tutorial soft bounds as (min[6], max[6]) radians."""
 
-    bmin = float(game_cfg.get("tutorial_scroll_dial_bound_min_decideg", -10010.0))
-    bmax = float(game_cfg.get("tutorial_scroll_dial_bound_max_decideg", 10.0))
+    bmin = float(tutorial_cfg.get("tutorial_scroll_dial_bound_min_decideg", -10010.0))
+    bmax = float(tutorial_cfg.get("tutorial_scroll_dial_bound_max_decideg", 10.0))
     return (
         [math.radians(bmin / 10.0)] * 6,
         [math.radians(bmax / 10.0)] * 6,
     )
 
 
-def _tutorial_progress_pct(dial_pos_rad: float, game_cfg: dict[str, Any]) -> float:
+def _tutorial_progress_pct(dial_pos_rad: float, tutorial_cfg: dict[str, Any]) -> float:
     """Map a measured dial position (radians) to tutorial progress 0..100%.
 
     Progress is the fraction travelled from the scroll start to the scroll end,
@@ -217,7 +246,7 @@ def _tutorial_progress_pct(dial_pos_rad: float, game_cfg: dict[str, Any]) -> flo
     handled implicitly because the span end is negative.
     """
 
-    start, end = _tutorial_scroll_span_decideg(game_cfg)
+    start, end = _tutorial_scroll_span_decideg(tutorial_cfg)
     span = end - start
     if abs(span) < 1e-9:
         return 0.0
@@ -272,7 +301,7 @@ def _tick_tutorial_team(
     team: str,
     state: dict[str, Any],
     haptic_cfg: dict[str, Any],
-    game_cfg: dict[str, Any],
+    tutorial_cfg: dict[str, Any],
 ) -> None:
     """Drive one team's dials through the tutorial scroll-with-detents.
 
@@ -288,8 +317,8 @@ def _tick_tutorial_team(
     computed so the LEDs / dashboard visualize sim runs too.
     """
 
-    detents = _tutorial_detent_targets_rad(game_cfg)
-    bounds_min, bounds_max = _tutorial_bounds_rad(game_cfg)
+    detents = _tutorial_detent_targets_rad(tutorial_cfg)
+    bounds_min, bounds_max = _tutorial_bounds_rad(tutorial_cfg)
     haptic_real = bool(state.get("play_sync", {}).get("enabled", False))
 
     if bool(state.get("tutorial_reset_pending", False)):
@@ -311,7 +340,7 @@ def _tick_tutorial_team(
         measured.append(0.0)
 
     state["tutorial_progress"] = [
-        _tutorial_progress_pct(measured[i], game_cfg) for i in range(6)
+        _tutorial_progress_pct(measured[i], tutorial_cfg) for i in range(6)
     ]
 
     targets = [_nearest_detent_rad(measured[i], detents) for i in range(6)]

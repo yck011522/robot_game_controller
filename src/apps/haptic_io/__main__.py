@@ -33,6 +33,7 @@ def main(argv: list[str] | None = None) -> int:
     pub = bus.make_pub(proc.ctx)
     actual_sub = bus.make_sub(proc.ctx, topics=[f"telem.robot.actual.{team}"])
     cmd_sub = bus.make_sub(proc.ctx, topics=[f"cmd.haptic.{team}"])
+    param_sub = bus.make_sub(proc.ctx, topics=[f"cmd.haptic.param.{team}"])
     reseat_sub = bus.make_sub(proc.ctx, topics=[f"cmd.haptic.reseat.{team}"])
     validation_seed_sub = bus.make_sub(
         proc.ctx, topics=[f"cmd.validation.seed.{team}"]
@@ -52,6 +53,7 @@ def main(argv: list[str] | None = None) -> int:
         # process only the newest sample/command.
         _drain_latest(actual_sub, on_msg=lambda b: _handle_robot_actual(impl, b, seed_ref))
         _drain_latest(cmd_sub, on_msg=lambda b: _apply_command(impl, b))
+        _drain_latest(param_sub, on_msg=lambda b: _apply_parameter_request(impl, b))
         _drain_latest(reseat_sub, on_msg=lambda b: _apply_reseat_request(impl, b))
         _drain_latest(
             validation_seed_sub,
@@ -68,6 +70,7 @@ def main(argv: list[str] | None = None) -> int:
     def teardown(_: Proc) -> None:
         actual_sub.close(0)
         cmd_sub.close(0)
+        param_sub.close(0)
         reseat_sub.close(0)
         validation_seed_sub.close(0)
         state_sub.close(0)
@@ -134,6 +137,24 @@ def _apply_command(impl, body: dict) -> None:
     apply = getattr(impl, "apply_command", None)
     if callable(apply):
         apply(body)
+
+
+def _apply_parameter_request(impl, body: dict) -> None:
+    """Apply a sparse haptic runtime-parameter request when supported."""
+
+    if not isinstance(body, dict):
+        return
+    name = body.get("name")
+    value = body.get("value")
+    if not isinstance(name, str) or not name:
+        return
+    try:
+        numeric_value = float(value)
+    except (TypeError, ValueError):
+        return
+    request = getattr(impl, "request_parameter", None)
+    if callable(request):
+        request(name, numeric_value)
 
 
 def _apply_state_full(impl, body: dict) -> None:

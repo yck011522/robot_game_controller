@@ -80,8 +80,11 @@ tuning:
     proximity_stale_ticks: 12
     limit_margin_deg: 3.0
 
+  tutorial:
+    duration_s: 2
+    tracking_kp: 2.0
+
   game:
-    tutorial_duration_s: 2
     duration_s: 120
     sum_score_rate_unit_per_s: 100
     start_stage: tutorial

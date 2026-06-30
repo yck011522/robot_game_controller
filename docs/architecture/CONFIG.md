@@ -212,6 +212,16 @@ tuning:
       amplitude:         0.35       # torque per pulse (Nm)
       pulse_interval_ms: 80         # gap between pulses
 
+  # Tutorial-only haptic/gameplay tuning. The GameController requests
+  # tracking_kp via sparse cmd.haptic.param.<team> messages on tutorial/play
+  # stage edges; HapticIO owns the firmware S write/readback/retry loop.
+  tutorial:
+    duration_s: 90
+    tracking_kp: 2.0
+    tutorial_scroll_dial_start_end: [0, -10000]   # dial-space deci-degrees
+    tutorial_scroll_dial_bound: [-10050, 50]      # dial-space deci-degrees
+    tutorial_detents_pct: [0, 25, 50, 75, 100]
+
   # Robot motion envelope. Forwarded to the planner and to RTDE.
   # Degrees for human readability; converted to radians at the boundary.
   robot:

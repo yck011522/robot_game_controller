@@ -70,6 +70,7 @@ def _tick_stage_state(
     stage_state: dict[str, Any],
     teams: dict[str, dict],
     game_cfg: dict[str, Any],
+    tutorial_cfg: dict[str, Any],
     now_ns: int,
 ) -> None:
     """Advance the high-level game state machine by one tick.
@@ -184,7 +185,7 @@ def _tick_stage_state(
         # each team's ``tutorial_progress``.
         skip = bool(stage_state.get("skip_requested"))
         timed_out = _stage_elapsed_s(stage_state, now_ns) >= float(
-            game_cfg["tutorial_duration_s"]
+            tutorial_cfg["duration_s"]
         )
         all_done = _all_tutorial_progress_complete(teams)
         if skip or timed_out or all_done:
@@ -606,14 +607,17 @@ def _maybe_log_movement_progress(
 
 
 def _stage_countdown_s(
-    stage_state: dict[str, Any], game_cfg: dict[str, Any], now_ns: int
+    stage_state: dict[str, Any],
+    game_cfg: dict[str, Any],
+    tutorial_cfg: dict[str, Any],
+    now_ns: int,
 ) -> int:
     """Whole seconds remaining in the active timed stage (0 if untimed)."""
     stage = stage_state["stage"]
     if stage == "play":
         duration_s = float(game_cfg["duration_s"])
     elif stage == "tutorial":
-        duration_s = float(game_cfg["tutorial_duration_s"])
+        duration_s = float(tutorial_cfg["duration_s"])
     elif stage == "reset":
         if bool(game_cfg.get("rewind_enabled", False)):
             return 0

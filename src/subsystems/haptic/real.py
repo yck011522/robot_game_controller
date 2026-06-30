@@ -30,6 +30,7 @@ _PROBE_TIMEOUT_S = 1.5
 _DEFAULT_TELEMETRY_INTERVAL_MS = 10
 _DEFAULT_BOUNDS_MIN_RAD = [-math.pi] * 6
 _DEFAULT_BOUNDS_MAX_RAD = [math.pi] * 6
+_PARAM_RETRY_INTERVAL_S = 0.25
 
 
 @dataclass
@@ -42,6 +43,16 @@ class _DialTelemetry:
     last_control_seq: int = 0
     last_telem_mono_s: float = 0.0
     fw_version: str | None = None
+
+
+@dataclass
+class _PendingParameterWrite:
+    """One runtime parameter write waiting for firmware readback confirmation."""
+
+    target_wire_value: int
+    seq: int | None = None
+    last_send_mono_s: float = 0.0
+    attempts: int = 0
 
 
 class _SingleDialBoard:
@@ -70,6 +81,7 @@ class _SingleDialBoard:
         self._serial = None
         self._buffer = bytearray()
         self._seq = 0
+        self._param_responses: dict[int, tuple[str, str]] = {}
         self._claimed_port = False
         # Tracks telemetry's last processed-C seq so reconnect/reboot can be
         # inferred from backward jumps.
@@ -179,11 +191,18 @@ class _SingleDialBoard:
             return
         self._send_line(f"R,{self._next_seq()},{_rad_to_decideg(current_rad)}")
 
-    def send_param(self, name: str, value: int) -> None:
+    def send_param(self, name: str, value: int) -> int | None:
         """Send one S command write."""
         if self._serial is None or self.dial_id is None:
-            return
-        self._send_line(f"S,{self._next_seq()},{name},{int(value)}")
+            return None
+        seq = self._next_seq()
+        self._send_line(f"S,{seq},{name},{int(value)}")
+        return seq
+
+    def pop_param_response(self, seq: int) -> tuple[str, str] | None:
+        """Return and clear one parsed S response for ``seq`` when present."""
+
+        return self._param_responses.pop(int(seq), None)
 
     def _next_seq(self) -> int:
         self._seq += 1
@@ -229,6 +248,9 @@ class _SingleDialBoard:
                 return
             if kind == "V" and len(parts) >= 3:
                 self.telemetry.fw_version = ",".join(parts[2:])
+                return
+            if kind == "S" and len(parts) >= 4:
+                self._param_responses[int(parts[1])] = (parts[2], parts[3])
         except (TypeError, ValueError):
             return
 
@@ -263,6 +285,12 @@ class RealHaptic:
         haptic_tuning = profile.tuning.get("haptic", {}) if isinstance(profile.tuning, dict) else {}
         self._gear_ratio = _normalize_gear_ratio(haptic_tuning.get("gear_ratio"))
         self._tracking_target_rad = [0.0] * 6
+        self._default_tracking_kp_wire = _fixed_x1000_value(
+            haptic_tuning.get("tracking_kp"), 10.0
+        )
+        self._runtime_param_targets: dict[str, int] = {}
+        self._pending_param_writes: dict[int, dict[str, _PendingParameterWrite]] = {}
+        self._confirmed_param_values: dict[int, dict[str, int]] = {}
         bounds_min_robot_rad = _default_bounds_rad(haptic_tuning.get("bounds_deg_min"), _DEFAULT_BOUNDS_MIN_RAD)
         bounds_max_robot_rad = _default_bounds_rad(haptic_tuning.get("bounds_deg_max"), _DEFAULT_BOUNDS_MAX_RAD)
         self._bounds_min_rad, self._bounds_max_rad = _robot_bounds_to_dial_bounds_rad(
@@ -314,6 +342,21 @@ class RealHaptic:
         self._pending_reseat_dial_rad = [float(v) for v in q_dial_rad[:6]]
         self._pending_reseat_ids = set(self._connections.keys())
 
+    def request_parameter(self, name: str, value: float) -> None:
+        """Queue a sparse runtime parameter write for every connected dial.
+
+        ``haptic_io`` calls this for stage-level parameter changes requested by
+        the game controller. The real backend handles firmware ``S`` writes,
+        readback matching, and retry timing per dial.
+        """
+
+        wire_value = _runtime_parameter_wire_value(name, value)
+        if wire_value is None:
+            return
+        self._runtime_param_targets[name] = wire_value
+        for dial_id in self._connections:
+            self._queue_parameter_write(dial_id, name, wire_value)
+
     def sample(self) -> dict[str, Any]:
         """Main control/telemetry step called once per haptic_io tick."""
         self._refresh_connections()
@@ -336,6 +379,7 @@ class RealHaptic:
                 board.send_set_current_position(reseat_dial_rad)
                 self._tracking_target_rad[idx] = reseat_dial_rad
                 self._pending_reseat_ids.discard(dial_id)
+            self._tick_parameter_writes(board, dial_id)
             board.send_control(
                 target_rad=self._tracking_target_rad[idx],
                 bounds_min_rad=self._bounds_min_rad[idx],
@@ -382,6 +426,8 @@ class RealHaptic:
 
     def close(self) -> None:
         """Close all active board connections."""
+
+        self._restore_default_parameters_before_close()
         for board in self._connections.values():
             board.close()
         self._connections.clear()
@@ -423,6 +469,8 @@ class RealHaptic:
                 board.close()
                 continue
             self._connections[board.dial_id] = board
+            for name, wire_value in self._runtime_param_targets.items():
+                self._queue_parameter_write(board.dial_id, name, wire_value)
             known_ports.add(port)
 
     def _candidate_ports(self) -> list[str]:
@@ -449,6 +497,63 @@ class RealHaptic:
         if seq_now < seq_prev and (seq_prev - seq_now) > 10:
             board.startup_synced = False
             board.control_armed = False
+            if board.dial_id is not None:
+                self._confirmed_param_values.pop(board.dial_id, None)
+                for name, wire_value in self._runtime_param_targets.items():
+                    self._queue_parameter_write(board.dial_id, name, wire_value)
+
+    def _queue_parameter_write(
+        self, dial_id: int, name: str, target_wire_value: int
+    ) -> None:
+        """Mark one board parameter as needing firmware confirmation."""
+
+        confirmed = self._confirmed_param_values.setdefault(dial_id, {})
+        if confirmed.get(name) == int(target_wire_value):
+            return
+        pending = self._pending_param_writes.setdefault(dial_id, {})
+        pending[name] = _PendingParameterWrite(target_wire_value=int(target_wire_value))
+
+    def _tick_parameter_writes(
+        self, board: _SingleDialBoard, dial_id: int
+    ) -> None:
+        """Advance pending runtime-parameter writes for one connected board."""
+
+        pending = self._pending_param_writes.setdefault(dial_id, {})
+        confirmed = self._confirmed_param_values.setdefault(dial_id, {})
+        for name, wire_value in self._runtime_param_targets.items():
+            if confirmed.get(name) != wire_value and name not in pending:
+                pending[name] = _PendingParameterWrite(target_wire_value=wire_value)
+
+        now = self._now()
+        for name, item in list(pending.items()):
+            if item.seq is not None:
+                response = board.pop_param_response(item.seq)
+                if response is not None:
+                    response_name, response_value = response
+                    if (
+                        response_name == name
+                        and _response_value_matches(response_value, item.target_wire_value)
+                    ):
+                        confirmed[name] = item.target_wire_value
+                        del pending[name]
+                        continue
+                    item.seq = None
+                    item.last_send_mono_s = 0.0
+
+            if item.seq is not None and (now - item.last_send_mono_s) < _PARAM_RETRY_INTERVAL_S:
+                continue
+            seq = board.send_param(name, item.target_wire_value)
+            if seq is None:
+                continue
+            item.seq = seq
+            item.last_send_mono_s = now
+            item.attempts += 1
+
+    def _restore_default_parameters_before_close(self) -> None:
+        """Best-effort restore of persistent parameters before serial close."""
+
+        for board in self._connections.values():
+            board.send_param("tracking_kp", self._default_tracking_kp_wire)
 
 
 def _team_dial_ids(team: str) -> list[int]:
@@ -519,7 +624,7 @@ def _build_param_lines(node: Any) -> list[tuple[str, int]]:
     )
     for key in fixed_x1000:
         if key in data:
-            out.append((key, int(round(float(data[key]) * 1000.0))))
+            out.append((key, _fixed_x1000_value(data[key], 0.0)))
 
     integer_fields = (
         "vibration_pulse_interval_ms",
@@ -577,6 +682,33 @@ def _normalize_gear_ratio(value: Any) -> list[float]:
     while len(out) < 6:
         out.append(1.0)
     return out[:6]
+
+
+def _fixed_x1000_value(value: Any, default: float) -> int:
+    """Convert a float-like config value into firmware x1000 fixed point."""
+
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = float(default)
+    return int(round(number * 1000.0))
+
+
+def _runtime_parameter_wire_value(name: str, value: float) -> int | None:
+    """Return the firmware wire value for supported sparse runtime params."""
+
+    if name != "tracking_kp":
+        return None
+    return _fixed_x1000_value(value, 10.0)
+
+
+def _response_value_matches(response_value: str, target_wire_value: int) -> bool:
+    """Return True when an S response value confirms the requested target."""
+
+    try:
+        return int(response_value) == int(target_wire_value)
+    except (TypeError, ValueError):
+        return False
 
 
 def _rad_to_decideg(value: float) -> int:

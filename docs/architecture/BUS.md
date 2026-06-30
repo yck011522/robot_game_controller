@@ -197,6 +197,7 @@ in-process inside GC, neither of those topics goes on the bus.
 | Topic | Producer | Consumer | Rate / pattern |
 |-------|----------|----------|----------------|
 | `cmd.haptic.<team>` | `GameController` | `HapticIO[.<team>]` | 50 Hz, CONFLATE |
+| `cmd.haptic.param.<team>` | `GameController` | `HapticIO[.<team>]` | sparse, on stage edges |
 | `cmd.robot.target.<team>` | `JoggingPlanner[.<team>]` (or GC if JP is in-process) | `RobotIO[.<team>]` | 100 Hz |
 | `cmd.bucket` | `GameController` | `BucketController` | on demand |
 | `cmd.weight.tare` | `GameController` | `WeightSensorIO` | startup/reset |
@@ -410,6 +411,25 @@ pose. This is separate from the high-rate `cmd.haptic.<team>` stream.
   "producer": "game_controller",
   "team": "a",
   "current_pos_rad": [.., .., .., .., .., ..]
+}
+```
+
+### 6.4.1 `cmd.haptic.param.<team>`
+
+Sparse, explicit runtime-parameter request. Used for infrequent firmware `S`
+parameter writes such as lowering `tracking_kp` for the tutorial and restoring
+the normal playable value on play entry. GameController publishes the desired
+parameter once per stage edge; HapticIO validates support, writes the parameter
+to each dial, reads back the firmware response, and retries internally until
+the readback matches.
+
+```jsonc
+{
+  "ts_mono_ns": ...,
+  "producer": "game_controller",
+  "team": "a",
+  "name": "tracking_kp",
+  "value": 2.0
 }
 ```
 

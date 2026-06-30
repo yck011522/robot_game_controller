@@ -96,13 +96,19 @@ tuning:
       SBarr41: false
       SBarr42: false
 
+  tutorial:
+    duration_s: 2                   # Enter play two seconds after tutorial starts.
+    tracking_kp: 2.0                # Lower tutorial-only detent tracking spring; normal play uses tuning.haptic.tracking_kp.
+    tutorial_scroll_dial_start_end: [0, -36000] # [start, end] dial pos (decideg)
+    tutorial_scroll_dial_bound: [-36010, 10]    # [min, max] soft bounds (decideg)
+    tutorial_detents_pct: [0, 33.333, 66.667, 100]
+
   game:
     duration_s: 20                   # Record a short 20-second gameplay path.
     sum_score_rate_unit_per_s: 100
     sim_bucket_values:
       a: [120, 80, 40]
     start_stage: tutorial            # Allow haptic alignment before recording.
-    tutorial_duration_s: 2           # Enter play two seconds after tutorial starts.
     reset_duration_s: 3.0            # Used only if rewind_enabled becomes false.
     rewind_enabled: true             # Replace reset timer with geometric rewind.
     rewind_speed_fraction: 0.60      # 60% of each max_velocity_deg_s value.
@@ -112,8 +118,6 @@ tuning:
     idle_to_tutorial_dial_deg: 360
     movement_window_s: 2.0          # movement-detection rolling window (s)
     movement_glitch_trim: 3         # glitch-reject: extreme samples dropped per end
-    tutorial_scroll_max_deg: 3600
-    tutorial_detents_deg: [0, 1200, 2400, 3600]
 
   rewind_shortcut:
     enabled: true

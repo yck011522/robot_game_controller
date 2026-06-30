@@ -40,6 +40,7 @@ from apps.game_controller.context import (  # noqa: E402
     _load_robot_show_poses_deg,
     _rewind_shortcut_config,
     _startup_alignment_active,
+    _tutorial_config,
 )
 from apps.game_controller.context import (  # noqa: E402
     DEFAULT_BUCKET_VALUES,
@@ -53,6 +54,7 @@ from apps.game_controller.haptics import (  # noqa: E402
     _begin_play_sync,
     _haptic_config,
     _publish_haptic_command,
+    _publish_haptic_parameter_command,
     _publish_hold_current_pose,
     _reset_haptic_bounds_to_static,
     _reset_team_motion_outputs,
@@ -116,6 +118,10 @@ def main(argv: list[str] | None = None) -> int:
 
     active_teams = list(proc.profile.active_teams)
     game_cfg = _game_config(proc.profile.tuning.get("game"))
+    tutorial_cfg = _tutorial_config(
+        proc.profile.tuning.get("tutorial"),
+        proc.profile.tuning.get("haptic"),
+    )
     shortcut_cfg = _rewind_shortcut_config(
         proc.profile.tuning.get("rewind_shortcut")
     )
@@ -474,7 +480,39 @@ def main(argv: list[str] | None = None) -> int:
         batch_session.mark_play_started()
     if stage_state["stage"] == "play":
         _request_play_entry_weight_tare(publish_now=False)
+    last_haptic_tracking_kp_stage_by_team: dict[str, str] = {}
     last_batch_shutdown_s = 0.0
+
+    def _publish_stage_haptic_tracking_kp() -> None:
+        """Request the tracking KP appropriate for the current stage once.
+
+        The game controller publishes only the stage-level intent. HapticIO
+        owns per-board ``S`` writes, readback, and retry behavior.
+        """
+
+        active_stage = str(stage_state.get("stage"))
+        if active_stage not in ("tutorial", "play"):
+            return
+        tracking_kp = (
+            float(tutorial_cfg["tracking_kp"])
+            if active_stage == "tutorial"
+            else float(haptic_cfg["tracking_kp"])
+        )
+        for team, st in teams.items():
+            if bool(st.get("haptic_required", False)) and not bool(
+                st.get("haptic_seeded", False)
+            ):
+                continue
+            if last_haptic_tracking_kp_stage_by_team.get(team) == active_stage:
+                continue
+            _publish_haptic_parameter_command(
+                pub,
+                proc.proc,
+                team,
+                name="tracking_kp",
+                value=tracking_kp,
+            )
+            last_haptic_tracking_kp_stage_by_team[team] = active_stage
 
     def _prepare_next_batch_game() -> None:
         """Install the next game's seeds and notify synthetic haptic inputs."""
@@ -713,7 +751,7 @@ def main(argv: list[str] | None = None) -> int:
                 # reseat-to-zero + bounds install on entry, refreshes per-player
                 # progress, and publishes the snap-to-detent haptic command.
                 _tick_tutorial_team(
-                    pub, p.proc, team, st, haptic_cfg, game_cfg
+                    pub, p.proc, team, st, haptic_cfg, tutorial_cfg
                 )
                 _publish_hold_current_pose(pub, p.proc, team, st)
                 continue
@@ -987,11 +1025,12 @@ def main(argv: list[str] | None = None) -> int:
                         reason="batch complete",
                     )
             elif batch_session is None:
-                _tick_stage_state(stage_state, teams, game_cfg, now_ns)
+                _tick_stage_state(stage_state, teams, game_cfg, tutorial_cfg, now_ns)
             elif not batch_session.shutdown_requested:
-                _tick_stage_state(stage_state, teams, game_cfg, now_ns)
+                _tick_stage_state(stage_state, teams, game_cfg, tutorial_cfg, now_ns)
         if batch_session is not None and batch_session.shutdown_requested:
             _publish_batch_shutdown()
+        _publish_stage_haptic_tracking_kp()
         if stage_before_tick != "play" and stage_state["stage"] == "play":
             # Stage transitions happen after the per-team motion loop. Issue
             # the coordinate-reset command now, on that same transition tick;
@@ -1044,7 +1083,7 @@ def main(argv: list[str] | None = None) -> int:
             # close completion is tracked by GC.
             _publish_weight_tare()
 
-        countdown_s = _stage_countdown_s(stage_state, game_cfg, now_ns)
+        countdown_s = _stage_countdown_s(stage_state, game_cfg, tutorial_cfg, now_ns)
 
         env = bus.make_envelope(p.proc, with_wall=True, seq=state_seq)
         env.update(

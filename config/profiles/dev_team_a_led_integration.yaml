@@ -141,6 +141,23 @@ tuning:
     blink_on_fraction: 0.5          # duty cycle of the blink (0.5 = equal on/off); loser/tie stay steady
     min_refresh_interval_s: 0.05    # max 20 updates/s per panel (throttles the count-down)
     inter_command_delay_s: 0.0      # 0 flushes all queued lines each tick; raise to pace RS485
+  tutorial:
+    duration_s: 20                  # tutorial countdown length (seconds)
+    tracking_kp: 2.0                # Lower tutorial-only detent tracking spring; normal play uses tuning.haptic.tracking_kp.
+    # --- Tutorial scroll (dial-space, deci-degrees; decideg = deg * 10) ---
+    # Each player scrolls their haptic dial to watch the tutorial. On tutorial
+    # entry every dial is digitally reseat to 0 and bounded to
+    # tutorial_scroll_dial_bound. Progress 0..100% maps linearly start -> end
+    # (direction is flipped: scrolling toward the negative end advances).
+    tutorial_scroll_dial_start_end: [0, -10000]   # [start, end] dial pos (decideg)
+    tutorial_scroll_dial_bound: [-10010, 10]      # [min, max] soft bounds (decideg)
+    # Progress percentages at which the dial snaps to a detent. Each tick the
+    # haptic tracking target is set to the nearest detent to the measured
+    # position, so players feel a lock at each step. There is no 0% detent, so
+    # the dial pulls toward the first (10%) detent the instant the tutorial
+    # begins.
+    tutorial_detents_pct: [10, 30, 40, 70, 100]
+
   game:
     # --- Core game ---
     duration_s: 60                  # play-stage length (seconds)
@@ -155,7 +172,6 @@ tuning:
 
     # --- State machine bring-up ---
     start_stage: daydreaming        # boot into attract mode (LED breathing visible immediately)
-    tutorial_duration_s: 20         # tutorial countdown length (seconds)
     reset_duration_s: 3.0           # fallback hold; only used if rewind_enabled is false
     # --- Geometric rewind (replaces the flat reset timer) ---
     rewind_enabled: true            # rewind the recorded play path instead of a fixed reset hold
@@ -174,20 +190,6 @@ tuning:
     # raise trim if dials glitch in longer bursts.
     movement_window_s: 2.0          # rolling window length (seconds)
     movement_glitch_trim: 3         # extreme samples dropped per end (glitch reject)
-    # --- Tutorial scroll (dial-space, deci-degrees; decideg = deg * 10) ---
-    # Each player scrolls their haptic dial to watch the tutorial. On tutorial
-    # entry every dial is digitally reseat to 0 and bounded to
-    # tutorial_scroll_dial_bound. Progress 0..100% maps linearly start -> end
-    # (direction is flipped: scrolling toward the negative end advances).
-    tutorial_scroll_dial_start_end: [0, -10000]   # [start, end] dial pos (decideg)
-    tutorial_scroll_dial_bound: [-10010, 10]      # [min, max] soft bounds (decideg)
-    # Progress percentages at which the dial snaps to a detent. Each tick the
-    # haptic tracking target is set to the nearest detent to the measured
-    # position, so players feel a lock at each step. There is no 0% detent, so
-    # the dial pulls toward the first (10%) detent the instant the tutorial
-    # begins.
-    tutorial_detents_pct: [10, 30, 40, 70, 100]
-
   rewind_shortcut:
     enabled: true                   # smooth/optimize the rewind path before replaying it
     optimization_budget_s: 3.0      # search wall-time budget before rewind begins

@@ -134,6 +134,49 @@ def _coerce_tutorial_detents_pct(value: Any) -> list[float]:
     return sorted(out)
 
 
+def _tutorial_config(node: Any, haptic_node: Any = None) -> dict[str, Any]:
+    """Normalize the profile's ``tuning.tutorial`` block.
+
+    Called once by ``game_controller`` startup. The returned dictionary owns all
+    tutorial-stage knobs: duration, temporary tracking gain, scroll bounds, and
+    detent percentages. ``haptic_node`` supplies the normal tracking gain as the
+    default so profiles can omit ``tuning.tutorial.tracking_kp`` when they want
+    tutorial and play to feel identical.
+    """
+
+    data = node if isinstance(node, dict) else {}
+    haptic_data = haptic_node if isinstance(haptic_node, dict) else {}
+    return {
+        # duration_s: tutorial countdown length (seconds).
+        "duration_s": _coerce_positive_float(data.get("duration_s"), 30.0),
+        # tracking_kp: temporary haptic tracking proportional gain used only
+        # while the tutorial is active. Falls back to the normal/play gain.
+        "tracking_kp": _coerce_positive_float(
+            data.get("tracking_kp"),
+            _coerce_positive_float(haptic_data.get("tracking_kp"), 10.0),
+        ),
+        # tutorial_scroll_dial_start_end: [start, end] dial position the player
+        # scrolls through during the tutorial, in deci-degrees (decideg =
+        # deg * 10). Defaults span 0 -> -10000 decideg (0 -> -1000 deg). The
+        # end is negative so scrolling "down" advances; progress 0..100% maps
+        # linearly start -> end. Split into two scalar keys below.
+        # tutorial_scroll_dial_bound: [min, max] soft haptic bounds (decideg)
+        # held constant for the whole tutorial; set slightly wider than
+        # start/end so both endpoints are reachable.
+        **_coerce_tutorial_scroll(
+            data.get("tutorial_scroll_dial_start_end"),
+            data.get("tutorial_scroll_dial_bound"),
+        ),
+        # tutorial_detents_pct: progress percentages (0..100) at which the dial
+        # snaps to a detent (nearest-detent tracking each tick). No 0% detent
+        # means the dial pulls to the first detent the moment the tutorial
+        # begins. Defaults match the reference profile.
+        "tutorial_detents_pct": _coerce_tutorial_detents_pct(
+            data.get("tutorial_detents_pct")
+        ),
+    }
+
+
 def _coerce_start_stage(value: Any, fallback: Any) -> str:
     """Pick a valid boot stage from start_stage, then force_stage, else play."""
     for candidate in (value, fallback):
@@ -176,10 +219,6 @@ def _game_config(node: Any) -> dict[str, Any]:
         ),
         "sim_bucket_values": _coerce_team_bucket_values(data.get("sim_bucket_values")),
         # --- State machine timing / thresholds (P4 bring-up) ---
-        # tutorial_duration_s: tutorial countdown length (seconds).
-        "tutorial_duration_s": _coerce_positive_float(
-            data.get("tutorial_duration_s"), 30.0
-        ),
         # reset_duration_s: placeholder hold while the robots "return to
         # start", until the real return-to-start motion + arrived signal
         # exist. Tune higher than the slowest expected homing move.
@@ -238,26 +277,6 @@ def _game_config(node: Any) -> dict[str, Any]:
         # that start the tutorial from idle (the "scroll up" gesture).
         "idle_to_tutorial_dial_deg": _coerce_positive_float(
             data.get("idle_to_tutorial_dial_deg"), 360.0
-        ),
-        # --- Tutorial scroll-with-detents (dial-space, deci-degrees) ---
-        # tutorial_scroll_dial_start_end: [start, end] dial position the player
-        # scrolls through during the tutorial, in deci-degrees (decideg =
-        # deg * 10). Defaults span 0 -> -10000 decideg (0 -> -1000 deg). The
-        # end is negative so scrolling "down" advances; progress 0..100% maps
-        # linearly start -> end. Split into two scalar keys below.
-        # tutorial_scroll_dial_bound: [min, max] soft haptic bounds (decideg)
-        # held constant for the whole tutorial; set slightly wider than
-        # start/end so both endpoints are reachable.
-        # tutorial_detents_pct: progress percentages (0..100) at which the dial
-        # snaps to a detent (nearest-detent tracking each tick). No 0% detent
-        # means the dial pulls to the first detent the moment the tutorial
-        # begins. Defaults match the reference profile.
-        **_coerce_tutorial_scroll(
-            data.get("tutorial_scroll_dial_start_end"),
-            data.get("tutorial_scroll_dial_bound"),
-        ),
-        "tutorial_detents_pct": _coerce_tutorial_detents_pct(
-            data.get("tutorial_detents_pct")
         ),
         # movement_window_s: length (seconds) of the rolling dial-history
         # window used for movement detection in daydreaming / idle. Detection
