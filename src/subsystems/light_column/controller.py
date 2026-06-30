@@ -244,6 +244,13 @@ class LedColumnController:
     ) -> None:
         """Attract mode: each team's strips solid team color, breathing slowly."""
 
+        # While an interrupted attract-mode rewind is settling the robots back to
+        # the play-entry pose, hold every column at 50% white so operators see a
+        # clear "returning, please wait" signal instead of the team breathing.
+        if bool(state.get("daydream_interrupt_rewind", False)):
+            self._fill_all(scale(WHITE, 0.5))
+            return
+
         period = self._config.breathing_period_s
         low = self._config.breathing_min_brightness
         # 0..1 sine that spends equal time bright and dim across the period.

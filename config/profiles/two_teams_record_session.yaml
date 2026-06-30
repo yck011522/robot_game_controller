@@ -51,14 +51,14 @@ subsystems:
 
   weight_sensor_io: real      # disabled for the LED integration test
   light_column: real          # arena LED strips driven by the game state
-  display_broadcaster: null
+  display_broadcaster: real
   scoreboard_broadcaster: real # per-bucket LED score panels driven by the game state
   bucket_controller: real     # real bucket motors so buckets physically dump
   button_controller: null
   safety_barrier_controller: null
 
   collision_workers:
-    count: 8
+    count: 16
 
   collision_broker: null
 
@@ -69,7 +69,9 @@ subsystems:
 
 tuning:
   haptic:
-    gear_ratio: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+    # Negative gear ratio flips dial -> robot direction in absolute-input mode:
+    # turning the dial in the positive direction now decrements the robot joint.
+    gear_ratio: [-0.1, -0.1, -0.1, -0.1, -0.1, -0.1]
     # Robot-joint bounds in degrees; runtime converts these to dial-space
     # C-frame min/max values using gear_ratio before sending the firmware.
     bounds_deg_min: [-180, -180, -180, -180, -180, -180]
@@ -89,8 +91,8 @@ tuning:
   robot:
     q_limits_min_deg: [-180, -180, -180, -180, -180, -180]
     q_limits_max_deg: [180, 180, 180, 180, 180, 180]
-    max_velocity_deg_s: [15, 20, 30, 40, 50, 50]
-    max_acceleration_deg_s2: [45, 95, 95, 115, 115, 115]
+    max_velocity_deg_s: [15, 18, 25, 40, 50, 50]
+    max_acceleration_deg_s2: [35, 75, 75, 105, 110, 110]
     headless: false
     initial_pose_deg: [0.0, -90.0, 90.0, 0.0, 0.0, 0.0]
   collision:
@@ -105,6 +107,10 @@ tuning:
     path_cutoff_deg: 3.0
     forward_bundle_size: 1
     probe_half_deg: 10
+    # Sparse probes beyond the dense +/-10deg band (mirrored to +/-). Widen the
+    # visualized/tested proximity range without 1deg density far out. Keep this
+    # list short -- each entry adds 2 collision checks per axis proximity tick.
+    probe_far_offsets_deg: [15, 20, 30, 45, 60]
     prox_floor: 0.6
     forward_timeout_ms: 40
   safety_barrier:
@@ -160,7 +166,7 @@ tuning:
     inter_command_delay_s: 0.0      # 0 flushes all queued lines each tick; raise to pace RS485
   game:
     # --- Core game ---
-    duration_s: 60                  # play-stage length (seconds)
+    duration_s: 240                  # play-stage length (seconds)
     sum_score_rate_unit_per_s: 100
     sim_bucket_values:
       a: [120, 80, 40]              # seed scores (no weight sensors in this profile)
@@ -173,14 +179,17 @@ tuning:
 
     # --- State machine bring-up ---
     start_stage: daydreaming        # boot into attract mode (LED breathing visible immediately)
-    tutorial_duration_s: 20         # tutorial countdown length (seconds)
+    tutorial_duration_s: 60         # tutorial countdown length (seconds)
     reset_duration_s: 3.0           # fallback hold; only used if rewind_enabled is false
     # --- Geometric rewind (replaces the flat reset timer) ---
     rewind_enabled: true            # rewind the recorded play path instead of a fixed reset hold
     rewind_speed_fraction: 0.60     # rewind at 60% of each max_velocity_deg_s
     rewind_arrival_tolerance_deg: 0.5  # all six measured joints must be within this to finish
     idle_timeout_s: 60              # idle -> daydreaming after this much quiet (seconds)
-    daydream_to_idle_dial_deg: 60   # any dial moved this far (dial-space deg) wakes to idle
+    # Wake daydreaming -> idle when a dial is pushed this far OFF its tracking
+    # target (dial-space deg). Dials follow the robot/playback, so only a human
+    # pushing against the spring trips this. gear 0.1 -> 450 dial deg ~= 45 robot.
+    daydream_to_idle_error_deg: 250
     idle_to_tutorial_dial_deg: 180  # any dial moved this far (dial-space deg) starts tutorial
     # Movement-detection (rolling window): wake/tutorial triggers compare each
     # dial's peak-to-peak range over the last movement_window_s seconds against
@@ -198,13 +207,13 @@ tuning:
     # tutorial_scroll_dial_bound. Progress 0..100% maps linearly start -> end
     # (direction is flipped: scrolling toward the negative end advances).
     tutorial_scroll_dial_start_end: [0, -10000]   # [start, end] dial pos (decideg)
-    tutorial_scroll_dial_bound: [-10010, 10]      # [min, max] soft bounds (decideg)
+    tutorial_scroll_dial_bound: [-10050, 50]      # [min, max] soft bounds (decideg)
     # Progress percentages at which the dial snaps to a detent. Each tick the
     # haptic tracking target is set to the nearest detent to the measured
     # position, so players feel a lock at each step. There is no 0% detent, so
     # the dial pulls toward the first (10%) detent the instant the tutorial
     # begins.
-    tutorial_detents_pct: [10, 30, 40, 70, 100]
+    tutorial_detents_pct: [0, 25, 50, 75, 100]
 
   rewind_shortcut:
     enabled: true                   # smooth/optimize the rewind path before replaying it
@@ -212,3 +221,21 @@ tuning:
     collision_step_deg: 1.0         # certify every proposed edge at <=1 degree
     collision_batch_size: 8         # keep all eight collision workers occupied
     random_seed: null               # fresh production shortcut search each game
+
+  daydream:
+    # Attract-mode robot playback. Replays the newest recorded game's first
+    # play segment: forward = verbatim recording (no smoothing), then a smoothed
+    # rewind back to the play-entry pose, looping until a dial wake / skip. On
+    # interrupt it rewinds from the current point, then enters idle. Needs a
+    # recording under recording_dir; otherwise the LEDs just breathe.
+    enabled: true
+    per_team_own_trajectory: true   # each robot replays its own path (false -> all use team a)
+    recording_dir: logs/display_broadcast_recording
+    rewind_speed_fraction: 0.40     # smoothed rewind at 40% of each max_velocity_deg_s
+    rewind_arrival_tolerance_deg: 0.5
+    rewind_shortcut:
+      enabled: true                 # collision-smooth the rewind path
+      optimization_budget_s: 3.0
+      collision_step_deg: 1.0
+      collision_batch_size: 8
+      random_seed: null

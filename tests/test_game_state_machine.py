@@ -51,7 +51,7 @@ GAME_CFG = gc._game_config(
         "tutorial_duration_s": 4,
         "reset_duration_s": 2,
         "idle_timeout_s": 3,
-        "daydream_to_idle_dial_deg": 30,
+        "daydream_to_idle_error_deg": 900,
         "idle_to_tutorial_dial_deg": 360,
         "movement_window_s": 0.15,
         "movement_glitch_trim": 0,
@@ -73,6 +73,7 @@ def _make_team() -> dict:
         "team": "a",
         "haptic_seeded": True,
         "last_dial": [0.0] * 6,
+        "last_tracking_target_dial_rad": [0.0] * 6,
         "bucket_values": [120, 80, 40],
         "score": 240,
         "summed_score": 0,
@@ -137,25 +138,22 @@ def test_daydreaming_to_idle_on_dial_movement() -> None:
     teams = _make_teams()
     ss = _enter("daydreaming", teams)
 
-    # Collect a clean still window so detection arms; no movement -> daydreaming.
-    t = _arm(ss, teams)
+    # Dial held on its tracking target -> still daydreaming.
+    gc._tick_stage_state(ss, teams, GAME_CFG, _secs(0.1))
     assert ss["stage"] == "daydreaming"
-    assert ss["dial_arm"]["a"]["armed"]  # detection armed
 
-    # Move dial 0 past the wake threshold (30 deg) -> idle. The window now holds
-    # both still (0) and moved (40) samples, so its range crosses the threshold.
-    teams["a"]["last_dial"][0] = math.radians(40)
-    gc._tick_stage_state(ss, teams, GAME_CFG, _secs(t))
+    # Push dial 0 past the residual wake threshold (900 deg) off its target.
+    teams["a"]["last_dial"][0] = math.radians(950)
+    gc._tick_stage_state(ss, teams, GAME_CFG, _secs(0.2))
     assert ss["stage"] == "idle"
 
 
 def test_daydreaming_ignores_subthreshold_movement() -> None:
     teams = _make_teams()
     ss = _enter("daydreaming", teams)
-    t = _arm(ss, teams)
 
-    teams["a"]["last_dial"][0] = math.radians(10)  # below 30 deg
-    gc._tick_stage_state(ss, teams, GAME_CFG, _secs(t))
+    teams["a"]["last_dial"][0] = math.radians(100)  # below 900 deg residual
+    gc._tick_stage_state(ss, teams, GAME_CFG, _secs(0.1))
     assert ss["stage"] == "daydreaming"
 
 
@@ -176,6 +174,30 @@ def test_daydreaming_skip_waits_for_return_to_start() -> None:
     assert ss["skip_requested"] is False
 
 
+def test_daydreaming_interrupt_recenters_still_goes_idle() -> None:
+    """A latched wake finishes in idle even if the dial springs back mid-rewind."""
+
+    class _StubPlayer:
+        def start_forward(self) -> None:
+            pass
+
+    teams = _make_teams()
+    teams["a"]["daydream_player"] = _StubPlayer()
+    ss = _enter("daydreaming", teams)
+    teams["a"]["last_dial"][0] = math.radians(950)  # > 900 deg residual -> wake
+    gc._tick_stage_state(ss, teams, GAME_CFG, _secs(0.1))
+    assert ss["stage"] == "daydreaming"
+    assert teams["a"]["daydream_return_requested"] is True
+
+    teams["a"]["last_dial"][0] = 0.0  # dial springs back below threshold
+    gc._tick_stage_state(ss, teams, GAME_CFG, _secs(0.2))
+    assert ss["stage"] == "daydreaming"
+
+    teams["a"]["daydream_return_done"] = True
+    gc._tick_stage_state(ss, teams, GAME_CFG, _secs(0.3))
+    assert ss["stage"] == "idle"
+
+
 def test_daydreaming_return_uses_robot_begin_pose() -> None:
     pose_rad = gc._robot_begin_pose_rad({"robot_begin_pose": [0, -116, 116, -35, 95, 180]})
 
@@ -189,47 +211,25 @@ def test_daydreaming_return_uses_robot_begin_pose() -> None:
     ]
 
 
-def test_daydreaming_ignores_slow_drift() -> None:
-    """Slow drift around a set point rolls off the window and never wakes.
+def test_single_frame_glitch_does_not_wake_idle() -> None:
+    """A lone encoder glitch frame is trimmed out and does not wake idle.
 
-    The dial creeps a little each tick, but because detection looks at the
-    peak-to-peak range *within* the rolling window (old samples expire), the
-    accumulated long-run displacement never registers as a wake.
-    """
-    teams = _make_teams()
-    ss = _enter("daydreaming", teams)
-    _arm(ss, teams)
-    # Creep ~2 deg per 0.1 s tick for ~1 s. Within any 0.15 s window the range
-    # is only a few degrees, far under the 30 deg wake threshold.
-    t = 1.0
-    for k in range(1, 11):
-        teams["a"]["last_dial"][0] = math.radians(2.0 * k)
-        gc._tick_stage_state(ss, teams, GAME_CFG, _secs(t))
-        t = round(t + 0.1, 6)
-    assert ss["stage"] == "daydreaming"
-
-
-def test_single_frame_glitch_does_not_wake() -> None:
-    """A lone encoder glitch frame is trimmed out and does not wake the game.
-
-    Reproduces the real-world false wake (a one-tick ~140 deg J6 spike). With
-    movement_glitch_trim>0 the outlier sample is discarded from the window
-    range, so a single glitch frame surrounded by still samples never crosses
-    the wake threshold.
+    Idle uses the rolling peak-to-peak window. With movement_glitch_trim>0 a
+    one-tick ~140 deg J6 spike is discarded from the range, so it never crosses
+    the idle->tutorial threshold.
     """
     cfg = gc._game_config(
         {
-            "daydream_to_idle_dial_deg": 30,
             "idle_to_tutorial_dial_deg": 360,
-            "idle_timeout_s": 3,
+            "idle_timeout_s": 30,
             "movement_window_s": 0.6,
             "movement_glitch_trim": 3,
-            "start_stage": "daydreaming",
+            "start_stage": "idle",
         }
     )
     teams = _make_teams()
     ss = _new_stage_state()
-    gc._enter_stage(ss, teams, "daydreaming", cfg, 0, reason="test")
+    gc._enter_stage(ss, teams, "idle", cfg, 0, reason="test")
     # Fill a still window (10 ticks @ 0.05 s spans 0.45 s -> a full 0.6 s window
     # after the next few ticks) so detection arms with clean data.
     t = 0.05
@@ -244,7 +244,7 @@ def test_single_frame_glitch_does_not_wake() -> None:
     gc._tick_stage_state(ss, teams, cfg, _secs(t))
     teams["a"]["last_dial"][5] = 0.0
     gc._tick_stage_state(ss, teams, cfg, _secs(round(t + 0.05, 6)))
-    assert ss["stage"] == "daydreaming"  # glitch trimmed -> no false wake
+    assert ss["stage"] == "idle"  # glitch trimmed -> no false wake
 
 
 # --- idle -----------------------------------------------------------------

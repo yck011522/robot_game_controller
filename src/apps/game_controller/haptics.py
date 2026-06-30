@@ -149,6 +149,10 @@ def _publish_haptic_command(
     tracking_target_dial_rad = [
         float(state["last_q"][i]) / float(gear[i]) for i in range(6)
     ]
+    # Cache for daydream residual wake detection: a human grabbing the dial
+    # shows up as a large gap between measured dial and this commanded target,
+    # whereas attract-mode playback keeps the dial spring-tracked to the robot.
+    state["last_tracking_target_dial_rad"] = list(tracking_target_dial_rad)
     bounds_min_rad = state.get("current_haptic_bounds_min_rad")
     bounds_max_rad = state.get("current_haptic_bounds_max_rad")
     if not isinstance(bounds_min_rad, list) or len(bounds_min_rad) < 6:

@@ -80,38 +80,53 @@ def _tick_stage_state(
     stage = stage_state["stage"]
 
     if stage == "daydreaming":
-        # Operator SKIP exits attract mode through a robot-safe return-to-start
-        # handshake. The runtime loop owns the straight joint-space motion
-        # because it has the live robot pose and bus publisher; this pure stage
-        # machine only requests the move and waits for each active team to mark
-        # ``daydream_return_done``. A future slow daydreaming animation should
-        # set the same return flags when interrupted so the stage still lands in
-        # idle from robot_begin_pose.
-        if bool(stage_state.get("skip_requested", False)):
-            for st in teams.values():
-                st["daydream_return_requested"] = True
-            if not teams or all(
-                bool(st.get("daydream_return_done", False))
-                for st in teams.values()
-            ):
-                _enter_stage(
-                    stage_state, teams, "idle", game_cfg, now_ns, reason="skip"
-                )
-            return
-
-        # Attract mode. Wake to idle as soon as any dial is turned past the
-        # configured threshold. No timer here.
-        _update_dial_window(stage_state, teams, game_cfg, now_ns)
-        wake_rad = math.radians(float(game_cfg["daydream_to_idle_dial_deg"]))
-        _maybe_log_movement_progress(
-            stage_state, teams, game_cfg, wake_rad, "daydreaming", now_ns
-        )
-        delta, detail = _max_dial_delta_detail(stage_state, teams, game_cfg)
-        if detail is not None and delta >= wake_rad:
-            _enter_stage(
-                stage_state, teams, "idle", game_cfg, now_ns,
-                reason=_movement_reason("dial moved -> wake", detail, delta, wake_rad),
+        # Operator SKIP or a dial wake both exit attract mode through a
+        # robot-safe smoothed rewind: the runtime loop owns the motion (it has
+        # the live pose, recorded trajectory, and bus publisher); this pure
+        # stage machine only requests the return and waits for every active team
+        # to mark ``daydream_return_done``. Teams replaying a recorded game
+        # rewind from wherever they are; teams without a player return straight
+        # to robot_begin_pose. With no player at all, the wake transitions to
+        # idle immediately as before.
+        # Wake when any dial is pushed off its commanded tracking target. The
+        # dials are spring-tracked to the robot (held still, or following the
+        # attract-mode playback), so this single deviation test distinguishes a
+        # real player from the playback without any peak-to-peak movement window.
+        wake_rad = math.radians(float(game_cfg["daydream_to_idle_error_deg"]))
+        delta, detail = _max_dial_residual_detail(teams)
+        woke = detail is not None and delta >= wake_rad
+        # Latch the interruption: once a SKIP or dial wake fires it stays set for
+        # the rest of daydreaming so the rewind always finishes in idle, even if
+        # the player lets the dial spring back below the wake threshold mid
+        # rewind. Without the latch a recentred dial would re-loop the attract
+        # playback the instant the smoothed rewind completed.
+        if not bool(stage_state.get("daydream_interrupted", False)) and (
+            bool(stage_state.get("skip_requested", False)) or woke
+        ):
+            stage_state["daydream_interrupted"] = True
+            stage_state["daydream_interrupt_reason"] = (
+                "skip"
+                if stage_state.get("skip_requested")
+                else _movement_reason("dial moved -> wake", detail, delta, wake_rad)
             )
+        if bool(stage_state.get("daydream_interrupted", False)):
+            reason = stage_state.get("daydream_interrupt_reason", "wake")
+            # A SKIP (legacy straight-line return) or any recorded-game player
+            # owns a robot-safe return first: request it and wait for every team
+            # to finish before idle. A dial wake without any player goes idle
+            # immediately (LED-breathing-only profiles).
+            has_player = any(
+                st.get("daydream_player") is not None for st in teams.values()
+            )
+            if has_player or bool(stage_state.get("skip_requested", False)):
+                for st in teams.values():
+                    st["daydream_return_requested"] = True
+                if teams and not all(
+                    bool(st.get("daydream_return_done", False))
+                    for st in teams.values()
+                ):
+                    return
+            _enter_stage(stage_state, teams, "idle", game_cfg, now_ns, reason=reason)
         return
 
     if stage == "idle":
@@ -302,10 +317,16 @@ def _enter_stage(
             st["tutorial_progress"] = [0.0] * 6
             st["tutorial_reset_pending"] = True
     elif new_stage == "daydreaming":
+        stage_state["daydream_interrupted"] = False
+        stage_state["daydream_interrupt_reason"] = None
         for st in teams.values():
             st["daydream_return_requested"] = False
             st["daydream_return_active"] = False
             st["daydream_return_done"] = False
+            st["daydream_rewind_started"] = False
+            player = st.get("daydream_player")
+            if player is not None:
+                player.start_forward()
     elif new_stage == "reset" and bool(game_cfg.get("rewind_enabled", False)):
         for st in teams.values():
             rewind = st.get("rewind")
@@ -480,6 +501,35 @@ def _max_dial_delta_detail(
             if span > best or detail is None:
                 best = span
                 detail = (team, j, float(low), float(high))
+    return best, detail
+
+
+def _max_dial_residual_detail(
+    teams: dict[str, dict],
+) -> tuple[float, tuple[str, int, float, float] | None]:
+    """Largest dial deviation (rad) from its commanded tracking target + detail.
+
+    During daydream recorded-game playback the dials are spring-tracked to the
+    robot, so raw movement cannot distinguish playback from a player. Instead
+    this scans every team's measured ``last_dial`` against the cached
+    ``last_tracking_target_dial_rad`` and returns the widest residual plus
+    ``(team, joint, target_rad, measured_rad)`` so a human pushing the dial off
+    its tracked target wakes the game. Returns ``(0.0, None)`` until both
+    measured and target dials are available.
+    """
+
+    best = 0.0
+    detail: tuple[str, int, float, float] | None = None
+    for team, st in teams.items():
+        measured = st.get("last_dial")
+        target = st.get("last_tracking_target_dial_rad")
+        if not isinstance(measured, list) or not isinstance(target, list):
+            continue
+        for j in range(min(6, len(measured), len(target))):
+            residual = abs(float(measured[j]) - float(target[j]))
+            if residual > best or detail is None:
+                best = residual
+                detail = (team, j, float(target[j]), float(measured[j]))
     return best, detail
 
 

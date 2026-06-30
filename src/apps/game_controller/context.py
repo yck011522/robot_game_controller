@@ -217,10 +217,13 @@ def _game_config(node: Any) -> dict[str, Any]:
         # idle_timeout_s: idle -> daydreaming if no significant dial movement
         # for this long (seconds).
         "idle_timeout_s": _coerce_positive_float(data.get("idle_timeout_s"), 60.0),
-        # daydream_to_idle_dial_deg: dial-space degrees of movement (on any
-        # one dial) that wakes daydreaming -> idle. Lower = more sensitive.
-        "daydream_to_idle_dial_deg": _coerce_positive_float(
-            data.get("daydream_to_idle_dial_deg"), 30.0
+        # daydream_to_idle_error_deg: wake daydreaming -> idle when any dial is
+        # pushed this far OFF its commanded tracking target (dial-space deg). The
+        # dials are spring-tracked to the robot (held still, or following the
+        # attract-mode playback), so only a human pushing against the spring
+        # deviates. With gear_ratio 0.1, 900 dial deg ~= 90 robot deg.
+        "daydream_to_idle_error_deg": _coerce_positive_float(
+            data.get("daydream_to_idle_error_deg"), 900.0
         ),
         # idle_to_tutorial_dial_deg: dial-space degrees (on any one dial)
         # that start the tutorial from idle (the "scroll up" gesture).
@@ -287,6 +290,37 @@ def _game_config(node: Any) -> dict[str, Any]:
         "score_min_increment_g": max(
             0.0, _coerce_positive_float(data.get("score_min_increment_g"), 0.0)
         ),
+    }
+
+
+def _daydream_config(node: Any) -> dict[str, Any]:
+    """Normalize the optional ``tuning.daydream`` attract-mode playback block.
+
+    Controls whether daydreaming replays the most recent recorded game's robot
+    trajectory (forward = verbatim recording, no smoothing) and rewinds it
+    (smoothed) before looping. ``per_team_own_trajectory`` true means each team
+    replays its own recorded path; false means every active robot replays team
+    A's path. Independent rewind speed / shortcut from the gameplay reset so the
+    attract loop can be tuned calmer without changing reset behavior.
+    """
+
+    data = node if isinstance(node, dict) else {}
+    return {
+        "enabled": bool(data.get("enabled", False)),
+        "per_team_own_trajectory": bool(data.get("per_team_own_trajectory", True)),
+        "recording_dir": str(
+            data.get("recording_dir") or "logs/display_broadcast_recording"
+        ),
+        # rewind speed/tolerance for the smoothed daydream return (separate from
+        # the gameplay reset rewind knobs).
+        "rewind_speed_fraction": min(
+            1.0, _coerce_positive_float(data.get("rewind_speed_fraction"), 0.3)
+        ),
+        "rewind_arrival_tolerance_deg": _coerce_positive_float(
+            data.get("rewind_arrival_tolerance_deg"), 0.5
+        ),
+        # Reuse the rewind-shortcut normalizer for the nested smoothing block.
+        "rewind_shortcut": _rewind_shortcut_config(data.get("rewind_shortcut")),
     }
 
 
