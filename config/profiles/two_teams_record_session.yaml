@@ -169,11 +169,20 @@ tuning:
     tracking_kp: 2.0                # Lower tutorial-only detent tracking spring; normal play uses tuning.haptic.tracking_kp.
     # --- Tutorial scroll (dial-space, deci-degrees; decideg = deg * 10) ---
     # Each player scrolls their haptic dial to watch the tutorial. On tutorial
-    # entry every dial is digitally reseat to 0 and bounded to
-    # tutorial_scroll_dial_bound. Progress 0..100% maps linearly start -> end
-    # (direction is flipped: scrolling toward the negative end advances).
-    tutorial_scroll_dial_start_end: [0, -10000]   # [start, end] dial pos (decideg)
-    tutorial_scroll_dial_bound: [-10050, 50]      # [min, max] soft bounds (decideg)
+    # entry every dial is digitally reseat to 0. Progress 0..100% maps
+    # linearly start -> end (direction is flipped: scrolling toward the
+    # negative end advances).
+    tutorial_scroll_dial_start_end: [0, -30000]   # [start, end] dial pos (decideg)
+    tutorial_scroll_dial_bound: [-30100, 100]      # [min, max] fallback soft bounds (decideg)
+    # Position-triggered soft-bound zones. When a dial's measured position is
+    # inside active_range, the game controller sends that zone's bound for that
+    # dial only. The zones intentionally do not overlap; dials outside every
+    # zone use tutorial_scroll_dial_bound above.
+    tutorial_scroll_dial_bound_zones:
+      - active_range: [-19500, 100]     # kick region below -16500 while scrolling through the first section
+        bound: [-16500, 100]
+      - active_range: [-30000, -20000]  # kick region above -19500 while scrolling through the final section
+        bound: [-30100, -19500]
     # Progress percentages at which the dial snaps to a detent. Each tick the
     # haptic tracking target is set to the nearest detent to the measured
     # position, so players feel a lock at each step. There is no 0% detent, so

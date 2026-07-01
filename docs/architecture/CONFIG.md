@@ -220,6 +220,14 @@ tuning:
     tracking_kp: 2.0
     tutorial_scroll_dial_start_end: [0, -10000]   # dial-space deci-degrees
     tutorial_scroll_dial_bound: [-10050, 50]      # dial-space deci-degrees
+    # Optional position-triggered per-dial bound overrides. The first
+    # active_range containing the dial's measured position wins; otherwise the
+    # fallback tutorial_scroll_dial_bound above is used.
+    tutorial_scroll_dial_bound_zones:
+      - active_range: [-19500, 100]
+        bound: [-16500, 100]
+      - active_range: [-30000, -20000]
+        bound: [-30100, -19500]
     tutorial_detents_pct: [0, 25, 50, 75, 100]
 
   # Robot motion envelope. Forwarded to the planner and to RTDE.

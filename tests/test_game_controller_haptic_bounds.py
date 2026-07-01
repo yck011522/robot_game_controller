@@ -11,6 +11,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from apps.game_controller import __main__ as gc  # noqa: E402
+from apps.game_controller import context as gc_context  # noqa: E402
 from apps.game_controller import haptics as gc_haptics  # noqa: E402
 from apps.game_controller import published_states as gc_published_states  # noqa: E402
 
@@ -20,6 +21,8 @@ gc._state_full_planner = gc_published_states._state_full_planner
 gc._update_dynamic_haptic_bounds_from_prox = (
     gc_haptics._update_dynamic_haptic_bounds_from_prox
 )
+gc._tutorial_config = gc_context._tutorial_config
+gc._tutorial_bounds_for_measured_rad = gc_haptics._tutorial_bounds_for_measured_rad
 
 
 class _FakePub:
@@ -182,3 +185,41 @@ def test_dynamic_bounds_handle_negative_gear_ratio() -> None:
     assert lo <= hi
     assert lo >= -math.pi
     assert hi <= math.pi
+
+
+def test_tutorial_bound_zones_select_per_dial_soft_bounds() -> None:
+    """Tutorial scroll bounds should switch by each dial's current position."""
+
+    cfg = gc._tutorial_config(
+        {
+            "tutorial_scroll_dial_bound": [-30100, 100],
+            "tutorial_scroll_dial_bound_zones": [
+                {
+                    "active_range": [-19500, 100],
+                    "bound": [-16500, 100],
+                },
+                {
+                    "active_range": [-30000, -20000],
+                    # Swapped order is tolerated and normalized by the parser.
+                    "bound": [-19500, -30100],
+                },
+            ],
+        }
+    )
+    measured = [
+        math.radians(-1700.0),  # inside first zone
+        math.radians(-2500.0),  # inside second zone
+        math.radians(-1975.0),  # gap between zones -> fallback
+        0.0,
+        0.0,
+        0.0,
+    ]
+
+    bounds_min, bounds_max = gc._tutorial_bounds_for_measured_rad(measured, cfg)
+
+    assert math.isclose(bounds_min[0], math.radians(-1650.0), abs_tol=1e-9)
+    assert math.isclose(bounds_max[0], math.radians(10.0), abs_tol=1e-9)
+    assert math.isclose(bounds_min[1], math.radians(-3010.0), abs_tol=1e-9)
+    assert math.isclose(bounds_max[1], math.radians(-1950.0), abs_tol=1e-9)
+    assert math.isclose(bounds_min[2], math.radians(-3010.0), abs_tol=1e-9)
+    assert math.isclose(bounds_max[2], math.radians(10.0), abs_tol=1e-9)

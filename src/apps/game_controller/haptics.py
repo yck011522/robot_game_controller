@@ -227,15 +227,50 @@ def _tutorial_detent_targets_rad(tutorial_cfg: dict[str, Any]) -> list[float]:
     return sorted(out)
 
 
-def _tutorial_bounds_rad(tutorial_cfg: dict[str, Any]) -> tuple[list[float], list[float]]:
-    """Return the constant tutorial soft bounds as (min[6], max[6]) radians."""
+def _tutorial_default_bounds_rad(tutorial_cfg: dict[str, Any]) -> tuple[float, float]:
+    """Return the default tutorial soft bounds as ``(min, max)`` radians."""
 
     bmin = float(tutorial_cfg.get("tutorial_scroll_dial_bound_min_decideg", -10010.0))
     bmax = float(tutorial_cfg.get("tutorial_scroll_dial_bound_max_decideg", 10.0))
-    return (
-        [math.radians(bmin / 10.0)] * 6,
-        [math.radians(bmax / 10.0)] * 6,
-    )
+    return math.radians(bmin / 10.0), math.radians(bmax / 10.0)
+
+
+def _tutorial_bounds_for_measured_rad(
+    measured_rad: list[float], tutorial_cfg: dict[str, Any]
+) -> tuple[list[float], list[float]]:
+    """Return per-dial tutorial bounds selected from current dial positions.
+
+    Each dial's measured angle is converted to deci-degrees and matched against
+    ``tutorial_scroll_dial_bound_zones`` in YAML order. The first zone whose
+    ``active_range`` contains the measured position supplies that dial's soft
+    bounds; dials outside every zone use the default tutorial bounds.
+    """
+
+    default_min_rad, default_max_rad = _tutorial_default_bounds_rad(tutorial_cfg)
+    zones = tutorial_cfg.get("tutorial_scroll_dial_bound_zones")
+    zones = zones if isinstance(zones, list) else []
+    bounds_min: list[float] = []
+    bounds_max: list[float] = []
+
+    for axis in range(6):
+        measured_value = measured_rad[axis] if axis < len(measured_rad) else 0.0
+        measured_decideg = math.degrees(float(measured_value)) * 10.0
+        selected_min_rad = default_min_rad
+        selected_max_rad = default_max_rad
+        for zone in zones:
+            if not isinstance(zone, dict):
+                continue
+            active_min = float(zone.get("active_min_decideg", 0.0))
+            active_max = float(zone.get("active_max_decideg", 0.0))
+            if active_min <= measured_decideg <= active_max:
+                bound_min = float(zone.get("bound_min_decideg", -10010.0))
+                bound_max = float(zone.get("bound_max_decideg", 10.0))
+                selected_min_rad = math.radians(bound_min / 10.0)
+                selected_max_rad = math.radians(bound_max / 10.0)
+                break
+        bounds_min.append(selected_min_rad)
+        bounds_max.append(selected_max_rad)
+    return bounds_min, bounds_max
 
 
 def _tutorial_progress_pct(dial_pos_rad: float, tutorial_cfg: dict[str, Any]) -> float:
@@ -307,10 +342,11 @@ def _tick_tutorial_team(
 
     On the first tutorial tick (``tutorial_reset_pending``) the dial logical
     position is reset to zero (firmware ``R`` command, no physical motion) and
-    the constant tutorial bounds are installed so the dial can travel the full
-    scroll span. Every tick the measured dial position is mapped to per-player
-    progress (0..100%, cached on ``tutorial_progress``) and the haptic tracking
-    target is snapped to the nearest configured detent.
+    default tutorial bounds are installed. Every tick the measured dial
+    position is mapped to per-player progress (0..100%, cached on
+    ``tutorial_progress``), the haptic tracking target is snapped to the nearest
+    configured detent, and per-dial soft bounds are selected from optional
+    position-based tutorial zones.
 
     ``play_sync.enabled`` doubles as the "haptic_io is real for this team" flag;
     the reseat is only published for real haptics, but progress is always
@@ -318,13 +354,13 @@ def _tick_tutorial_team(
     """
 
     detents = _tutorial_detent_targets_rad(tutorial_cfg)
-    bounds_min, bounds_max = _tutorial_bounds_rad(tutorial_cfg)
+    default_min_rad, default_max_rad = _tutorial_default_bounds_rad(tutorial_cfg)
     haptic_real = bool(state.get("play_sync", {}).get("enabled", False))
 
     if bool(state.get("tutorial_reset_pending", False)):
         state["tutorial_progress"] = [0.0] * 6
-        state["current_haptic_bounds_min_rad"] = list(bounds_min)
-        state["current_haptic_bounds_max_rad"] = list(bounds_max)
+        state["current_haptic_bounds_min_rad"] = [default_min_rad] * 6
+        state["current_haptic_bounds_max_rad"] = [default_max_rad] * 6
         if haptic_real:
             _publish_haptic_reseat(
                 pub,
@@ -344,8 +380,11 @@ def _tick_tutorial_team(
     ]
 
     targets = [_nearest_detent_rad(measured[i], detents) for i in range(6)]
-    bounds_min = list(state.get("current_haptic_bounds_min_rad") or bounds_min)
-    bounds_max = list(state.get("current_haptic_bounds_max_rad") or bounds_max)
+    bounds_min, bounds_max = _tutorial_bounds_for_measured_rad(
+        measured, tutorial_cfg
+    )
+    state["current_haptic_bounds_min_rad"] = list(bounds_min)
+    state["current_haptic_bounds_max_rad"] = list(bounds_max)
     _publish_tutorial_haptic_command(
         pub, producer, team, targets, bounds_min, bounds_max
     )

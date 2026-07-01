@@ -159,6 +159,15 @@ tuning:
     # does not currently follow gear-ratio sign.
     tutorial_scroll_dial_start_end: [0, -30000]   # [start, end] dial pos (decideg)
     tutorial_scroll_dial_bound: [-30100, 100]      # [min, max] soft bounds (decideg)
+    # Position-triggered soft-bound zones. When a dial's measured position is
+    # inside active_range, the game controller sends that zone's bound for that
+    # dial only. The zones intentionally do not overlap; dials outside every
+    # zone use tutorial_scroll_dial_bound above.
+    tutorial_scroll_dial_bound_zones:
+      - active_range: [-19500, 100]     # kick region below -16500 while scrolling through the first section
+        bound: [-16500, 100]
+      - active_range: [-30000, -20000]  # kick region above -19500 while scrolling through the final section
+        bound: [-30100, -19500]
     # Progress percentages at which the dial snaps to a detent. Each tick the
     # haptic tracking target is set to the nearest detent to the measured
     # position, so players feel a lock at each step. There is no 0% detent, so
@@ -215,7 +224,7 @@ tuning:
     # rewind back to the play-entry pose, looping until a dial wake / skip. On
     # interrupt it rewinds from the current point, then enters idle. Needs a
     # recording under recording_dir; otherwise the LEDs just breathe.
-    enabled: true
+    enabled: false
     per_team_own_trajectory: true   # each robot replays its own path (false -> all use team a)
     recording_dir: logs/display_broadcast_recording
     rewind_speed_fraction: 0.40     # smoothed rewind at 40% of each max_velocity_deg_s

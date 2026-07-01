@@ -112,6 +112,41 @@ def _coerce_tutorial_scroll(start_end: Any, bound: Any) -> dict[str, float]:
     }
 
 
+def _coerce_tutorial_bound_zones(value: Any) -> list[dict[str, float]]:
+    """Normalize tutorial position-triggered soft-bound zones.
+
+    Called by :func:`_tutorial_config` for optional
+    ``tutorial_scroll_dial_bound_zones`` entries. Each zone is a mapping with
+    ``active_range`` (dial position interval that selects the zone) and
+    ``bound`` (soft haptic bounds to publish while inside that interval), both
+    expressed in dial-space deci-degrees. Invalid entries are ignored.
+    """
+
+    if not isinstance(value, list):
+        return []
+    zones: list[dict[str, float]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        active_range = _coerce_float_seq(item.get("active_range"))
+        bound = _coerce_float_seq(item.get("bound"))
+        if len(active_range) < 2 or len(bound) < 2:
+            continue
+        active_min = min(active_range[0], active_range[1])
+        active_max = max(active_range[0], active_range[1])
+        bound_min = min(bound[0], bound[1])
+        bound_max = max(bound[0], bound[1])
+        zones.append(
+            {
+                "active_min_decideg": active_min,
+                "active_max_decideg": active_max,
+                "bound_min_decideg": bound_min,
+                "bound_max_decideg": bound_max,
+            }
+        )
+    return zones
+
+
 def _coerce_tutorial_detents_pct(value: Any) -> list[float]:
     """Coerce the tutorial detent percentages, clamped to 0..100 and sorted.
 
@@ -166,6 +201,13 @@ def _tutorial_config(node: Any, haptic_node: Any = None) -> dict[str, Any]:
         **_coerce_tutorial_scroll(
             data.get("tutorial_scroll_dial_start_end"),
             data.get("tutorial_scroll_dial_bound"),
+        ),
+        # tutorial_scroll_dial_bound_zones: optional per-position soft-bound
+        # overrides. The first active_range containing a dial's measured
+        # decidegree position wins for that dial; otherwise the default
+        # tutorial_scroll_dial_bound is used.
+        "tutorial_scroll_dial_bound_zones": _coerce_tutorial_bound_zones(
+            data.get("tutorial_scroll_dial_bound_zones")
         ),
         # tutorial_detents_pct: progress percentages (0..100) at which the dial
         # snaps to a detent (nearest-detent tracking each tick). No 0% detent
