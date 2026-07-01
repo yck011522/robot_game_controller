@@ -858,8 +858,8 @@ class DashboardMockup:
         inset = int(style["spine_inset"])
         match_inset = int(style["match_widget_inset"])
         self._match_core_widget(surface, pygame.Rect(rect.x + match_inset, rect.y + 28, rect.w - match_inset * 2, 270), state)
-        self._core_process_table(surface, pygame.Rect(rect.x + inset, rect.y + 330, rect.w - inset * 2, 320), state["core_processes"], style)
-        self._collision_worker_grid(surface, pygame.Rect(rect.x + inset, rect.y + 680, rect.w - inset * 2, 650), state["collision_workers"], style)
+        self._core_process_table(surface, pygame.Rect(rect.x + inset, rect.y + 330, rect.w - inset * 2, 392), state["core_processes"], style)
+        self._collision_worker_grid(surface, pygame.Rect(rect.x + inset, rect.y + 722, rect.w - inset * 2, 578), state["collision_workers"], style)
         self._control_widget(surface, self._control_widget_rect(), state)
 
     def _control_widget_rect(self) -> pygame.Rect:
