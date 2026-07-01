@@ -44,6 +44,7 @@ from apps.game_controller.context import (  # noqa: E402
 )
 from apps.game_controller.context import (  # noqa: E402
     DEFAULT_BUCKET_VALUES,
+    DEFAULT_LOOK_POSE_DEG,
 )
 from apps.game_controller.conclusion_motion import (  # noqa: E402
     ConclusionCertifier,
@@ -81,8 +82,10 @@ from apps.game_controller.safety import (  # noqa: E402
 )
 from apps.game_controller.stages import (  # noqa: E402
     _enter_stage,
+    _practice_masked_dial_feed,
     _stage_countdown_s,
     _tick_conclusion_team,
+    _tick_practice_arrival,
     _tick_stage_state,
     _update_stage_pause_tracking,
 )
@@ -164,6 +167,23 @@ def main(argv: list[str] | None = None) -> int:
         or DEFAULT_SAFETY_TELEM_AGE_MAX_MS
     ) / 1000.0
     robot_show_poses = _load_robot_show_poses_deg()
+    # Static practice sub-state endpoints, converted deg -> rad once. The play
+    # tick divides these by the per-axis gear ratio to build the frozen-joint
+    # dial feed (absolute input mode): a not-yet-started joint holds exactly at
+    # robot_begin_pose, a completed joint holds exactly at
+    # robot_practice_target_pose. Keyed by team; missing poses fall back to the
+    # neutral look pose supplied by the loader.
+    practice_begin_rad_by_team = {
+        team: [math.radians(float(v)) for v in poses.get("robot_begin_pose", [])[:6]]
+        for team, poses in robot_show_poses.items()
+    }
+    practice_target_rad_by_team = {
+        team: [
+            math.radians(float(v))
+            for v in poses.get("robot_practice_target_pose", [])[:6]
+        ]
+        for team, poses in robot_show_poses.items()
+    }
     robot_tuning = proc.profile.tuning.get("robot", {})
     # Per-axis hard joint limits in degrees, used to clamp the published
     # proximity zones so a band never advertises motion the robot cannot reach.
@@ -390,6 +410,25 @@ def main(argv: list[str] | None = None) -> int:
             # One-shot flag set on tutorial entry; the runtime loop reseats the
             # dial to 0 and installs the tutorial bounds, then clears it.
             "tutorial_reset_pending": False,
+            # --- Practice sub-state (per team, inside the play stage) ---
+            # in_practice / practice_player / practice_completed are (re)seeded
+            # on play entry by _seed_play_teams; defaults here keep state.full
+            # coherent before the first game. practice_player is 1..6 (player N
+            # jogs joint N-1). practice_dwell_start_ns times the on-target dwell.
+            "in_practice": False,
+            "practice_player": 1,
+            "practice_completed": [False] * 6,
+            "practice_dwell_start_ns": None,
+            # Static per-team practice metadata published for the player display:
+            # the exact target every joint walks to, plus the arrival tolerance.
+            "practice_target_pose_deg": list(
+                robot_show_poses.get(team, {}).get(
+                    "robot_practice_target_pose", DEFAULT_LOOK_POSE_DEG
+                )
+            ),
+            "practice_arrival_tolerance_deg": float(
+                game_cfg["practice_arrival_tolerance_deg"]
+            ),
         }
     _disable_incomplete_daydream_players(teams, daydream_cfg)
     banner(proc.proc, f"teams={active_teams} collision_check={collision_enabled}")
@@ -857,8 +896,30 @@ def main(argv: list[str] | None = None) -> int:
                 _publish_hold_current_pose(pub, p.proc, team, st)
                 continue
 
+            # Practice sub-state masking: while a team is in practice, only the
+            # active player's joint follows their live dial; every other joint
+            # is frozen at its exact begin / target angle (built as a dial feed
+            # for the absolute-mode planner). The full collision / proximity /
+            # bounds pipeline below is identical to normal play - only the dial
+            # feed differs, so held joints ride the same accel / velocity clamps.
+            practice_active = bool(st.get("in_practice", False))
+            practice_active_idx = (
+                int(st.get("practice_player", 1)) - 1 if practice_active else -1
+            )
+            if practice_active:
+                plan_dial = _practice_masked_dial_feed(
+                    begin_pose_rad=practice_begin_rad_by_team.get(team, [0.0] * 6),
+                    target_pose_rad=practice_target_rad_by_team.get(team, [0.0] * 6),
+                    gear=haptic_cfg["gear_ratio"],
+                    completed=st["practice_completed"],
+                    active_idx=practice_active_idx,
+                    live_dial=st["last_dial"],
+                )
+            else:
+                plan_dial = st["last_dial"]
+
             q_target, info = planner.plan(
-                dial_pos_rad=st["last_dial"],
+                dial_pos_rad=plan_dial,
                 dt=dt,
             )
             st["last_target"] = q_target
@@ -909,7 +970,25 @@ def main(argv: list[str] | None = None) -> int:
                 now_s=float(now_ns) / 1e9,
             )
 
-            # Event-based jogging debug trace. Published ONLY on "interesting"
+            # Practice hand-off: once the active joint's commanded target settles
+            # on the practice target (within tolerance for the dwell), latch it
+            # and advance to the next player; after player 6 this clears
+            # in_practice and the team falls through to normal play next tick.
+            if practice_active and 0 <= practice_active_idx < 6:
+                target_rad_seq = practice_target_rad_by_team.get(team, [0.0] * 6)
+                _tick_practice_arrival(
+                    st,
+                    active_q_target_rad=float(q_target[practice_active_idx]),
+                    active_idx=practice_active_idx,
+                    target_rad=float(target_rad_seq[practice_active_idx]),
+                    tolerance_rad=math.radians(
+                        float(game_cfg["practice_arrival_tolerance_deg"])
+                    ),
+                    dwell_s=float(game_cfg["practice_arrival_dwell_s"]),
+                    now_ns=now_ns,
+                )
+
+
             # ticks (speed override dropped, a forward reply was missing, or a
             # real collision) so the bus trace stays sparse while still
             # capturing every speed-override-to-zero event with the timing

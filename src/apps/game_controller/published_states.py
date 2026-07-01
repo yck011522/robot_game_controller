@@ -440,4 +440,33 @@ def _team_state_full_payload(
             "bucket_open_triggered": team_state["conclusion_bucket_open_triggered"],
             "done": team_state["conclusion_done"],
         },
+        # Practice sub-state of the play stage. ``in_practice`` is True while this
+        # team is still running the one-player-at-a-time warm-up; the display in
+        # front of each player uses ``active_player`` (1..6, null once done) to
+        # show whose turn it is, ``completed`` for per-joint progress, and the
+        # static ``target_pose_deg`` to show the goal each joint jogs toward.
+        "practice": {
+            "in_practice": bool(team_state.get("in_practice", False)),
+            "active_player": (
+                int(team_state.get("practice_player", 1))
+                if bool(team_state.get("in_practice", False))
+                else None
+            ),
+            "active_joint_index": (
+                int(team_state.get("practice_player", 1)) - 1
+                if bool(team_state.get("in_practice", False))
+                else None
+            ),
+            "completed": [
+                bool(v)
+                for v in (team_state.get("practice_completed") or [False] * 6)
+            ],
+            "target_pose_deg": [
+                float(v)
+                for v in (team_state.get("practice_target_pose_deg") or [0.0] * 6)
+            ],
+            "arrival_tolerance_deg": float(
+                team_state.get("practice_arrival_tolerance_deg", 0.5)
+            ),
+        },
     }

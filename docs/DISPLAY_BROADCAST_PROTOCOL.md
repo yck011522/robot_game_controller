@@ -174,6 +174,13 @@ team
 |-- summed_score: number
 |-- bucket_labels: array[string]
 |-- buckets: array[number]
+|-- practice
+|   |-- in_practice: boolean
+|   |-- active_player: integer | null
+|   |-- active_joint_index: integer | null
+|   |-- completed: array[boolean] (6 values)
+|   |-- target_pose_deg: array[number] (6 values)
+|   `-- arrival_tolerance_deg: number
 `-- conclusion
     |-- phase: string
     |-- active_bucket_index: integer | null
@@ -199,6 +206,8 @@ Display-oriented interpretations:
 - During conclusion, `summed_score` is the total accumulated so far and
   `active_bucket_index` selects the bucket currently being counted.
 - `conclusion.done` indicates that final team totals can be shown.
+- During the play-stage practice warm-up, `practice.in_practice` selects the
+  practice display treatment. `active_stage` remains `"play"` during this time.
 - Collision scalars are nominally `0.0..1.0`; `final_scalar` is the effective
   speed fraction, where `1.0` means full speed.
 - `robot.status`, `planner`, `rewind.shortcut`, safety detail, and weight-sensor
@@ -207,6 +216,94 @@ Display-oriented interpretations:
 
 An optional `batch_validation` object may appear at the top of `state` in
 automated validation profiles. It is not part of normal display behavior.
+
+### Practice sub-state
+
+Practice is an optional warm-up sub-state inside `active_stage == "play"`. It
+is enabled by profiles with `tuning.game.practice_enabled: true`. When enabled,
+each team starts the play timer in practice, and players 1 through 6 take turns
+jogging their own robot joint from the configured begin pose to
+`robot_practice_target_pose`. Practice consumes part of `countdown_s`; there is
+no separate practice stage value.
+
+Use this page-selection rule:
+
+1. Read `stage = state.active_stage` and render the normal lifecycle page from
+   it.
+2. If `stage == "play"` and `teams.<team>.practice.in_practice == true`, render
+   the practice page instead of the normal gameplay page for that team.
+3. If `practice.in_practice == false`, or the `practice` block is missing, render
+   normal gameplay for `active_stage == "play"`.
+
+The practice block has these fields:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `in_practice` | boolean | `true` while this team is still in the one-player-at-a-time practice sequence. |
+| `active_player` | integer \| null | The 1-based player number whose turn it is, `1..6`. It is `null` once practice is complete. |
+| `active_joint_index` | integer \| null | The zero-based joint index for the active player, `0..5`. It is `active_player - 1`, or `null` once practice is complete. |
+| `completed` | array[boolean] | Six booleans, one per player/joint. `true` means that player's practice turn has already latched complete. |
+| `target_pose_deg` | array[number] | Six robot-joint targets, in absolute joint degrees. Player `N` uses `target_pose_deg[N-1]`. |
+| `arrival_tolerance_deg` | number | Absolute error tolerance around the target. The controller advances after the active joint remains within this tolerance for its dwell time. |
+
+For player `aN` or `bN`, derive `team` and `joint = N - 1` exactly as in normal
+play. Then use this display logic:
+
+- If `practice.in_practice` is `true` and `practice.active_player == N`, this is
+  the active player's turn. Show a "move to target" treatment for joint `N`.
+- If `practice.completed[joint]` is `true`, show that this player's practice
+  turn is done. The joint is being held at the practice target.
+- If `practice.in_practice` is `true` and this player is neither active nor
+  complete, show a waiting/queued treatment and identify the current active
+  player from `practice.active_player`.
+- If `practice.active_player` is `null`, practice is over; fall back to normal
+  play rendering.
+
+For the active player, the recommended target display values are:
+
+| Display value | Source |
+|---|---|
+| Target angle | `teams.<team>.practice.target_pose_deg[joint]` |
+| Commanded/current target angle | `degrees(teams.<team>.robot.q_target_rad[joint])` |
+| Measured robot angle | `degrees(teams.<team>.robot.q_rad[joint])` |
+| Player dial angle in robot space | `teams.<team>.haptic.dial_robot_deg[joint]` |
+| Arrival tolerance | `teams.<team>.practice.arrival_tolerance_deg` |
+
+The controller latches a turn using the commanded joint target
+(`robot.q_target_rad`) against `practice.target_pose_deg`, then requires a short
+internal dwell before it advances `active_player`. The dwell timer is not
+published. A display may show "hold steady" when
+`abs(degrees(robot.q_target_rad[joint]) - target_pose_deg[joint]) <=
+arrival_tolerance_deg`, but it should treat `practice.completed[joint]` as the
+authoritative completion flag.
+
+Example practice state for team A, player 3 active:
+
+```json
+{
+  "active_stage": "play",
+  "countdown_s": 213,
+  "teams": {
+    "a": {
+      "robot": {
+        "q_target_rad": [-0.8727, -1.0472, 0.8500, -0.1745, 1.5708, 0.0],
+        "q_rad": [-0.8700, -1.0450, 0.8300, -0.1700, 1.5600, 0.0]
+      },
+      "haptic": {
+        "dial_robot_deg": [-50.0, -60.0, 48.7, -10.0, 90.0, 0.0]
+      },
+      "practice": {
+        "in_practice": true,
+        "active_player": 3,
+        "active_joint_index": 2,
+        "completed": [true, true, false, false, false, false],
+        "target_pose_deg": [-50.0, -60.0, 80.0, -10.0, 90.0, 0.0],
+        "arrival_tolerance_deg": 1.0
+      }
+    }
+  }
+}
+```
 
 ### Proximity collision zones
 
@@ -456,4 +553,3 @@ subnet broadcast address while preserving the recorded stage timing.
 - State schema construction: `src/apps/game_controller/published_states.py`
 - Endpoint and Pi mapping: `config/device_ports_and_addr.yaml`
 - Regression tests: `tests/test_display_broadcast.py`
-

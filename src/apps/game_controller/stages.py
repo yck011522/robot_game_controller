@@ -376,6 +376,7 @@ def _seed_play_teams(teams: dict[str, dict], game_cfg: dict[str, Any]) -> None:
     if not isinstance(sim_bucket_values, dict):
         sim_bucket_values = {}
 
+    practice_enabled = bool(game_cfg.get("practice_enabled", False))
     for team, st in teams.items():
         seed_buckets = sim_bucket_values.get(team, DEFAULT_BUCKET_VALUES)
         st["bucket_values"] = list(seed_buckets)
@@ -392,6 +393,110 @@ def _seed_play_teams(teams: dict[str, dict], game_cfg: dict[str, Any]) -> None:
         st["conclusion_hardstopped"] = False
         st["conclusion_done"] = False
         st["conclusion_sum_remainder_units"] = 0.0
+        # Practice sub-state: each team starts play in practice (when enabled),
+        # with player 1 (joint 0) active and no joints latched yet. The runtime
+        # loop consumes these while the shared play timer runs.
+        st["in_practice"] = practice_enabled
+        st["practice_player"] = 1
+        st["practice_completed"] = [False] * 6
+        st["practice_dwell_start_ns"] = None
+
+
+# --- Practice sub-state (per team, inside the play stage) -------------------
+# The practice sub-state lets players 1..6 take turns jogging their own joint
+# (player N -> joint N-1) from robot_begin_pose to robot_practice_target_pose,
+# one at a time, while every other joint is frozen. These helpers are pure: they
+# operate only on plain lists / the team scratch dict, never on the planner or
+# bus, so __main__ owns all hardware state.
+
+
+def _practice_masked_dial_feed(
+    *,
+    begin_pose_rad: list[float],
+    target_pose_rad: list[float],
+    gear: list[float],
+    completed: list[bool],
+    active_idx: int,
+    live_dial: list[float],
+) -> list[float]:
+    """Build the six-dial feed handed to the jogging planner during practice.
+
+    ABSOLUTE input-mode only (the practice sub-state is gated behind an opt-in
+    flag that is enabled solely in absolute-mode profiles). In absolute mode the
+    planner maps ``dial * gear`` to an absolute joint target, so each joint's
+    feed is chosen to command the desired absolute angle:
+
+    * active joint (``active_idx``) -> the player's ``live_dial`` value, so they
+      jog their own joint toward the target;
+    * a completed joint -> ``target_pose_rad / gear`` (exact practice target);
+    * a not-yet-started joint -> ``begin_pose_rad / gear`` (exact begin pose).
+
+    Freezing to the exact yaml pose (angle / gear) rather than a captured dial
+    snapshot makes held joints immune to any dial the other players deflect
+    before or during a turn that is not theirs. Returns a fresh six-element list
+    and holds no state.
+    """
+
+    feed = [0.0] * 6
+    for i in range(6):
+        g = gear[i] if i < len(gear) and abs(float(gear[i])) > 1e-9 else 1.0
+        if i == active_idx:
+            feed[i] = float(live_dial[i]) if i < len(live_dial) else 0.0
+        elif i < len(completed) and completed[i]:
+            feed[i] = float(target_pose_rad[i]) / g
+        else:
+            feed[i] = float(begin_pose_rad[i]) / g
+    return feed
+
+
+def _tick_practice_arrival(
+    st: dict[str, Any],
+    *,
+    active_q_target_rad: float,
+    active_idx: int,
+    target_rad: float,
+    tolerance_rad: float,
+    dwell_s: float,
+    now_ns: int,
+) -> None:
+    """Advance a team's practice turn once the active joint settles on target.
+
+    Mutates only the team scratch dict ``st``. When the active joint's commanded
+    target (``active_q_target_rad``) stays within ``tolerance_rad`` of the
+    practice ``target_rad`` continuously for ``dwell_s`` seconds, the joint is
+    marked completed, the dwell timer clears, and ``practice_player`` advances.
+    After player 6 finishes, ``in_practice`` clears so the team drops into normal
+    six-player gameplay. A single fly-through tick (within tolerance for less
+    than the dwell) does not advance the turn. No-op when not in practice.
+    """
+
+    if not bool(st.get("in_practice", False)):
+        return
+    within_tol = abs(float(active_q_target_rad) - float(target_rad)) <= float(
+        tolerance_rad
+    )
+    if not within_tol:
+        # Left the tolerance band before the dwell elapsed: restart the timer.
+        st["practice_dwell_start_ns"] = None
+        return
+    start_ns = st.get("practice_dwell_start_ns")
+    if start_ns is None:
+        st["practice_dwell_start_ns"] = now_ns
+        return
+    if (now_ns - int(start_ns)) < int(float(dwell_s) * 1e9):
+        return
+
+    # Sustained on-target arrival: latch this joint and hand off.
+    completed = st.get("practice_completed")
+    if isinstance(completed, list) and 0 <= active_idx < len(completed):
+        completed[active_idx] = True
+    st["practice_dwell_start_ns"] = None
+    next_player = int(st.get("practice_player", 1)) + 1
+    if next_player > 6:
+        st["practice_player"] = 6
+        st["in_practice"] = False
+    else:
+        st["practice_player"] = next_player
 
 
 def _update_dial_window(

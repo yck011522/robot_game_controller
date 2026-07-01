@@ -268,6 +268,30 @@ def _game_config(node: Any) -> dict[str, Any]:
         # rewind_enabled: record certified play targets and retrace them during
         # reset. False preserves the placeholder reset timer for other profiles.
         "rewind_enabled": bool(data.get("rewind_enabled", False)),
+        # --- Practice sub-state (per team, inside the play stage) ---
+        # practice_enabled: when true, every team starts the play stage in a
+        # per-team "practice" sub-state (published as teams.<t>.practice) before
+        # normal gameplay. Players 1..6 take turns jogging their own joint
+        # (player N -> joint N-1) from robot_begin_pose to
+        # robot_practice_target_pose while all other joints are frozen at their
+        # exact begin / target angle. The shared play timer keeps running, so
+        # practice consumes part of duration_s. Defaults False so existing
+        # profiles keep jumping straight into gameplay; enable per profile.
+        "practice_enabled": bool(data.get("practice_enabled", False)),
+        # practice_arrival_tolerance_deg: the active joint counts as "arrived"
+        # once its commanded target is within this absolute error (degrees) of
+        # the practice target angle. Kept small so the hand-off latches the joint
+        # essentially on target. Tune up if players struggle to trigger arrival.
+        "practice_arrival_tolerance_deg": _coerce_positive_float(
+            data.get("practice_arrival_tolerance_deg"), 0.5
+        ),
+        # practice_arrival_dwell_s: the active joint must stay within tolerance
+        # continuously for this many seconds before the turn advances to the
+        # next player. Rejects a fly-through where the joint only clips the
+        # target for a single tick. Tune up for a firmer settle requirement.
+        "practice_arrival_dwell_s": _coerce_positive_float(
+            data.get("practice_arrival_dwell_s"), 0.4
+        ),
         # rewind_speed_fraction: fraction of configured per-joint maximum
         # velocity used for geometry-only rewind retiming. Acceleration
         # retiming is intentionally deferred until the hardware workflow works.
@@ -445,6 +469,10 @@ def _coerce_deg_pose(value: Any, fallback: list[float]) -> list[float]:
 def _default_pose_map() -> dict[str, list[float]]:
     return {
         "robot_begin_pose": list(DEFAULT_LOOK_POSE_DEG),
+        # Static target the practice sub-state walks each joint to, one player at
+        # a time. Loaded from robot_show_poses.yaml; falls back to the neutral
+        # look pose when absent so the loader always yields six values.
+        "robot_practice_target_pose": list(DEFAULT_LOOK_POSE_DEG),
         "robot_lookb1_pose": list(DEFAULT_LOOK_POSE_DEG),
         "robot_lookb2_pose": list(DEFAULT_LOOK_POSE_DEG),
         "robot_lookb3_pose": list(DEFAULT_LOOK_POSE_DEG),

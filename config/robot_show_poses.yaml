@@ -1,14 +1,20 @@
 teams:
   a:
-    robot_begin_pose: [0, -116, 116, -35, 95, 180]
+    # robot_begin_pose: [0, -116, 116, -35, 95, 180]
+    robot_begin_pose: [0, -110, 110, -90, -90, 180]
+    robot_practice_target_pose: [-50, -60, 80, -10, 90, 0]
+    # Will rewind back to practice target pose and then further rewind to begin pose
     robot_lookb1_pose:  [30.6, -52.1, 42.4, -165.6, -98.6, -30.5]
     robot_lookb2_pose: [-14.4, -52, 26.0, -107.5, -65.3, -38]
     robot_lookb3_pose: [-61.0, -40.8, 18.8, -123.5, -66.9, 50.5]
+    # robot_announcement_pose: [0, -110, 110, -90, -90, 180]
     robot_announcement_pose: [0, -116, 116, -35, 95, 180]
     robot_win_pose: [0, -116, 116, -90, 95, 90]
     robot_lose_pose:  [0, -116, 116, 60, 95, 180]
   b:
-    robot_begin_pose: [0, -116, 116, -35, 95, 180]
+    robot_begin_pose: [0, -110, 110, -90, -90, 180]
+    robot_practice_target_pose: [-50, -60, 80, -10, 90, 0]
+    # Will rewind back to practice target pose and then further rewind to begin pose
     robot_lookb1_pose: [30.6, -52.1, 42.4, -165.6, -98.6, -30.5]
     robot_lookb2_pose: [-14.4, -52, 26.0, -107.5, -65.3, -38]
     robot_lookb3_pose: [-61.0, -40.8, 18.8, -123.5, -66.9, 50.5]

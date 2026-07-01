@@ -191,6 +191,10 @@ tuning:
     # --- State machine bring-up ---
     start_stage: daydreaming        # boot into attract mode (LED breathing visible immediately)
     reset_duration_s: 3.0           # fallback hold; only used if rewind_enabled is false
+    # --- Practice sub-state (per team, first part of the play stage) ---
+    practice_enabled: true          # players 1..6 jog their own joint to the target one at a time
+    practice_arrival_tolerance_deg: 1.0  # active joint counts as arrived within this of target
+    practice_arrival_dwell_s: 0.4   # ...and must hold within tolerance this long before hand-off
     # --- Geometric rewind (replaces the flat reset timer) ---
     rewind_enabled: true            # rewind the recorded play path instead of a fixed reset hold
     rewind_speed_fraction: 0.60     # rewind at 60% of each max_velocity_deg_s
