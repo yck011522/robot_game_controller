@@ -78,6 +78,7 @@ state
 |-- paused: boolean
 |-- pause_reason: string | null
 |-- soft_estop: boolean
+|-- winner_team: string | null
 |-- safety
 |   `-- barrier
 |       |-- enabled, ok, stale: boolean
@@ -134,6 +135,26 @@ non-empty values as valid future reasons.
 `tutorial`, `play`, or a timer-driven `reset`. It is `0` in untimed stages and
 also during a rewind-driven reset. It stops changing while paused. Do not use
 `0` alone to infer that a timed stage has completed; use `active_stage`.
+
+### Winner reveal field
+
+`winner_team` is the display latch for revealing the conclusion result. It is
+`null` until the conclusion show has counted every bucket and every active team
+has reached the announcement-ready point. During `active_stage == "conclusion"`,
+a non-null value means receivers may show the final winner:
+
+| Value | Meaning |
+|---|---|
+| `null` | Winner reveal is not ready; keep showing the counting/conclusion screen. |
+| `"a"` | Team A won. |
+| `"b"` | Team B won. |
+| `"tie"` | The final integer totals are tied. |
+
+Receivers should latch the visual reveal on the transition from `null` to a
+non-null value, rather than depending on per-team choreography values such as
+`teams.<team>.conclusion.phase`. Those phase names are still published for
+diagnostics and richer animation, but `winner_team` is the stable result-reveal
+contract for player displays and scoreboard displays.
 
 ### Team object
 

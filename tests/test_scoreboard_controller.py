@@ -60,6 +60,7 @@ def _state(stage: str, rewind_complete: bool) -> dict:
 
     return {
         "active_stage": stage,
+        "winner_team": None,
         "teams": {
             "a": {
                 "buckets": [120, 80, 40],
@@ -106,6 +107,46 @@ class ScoreboardResetScrollTests(unittest.TestCase):
         for display in (1, 2, 3):
             self.assertEqual(controller.desired_state(display).mode, MODE_STATIC)
             self.assertIn(f"/display/{display}/mode 0\n".encode("ascii"), transport.lines)
+
+    def test_conclusion_reveal_latches_on_winner_team(self) -> None:
+        """The scoreboard reveal follows the published winner_team field."""
+
+        transport = _RecordingTransport()
+        config = ScoreboardConfig()
+        config.blink_period_s = 0.0  # Keep the winning text on for assertions.
+        controller = ScoreboardController(transport, _layout(), config)
+
+        state = {
+            "active_stage": "conclusion",
+            "winner_team": None,
+            "teams": {
+                "a": {
+                    "buckets": [7, 8, 9],
+                    # Old reveal hints alone must not trigger WIN/LOSE.
+                    "conclusion": {"phase": "move_to_begin", "done": True},
+                },
+                "b": {
+                    "buckets": [1, 2, 3],
+                    "conclusion": {"phase": "move_to_begin", "done": True},
+                },
+            },
+        }
+        controller.set_state(state)
+        controller.update(now_mono=1.0)
+        self.assertEqual(controller.desired_state(1).text, "0007")
+        self.assertEqual(controller.desired_state(4).text, "0001")
+
+        state["winner_team"] = "a"
+        controller.set_state(state)
+        controller.update(now_mono=1.1)
+        self.assertEqual(controller.desired_state(1).text, config.win_text)
+        self.assertEqual(controller.desired_state(4).text, config.lose_text)
+
+        state["winner_team"] = "tie"
+        controller.set_state(state)
+        controller.update(now_mono=1.2)
+        self.assertEqual(controller.desired_state(1).text, config.tie_text)
+        self.assertEqual(controller.desired_state(4).text, config.tie_text)
 
 
 if __name__ == "__main__":

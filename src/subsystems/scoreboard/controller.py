@@ -20,10 +20,10 @@ Per-stage behaviour (matches docs/GAME_MECHANICS.md and the bring-up spec):
 * tutorial    - bucket 1/2/3 of each team show ``HOW`` / ``TO`` / ``PLAY``.
 * play        - each panel shows its bucket weight, 4-digit zero-padded.
 * reset       - every panel scrolls ``GAME,OVER`` upward (mode 1).
-* conclusion  - while the score counts down: bucket weights (as in play, now
-                decrementing). Once the show moves from the announcement pose to
-                the win/lose pose: the winning team's panels show ``WIN``, the
-                losing team's ``LOSE``, or every panel ``TIE`` on an integer tie.
+* conclusion  - while ``winner_team`` is null: bucket weights (as in play, now
+                decrementing). Once ``winner_team`` becomes ``"a"``, ``"b"``, or
+                ``"tie"``: the winning team's panels show ``WIN``, the losing
+                team's ``LOSE``, or every panel ``TIE``.
 """
 
 from __future__ import annotations
@@ -53,15 +53,8 @@ _WHITE = (255, 255, 255)
 
 
 
-# Conclusion-show phases (published under ``teams.<t>.conclusion.phase``) that
-# mean "the robot has left the announcement pose and is revealing the result".
-# While the controller is in one of these phases - or once ``conclusion.done``
-# is set - the panels switch from the counting numbers to WIN/LOSE/TIE words.
-_REVEAL_PHASES = frozenset(
-    {"move_to_winner_pose", "winner_pose_hold", "move_to_begin"}
-)
-
 _TEAMS = ("a", "b")
+_WINNER_VALUES = frozenset((*_TEAMS, "tie"))
 
 
 @dataclass(frozen=True)
@@ -387,19 +380,21 @@ class ScoreboardController:
     def _render_conclusion(self, state: dict[str, Any]) -> None:
         """Conclusion: count down bucket weights, then reveal WIN/LOSE/TIE.
 
-        While counting, panels stay white (like play). On the reveal the winning
+        ``state.full.winner_team`` is the single reveal latch shared with the
+        player displays: ``None`` keeps counting, while ``"a"``, ``"b"``, or
+        ``"tie"`` switches to the final result text. On the reveal the winning
         team's panels blink ``WIN`` (text toggles on/off at ``blink_period_s``);
-        the losing team shows a steady ``LOSE`` and an integer tie shows a steady
-        ``TIE`` on every panel. All reveal text is white.
+        the losing team shows a steady ``LOSE`` and a tie shows steady ``TIE``.
+        All reveal text is white.
         """
 
         active = self._active_teams(state)
-        if not self._conclusion_revealing(state, active):
+        winner = self._winner_team(state, active)
+        if winner is None:
             # Still counting: keep showing the (now decrementing) bucket weights.
             self._render_bucket_weights(state)
             return
 
-        winner = self._winner_team(state, active)
         blink_on = self._blink_on(self._now_mono)
         color = self._config.play_color
         for team in active:
@@ -470,34 +465,21 @@ class ScoreboardController:
             return []
         return [team for team in _TEAMS if isinstance(teams.get(team), dict)]
 
-    def _conclusion_revealing(self, state: dict[str, Any], active: list[str]) -> bool:
-        """Return True once any active team has reached the win/lose reveal."""
+    def _winner_team(self, state: dict[str, Any], active: list[str]) -> str | None:
+        """Return the published winner latch when it is valid for this state.
 
-        for team in active:
-            conclusion = _team_block(state, team).get("conclusion")
-            conclusion = conclusion if isinstance(conclusion, dict) else {}
-            if conclusion.get("phase") in _REVEAL_PHASES or conclusion.get("done"):
-                return True
-        return False
-
-    def _winner_team(self, state: dict[str, Any], active: list[str]) -> str:
-        """Return ``"a"``/``"b"`` for the higher total, or ``"tie"`` if equal.
-
-        Totals come from the published per-team ``summed_score`` (which holds the
-        whole team score once the count-down has finished). Mirrors the game
-        controller's own ``_winner_team`` tie rule (integer-level equality).
+        ``state.full.winner_team`` is owned by the game controller and becomes
+        non-null only when displays may reveal the result. Invalid/missing values
+        are treated as "not ready" so the scoreboard keeps showing bucket
+        weights instead of recomputing its own reveal timing.
         """
 
-        totals = [
-            (team, _maybe_int(_team_block(state, team).get("summed_score")) or 0)
-            for team in active
-        ]
-        if not totals:
+        winner = state.get("winner_team")
+        if winner not in _WINNER_VALUES:
+            return None
+        if winner == "tie":
             return "tie"
-        totals.sort(key=lambda item: item[1], reverse=True)
-        if len(totals) >= 2 and totals[0][1] == totals[1][1]:
-            return "tie"
-        return totals[0][0]
+        return winner if winner in active else None
 
     # ---- diff + enqueue -------------------------------------------------
 

@@ -21,6 +21,7 @@ from apps.game_controller.weight import _state_full_weight_sensor
 # default "untested" grey. Kept in lock-step with the gamemaster dashboard so
 # both consumers gate identically on the same ground truth.
 _PROX_ZONE_STALE_TICKS = 12
+_PUBLISHED_WINNER_VALUES = frozenset({"a", "b", "tie"})
 
 
 def _prox_zone_for_axis(
@@ -263,6 +264,21 @@ def _pause_state_summary(
     return paused, pause_reason
 
 
+def _winner_team_payload(stage_state: dict[str, Any]) -> str | None:
+    """Return the display-facing winner latch for ``state.full``.
+
+    The field is intentionally a single nullable value: ``None`` means the
+    winner reveal is not ready yet, while ``"a"``, ``"b"``, or ``"tie"`` means
+    every active team has reached the announcement-ready point in the conclusion
+    show and displays may reveal the result.
+    """
+
+    if stage_state.get("stage") != "conclusion":
+        return None
+    winner = stage_state.get("winner_team")
+    return winner if winner in _PUBLISHED_WINNER_VALUES else None
+
+
 def _build_state_full_payload(
     stage_state: dict[str, Any],
     safety_state: dict[str, Any],
@@ -290,6 +306,7 @@ def _build_state_full_payload(
         "paused": paused,
         "pause_reason": pause_reason,
         "soft_estop": soft_paused,
+        "winner_team": _winner_team_payload(stage_state),
         "safety": {
             "barrier": _state_full_safety_barrier(safety_state),
         },

@@ -250,6 +250,49 @@ def test_published_practice_block_active_player_null_when_done():
     assert practice["active_joint_index"] is None
 
 
+def test_published_state_full_winner_team_is_conclusion_latch():
+    """state.full publishes winner_team only when conclusion reveal is ready."""
+    from apps.game_controller.haptics import _haptic_config
+
+    haptic_cfg = _haptic_config({"gear_ratio": GEAR})
+    stage_state = {
+        "stage": "conclusion",
+        "stage_entered_mono_ns": 123,
+        "winner_team": "a",
+    }
+    game_cfg = {"duration_s": 10, "sum_score_rate_unit_per_s": 5}
+    payload = gc_published._build_state_full_payload(
+        stage_state,
+        safety_state={},
+        weight_state={},
+        teams={"a": _full_team_state()},
+        game_cfg=game_cfg,
+        haptic_cfg=haptic_cfg,
+        paused=False,
+        pause_reason=None,
+        soft_paused=False,
+        countdown_s=0,
+    )
+    assert payload["winner_team"] == "a"
+
+    # The same internal value is hidden outside conclusion so receivers can
+    # treat non-null as a conclusion-stage reveal latch.
+    stage_state["stage"] = "idle"
+    payload = gc_published._build_state_full_payload(
+        stage_state,
+        safety_state={},
+        weight_state={},
+        teams={"a": _full_team_state()},
+        game_cfg=game_cfg,
+        haptic_cfg=haptic_cfg,
+        paused=False,
+        pause_reason=None,
+        soft_paused=False,
+        countdown_s=0,
+    )
+    assert payload["winner_team"] is None
+
+
 def _full_team_state():
     """A team scratch dict populated with every key _team_state_full_payload reads."""
     return {
