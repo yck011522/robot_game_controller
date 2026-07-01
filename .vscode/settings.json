@@ -4,5 +4,6 @@
     "chat.tools.terminal.autoApprove": {
         "C:\\Users\\leungp\\anaconda3\\envs\\telemetry-display\\python.exe": true,
         "Start-Process": true
-    }
+    },
+    "workbench.colorTheme": "Kimbie Dark"
 }

@@ -150,7 +150,7 @@ tuning:
     min_refresh_interval_s: 0.05    # max 20 updates/s per panel (throttles the count-down)
     inter_command_delay_s: 0.0      # 0 flushes all queued lines each tick; raise to pace RS485
   tutorial:
-    duration_s: 990                  # tutorial countdown length (seconds)
+    duration_s: 90                  # tutorial countdown length (seconds)
     tracking_kp: 2.0                # Lower tutorial-only detent tracking spring; normal play uses tuning.haptic.tracking_kp.
     # --- Tutorial scroll (dial-space, deci-degrees; decideg = deg * 10) ---
     # Each player scrolls their haptic dial to watch the tutorial. Keep the
