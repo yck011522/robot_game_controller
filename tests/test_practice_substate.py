@@ -263,6 +263,7 @@ def test_published_state_full_winner_team_is_conclusion_latch():
     game_cfg = {"duration_s": 10, "sum_score_rate_unit_per_s": 5}
     payload = gc_published._build_state_full_payload(
         stage_state,
+        button_state={},
         safety_state={},
         weight_state={},
         teams={"a": _full_team_state()},
@@ -280,6 +281,7 @@ def test_published_state_full_winner_team_is_conclusion_latch():
     stage_state["stage"] = "idle"
     payload = gc_published._build_state_full_payload(
         stage_state,
+        button_state={},
         safety_state={},
         weight_state={},
         teams={"a": _full_team_state()},

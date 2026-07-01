@@ -57,6 +57,14 @@ subsystems:
     heartbeat_age_max: 1100
     telem_age_max: 1100
 
+  button_controller:
+    # Physical admin buttons are human-speed inputs. 40 Hz gives a 25 ms poll
+    # period, enough for deliberate push buttons while leaving RS-485 headroom.
+    fps_target: 40.0
+    fps_min: 20.0
+    heartbeat_age_max: 1100
+    telem_age_max: 1100
+
   bucket_controller:
     fps_target: 20.0
     fps_min: 5.0

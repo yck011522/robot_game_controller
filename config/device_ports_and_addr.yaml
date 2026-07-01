@@ -18,7 +18,7 @@ serial_ports:
   weight_sensor: "COM46" # CH5/E
   bucket_motors: "COM41" # CH6/F
   score_board: "COM40" # CH7/G
-  admin_buttons: "COM44" # CH8/H
+  admin_buttons: "COM44" # CH8/H HY-IO4400S
 
 serial_settings:
   haptic_dial:
@@ -40,6 +40,18 @@ serial_settings:
       - SBarr42 # address 4, input 2
     read_timeout_s: 0.070 # Per-module serial read timeout used during validation.
     inter_request_delay_s: 0.006 # Stable quiet gap: 6 ms gave 200/200 clean 8-input sweeps.
+  admin_buttons:
+    baudrate: 115200 # Modbus RTU speed for the HY-IO4400S-4NN button IO unit on COM44.
+    slave_address: 1 # HY-IO4400S-4NN Modbus slave address.
+    station_label: admin # Published station key inside telem.buttons/state.full.buttons.
+    input_start_address: 0 # First digital input address used by function 02 reads.
+    input_count: 4 # Device has four digital inputs; DI1..DI3 are used today.
+    resume_input_index: 0 # DI1: green normally-open start/resume push button.
+    skip_input_index: 1 # DI2: white normally-open skip/end-game push button.
+    estop_input_index: 2 # DI3: normally-closed physical e-stop; LOW means pressed.
+    resume_lamp_coil_address: 0 # DO1 relay coil; written by function 05.
+    read_timeout_s: 0.050 # Per-cycle Modbus read/write timeout.
+    skip_cooldown_s: 0.8 # Minimum seconds between accepted skip rising edges.
   weight_sensor:
     baudrate: 115200 # Modbus RTU speed for the 12 load-cell controllers on COM46.
     slave_addresses: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] # Fixed load-cell Modbus addresses.

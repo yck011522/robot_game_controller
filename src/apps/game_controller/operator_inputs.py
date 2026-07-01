@@ -67,7 +67,10 @@ def _handle_operator_input_request(
         ok, error = False, "missing action"
         action = None
     elif action == "play_resume":
-        if bool(control_state.get("safety_blocked", False)):
+        if bool(control_state.get("button_estop_blocked", False)):
+            control_state["soft_pause"] = True
+            ok, error = False, "physical e-stop is not clear"
+        elif bool(control_state.get("safety_blocked", False)):
             control_state["soft_pause"] = True
             ok, error = False, "safety barrier is not clear"
         else:

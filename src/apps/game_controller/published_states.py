@@ -10,6 +10,11 @@ import math
 
 from typing import Any
 
+from apps.game_controller.buttons import (
+    _button_pause_reason,
+    _state_full_buttons,
+    _state_full_estop,
+)
 from apps.game_controller.haptics import _coerce_float_list
 from apps.game_controller.safety import _safety_pause_reason, _state_full_safety_barrier
 from apps.game_controller.weight import _state_full_weight_sensor
@@ -233,6 +238,7 @@ def _state_full_planner(info: Any) -> dict[str, Any]:
 
 def _pause_state_summary(
     control_state: dict[str, Any],
+    button_state: dict[str, Any],
     safety_state: dict[str, Any],
     teams: dict[str, dict[str, Any]],
     *,
@@ -253,6 +259,8 @@ def _pause_state_summary(
             break
     if bool(control_state.get("recovery_active", False)):
         pause_reason = "recovery"
+    elif bool(control_state.get("button_estop_blocked", False)):
+        pause_reason = _button_pause_reason(button_state)
     elif bool(control_state.get("safety_blocked", False)):
         pause_reason = _safety_pause_reason(safety_state)
     elif bool(control_state.get("safety_pause_latched", False)):
@@ -281,6 +289,7 @@ def _winner_team_payload(stage_state: dict[str, Any]) -> str | None:
 
 def _build_state_full_payload(
     stage_state: dict[str, Any],
+    button_state: dict[str, Any],
     safety_state: dict[str, Any],
     weight_state: dict[str, Any],
     teams: dict[str, dict[str, Any]],
@@ -309,7 +318,9 @@ def _build_state_full_payload(
         "winner_team": _winner_team_payload(stage_state),
         "safety": {
             "barrier": _state_full_safety_barrier(safety_state),
+            "estop": _state_full_estop(button_state),
         },
+        "buttons": _state_full_buttons(button_state),
         "weight_sensor": _state_full_weight_sensor(weight_state),
         "countdown_s": countdown_s,
         "game_duration_s": game_cfg["duration_s"],

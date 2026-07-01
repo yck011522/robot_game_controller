@@ -54,7 +54,7 @@ subsystems:
   display_broadcaster: real
   scoreboard_broadcaster: real # per-bucket LED score panels driven by the game state
   bucket_controller: real     # real bucket motors so buckets physically dump
-  button_controller: null
+  button_controller: real
   safety_barrier_controller: null
 
   collision_workers:

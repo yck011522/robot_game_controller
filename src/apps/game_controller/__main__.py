@@ -27,6 +27,12 @@ from apps.game_controller.batch_validation import (  # noqa: E402
     BatchValidationSession,
     batch_validation_settings,
 )
+from apps.game_controller.buttons import (  # noqa: E402
+    _initial_button_state,
+    _pop_button_operator_requests,
+    _refresh_button_block,
+    _update_button_state,
+)
 
 # Shared constants + profile/config construction live in the context module;
 # the stage machine + conclusion scoring live in the stages module; runtime
@@ -151,6 +157,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     batch_session = BatchValidationSession(batch_cfg) if batch_cfg.enabled else None
     haptic_cfg = _haptic_config(proc.profile.tuning.get("haptic"))
+    button_enabled = proc.profile.subsystem_impl("button_controller") is not None
     safety_enabled = (
         proc.profile.subsystem_impl("safety_barrier_controller") is not None
     )
@@ -161,6 +168,14 @@ def main(argv: list[str] | None = None) -> int:
     safety_telem_age_max_s = (
         default_runtime_setting(
             "safety_barrier_controller",
+            "telem_age_max",
+            DEFAULT_SAFETY_TELEM_AGE_MAX_MS,
+        )
+        or DEFAULT_SAFETY_TELEM_AGE_MAX_MS
+    ) / 1000.0
+    button_telem_age_max_s = (
+        default_runtime_setting(
+            "button_controller",
             "telem_age_max",
             DEFAULT_SAFETY_TELEM_AGE_MAX_MS,
         )
@@ -207,6 +222,9 @@ def main(argv: list[str] | None = None) -> int:
         max_velocity_rad_s.append(math.radians(20.0))
     pub = bus.make_pub(proc.ctx)
     operator_input_rep = bus.make_rep(proc.ctx)
+    button_sub = (
+        bus.make_sub(proc.ctx, topics=["telem.buttons"]) if button_enabled else None
+    )
     safety_sub = (
         bus.make_sub(proc.ctx, topics=["telem.safety"]) if safety_enabled else None
     )
@@ -467,11 +485,13 @@ def main(argv: list[str] | None = None) -> int:
         "recovery_teams": [],
         "safety_blocked": False,
         "safety_pause_latched": False,
+        "button_estop_blocked": False,
         # Cache the last reply per source so a UI retry with the same
         # request_id can be acknowledged without reapplying the action.
         "last_request_id_by_source": {},
         "last_reply_by_source": {},
     }
+    button_state = _initial_button_state(enabled=button_enabled)
     safety_state = _initial_safety_state(enabled=safety_enabled)
     weight_state = _initial_weight_state(
         enabled=weight_sensor_enabled,
@@ -635,6 +655,11 @@ def main(argv: list[str] | None = None) -> int:
                 weight_state, now_s=time.perf_counter()
             )
             play_entry_tare_publish_pending = False
+        if button_sub is not None:
+            _drain_latest(
+                button_sub, on_msg=lambda body: _update_button_state(button_state, body)
+            )
+        _refresh_button_block(control_state, button_state, button_telem_age_max_s)
         _drain_operator_input_requests(
             operator_input_rep,
             on_msg=lambda body: _handle_operator_input_request(
@@ -647,6 +672,16 @@ def main(argv: list[str] | None = None) -> int:
                 recovery_timeout_s=RECOVERY_TIMEOUT_S,
             ),
         )
+        for button_request in _pop_button_operator_requests(button_state):
+            _handle_operator_input_request(
+                control_state,
+                stage_state,
+                teams,
+                button_request,
+                time.perf_counter_ns(),
+                producer=p.proc,
+                recovery_timeout_s=RECOVERY_TIMEOUT_S,
+            )
         _publish_pending_recovery_requests(
             pub,
             p.proc,
@@ -1052,6 +1087,7 @@ def main(argv: list[str] | None = None) -> int:
 
         paused, pause_reason = _pause_state_summary(
             control_state,
+            button_state,
             safety_state,
             teams,
             soft_paused=soft_paused,
@@ -1168,6 +1204,7 @@ def main(argv: list[str] | None = None) -> int:
         env.update(
             _build_state_full_payload(
                 stage_state,
+                button_state,
                 safety_state,
                 weight_state,
                 teams,
@@ -1203,6 +1240,8 @@ def main(argv: list[str] | None = None) -> int:
             st["planner"].close()
             st["sub_haptic"].close(0)
             st["sub_actual"].close(0)
+        if button_sub is not None:
+            button_sub.close(0)
         if safety_sub is not None:
             safety_sub.close(0)
         if weight_sub is not None:

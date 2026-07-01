@@ -349,13 +349,12 @@ Subscribers that care about stage edges detect them by comparing
   // Two global admin button stations, positioned at opposite corners
   // of the setup. Both stations carry the same controls and any press
   // on either station is treated as the same command. Each station has
-  // two momentary normally-closed buttons (start_resume, reset) and
+  // two momentary buttons (start_resume, skip) and
   // one normally-closed latching e-stop mushroom. ButtonController
   // debounces and inverts the raw contact polarity so the bus always
   // exposes logical states here.
   "buttons": {
-    "left":  {"start_resume": false, "reset": false, "estop": false},
-    "right": {"start_resume": false, "reset": false, "estop": false}
+    "admin": {"start_resume": false, "skip": false, "estop": false}
   }
 }
 ```
@@ -514,36 +513,32 @@ continue to receive already-tared `cells_g` values.
 
 ### 6.7 `telem.buttons`
 
-Two global admin button stations ("left" and "right" corners), both
-read by the single `button_controller` process. Either station's press
-is treated as the same command. The physical contacts may be
-normally-closed, but this topic is already normalized to logical
-`pressed` semantics, so `pressed: true` always means the operator is
-asserting that control.
+One or more global admin button stations are read by the single
+`button_controller` process. Any station's press is treated as the same
+command. The physical contacts may be normally-open or normally-closed,
+but this topic is already normalized to logical `pressed` semantics, so
+`pressed: true` always means the operator is asserting that control.
 
 ```jsonc
 {
   "ts_mono_ns": ...,
   "producer": "button_controller",
   "stations": {
-    "left": {
+    "admin": {
       "start_resume": {"pressed": false, "edge": null}, // "edge" ∈ null | "rise" | "fall"
-      "reset":        {"pressed": false, "edge": null},
-      "estop":        {"pressed": false, "edge": null}
-    },
-    "right": {
-      "start_resume": {"pressed": false, "edge": null},
-      "reset":        {"pressed": false, "edge": null},
+      "skip":         {"pressed": false, "edge": null},
       "estop":        {"pressed": false, "edge": null}
     }
-  }
+  },
+  "resume_lamp_on": false,
+  "errors": []
 }
 ```
 
 Logical meaning:
 
 - `start_resume` is the single acknowledge path. In `idle` it starts a run (`idle -> tutorial`). In `paused` it resumes only if every blocking condition is clear: barrier OK, e-stop physically unlatched, and any recoverable robot fault either already cleared or clearable by the robot recovery hook.
-- `reset` aborts the current run and enters `reset`. It clears round-scoped game state but does not unlatch a physical e-stop or silently clear a safety stop.
+- `skip` mirrors the dashboard SKIP / `end_game` action. It requests the next skippable stage transition and is rate-limited by ButtonController so one physical press cannot fire repeatedly.
 - `estop` is level-triggered, not edge-triggered. While asserted, GameController keeps the game in `paused` and inhibits all robot motion. Releasing the latching mushroom only removes the interlock; the game still waits for a later `start_resume` edge before motion resumes.
 
 ### 6.8 `telem.safety`

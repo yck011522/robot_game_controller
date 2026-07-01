@@ -413,6 +413,8 @@ class DashboardMockup:
         team_a = self._team_from_state(TEAM_A, teams.get(TEAM_A))
         stage = str(body.get("stage", "waiting"))
         active_stage = str(body.get("active_stage", stage))
+        safety = body.get("safety") if isinstance(body.get("safety"), dict) else {}
+        estop = safety.get("estop") if isinstance(safety.get("estop"), dict) else {}
         control_feedback = self._control_feedback_state()
         return {
             "stage": stage,
@@ -420,6 +422,7 @@ class DashboardMockup:
             "paused": bool(body.get("paused", False)),
             "pause_reason": body.get("pause_reason"),
             "soft_estop": bool(body.get("soft_estop", False)),
+            "physical_estop": bool(estop.get("pressed", False)),
             "control_pending_action": control_feedback["pending_action"],
             "control_last_ack_action": control_feedback["last_ack_action"],
             "control_error": control_feedback["error"],
@@ -439,6 +442,7 @@ class DashboardMockup:
             "paused": False,
             "pause_reason": None,
             "soft_estop": False,
+            "physical_estop": False,
             "control_pending_action": None,
             "control_last_ack_action": None,
             "control_error": None,
@@ -888,6 +892,7 @@ class DashboardMockup:
         top = rect.y + 110
         left = rect.x + 22
         paused = bool(state.get("paused", False))
+        physical_estop = bool(state.get("physical_estop", False))
         soft_estop = bool(state.get("soft_estop", False)) or state.get("pause_reason") == "soft_estop"
         return [
             {
@@ -896,7 +901,7 @@ class DashboardMockup:
                 "detail": "Continue the current stage after a pause.",
                 "shortcut": "P",
                 "rect": pygame.Rect(left, top, button_w, button_h),
-                "fill": (28, 66, 52) if paused else COLORS["panel_soft"],
+                "fill": (28, 66, 52) if paused and not physical_estop else COLORS["panel_soft"],
                 "outline": COLORS["success"],
             },
             {
