@@ -150,21 +150,21 @@ tuning:
     min_refresh_interval_s: 0.05    # max 20 updates/s per panel (throttles the count-down)
     inter_command_delay_s: 0.0      # 0 flushes all queued lines each tick; raise to pace RS485
   tutorial:
-    duration_s: 90                  # tutorial countdown length (seconds)
+    duration_s: 990                  # tutorial countdown length (seconds)
     tracking_kp: 2.0                # Lower tutorial-only detent tracking spring; normal play uses tuning.haptic.tracking_kp.
     # --- Tutorial scroll (dial-space, deci-degrees; decideg = deg * 10) ---
     # Each player scrolls their haptic dial to watch the tutorial. Keep the
     # original tutorial dial direction even though gameplay uses negative
     # gear_ratio above: tutorial progress is a raw dial-space interaction and
     # does not currently follow gear-ratio sign.
-    tutorial_scroll_dial_start_end: [0, -20000]   # [start, end] dial pos (decideg)
-    tutorial_scroll_dial_bound: [-20100, 50]      # [min, max] soft bounds (decideg)
+    tutorial_scroll_dial_start_end: [0, -30000]   # [start, end] dial pos (decideg)
+    tutorial_scroll_dial_bound: [-30100, 100]      # [min, max] soft bounds (decideg)
     # Progress percentages at which the dial snaps to a detent. Each tick the
     # haptic tracking target is set to the nearest detent to the measured
     # position, so players feel a lock at each step. There is no 0% detent, so
     # the dial pulls toward the first (10%) detent the instant the tutorial
     # begins.
-    tutorial_detents_pct: [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+    tutorial_detents_pct: [0, 10, 20, 30, 40, 50, 70, 80, 90, 100]
 
   game:
     # --- Core game ---
