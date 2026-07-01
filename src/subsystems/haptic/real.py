@@ -27,6 +27,7 @@ _SERIAL_SETTINGS_KEY = "haptic_dial"  # config key that owns this firmware's ser
 _DISCOVERY_INTERVAL_S = 3.0
 _WATCHDOG_TIMEOUT_S = 0.5
 _PROBE_TIMEOUT_S = 1.5
+_IDENTITY_AUDIT_TIMEOUT_S = 1.5
 _DEFAULT_TELEMETRY_INTERVAL_MS = 10
 _DEFAULT_BOUNDS_MIN_RAD = [-math.pi] * 6
 _DEFAULT_BOUNDS_MAX_RAD = [math.pi] * 6
@@ -301,6 +302,8 @@ class RealHaptic:
         self._pending_reseat_dial_rad: list[float] | None = None
         self._pending_reseat_ids: set[int] = set()
 
+        self._audit_startup_identities_or_raise()
+
     def apply_command(self, body: dict[str, Any]) -> None:
         """Apply high-rate cmd.haptic payload from game_controller."""
         targets = body.get("tracking_target_rad") if isinstance(body, dict) else None
@@ -477,6 +480,130 @@ class RealHaptic:
         """Return configured ports; runtime never scans unrelated COM ports."""
 
         return list(self._configured_ports)
+
+    def _audit_startup_identities_or_raise(self) -> None:
+        """Verify configured team ports expose the expected six dial IDs.
+
+        Audit runs only when exactly six team ports are configured. If exactly
+        one expected ID is missing and exactly one board reports a default
+        identity (0 or 1), the backend auto-repairs that board's ID silently
+        before entering the regular control loop.
+        """
+
+        if len(self._configured_ports) != len(self._expected_dial_ids):
+            return
+
+        expected_ids = set(self._expected_dial_ids)
+        observed = self._probe_identities_on_configured_ports()
+        unresponsive = [
+            port for port in self._configured_ports if observed.get(port) is None
+        ]
+        if unresponsive:
+            raise RuntimeError(
+                f"haptic_{self._team} startup identity audit failed: "
+                f"no identity response from {unresponsive}"
+            )
+
+        observed_ids = [int(observed[port]) for port in self._configured_ports if observed.get(port) is not None]
+        if self._is_identity_set_valid(observed_ids, expected_ids):
+            return
+
+        if self._attempt_single_default_id_repair(observed, expected_ids):
+            return
+
+        missing_ids = sorted(expected_ids - set(observed_ids))
+        unexpected = [
+            f"{port}:{dial_id}"
+            for port, dial_id in observed.items()
+            if dial_id is not None and int(dial_id) not in expected_ids
+        ]
+        raise RuntimeError(
+            f"haptic_{self._team} startup identity audit failed: "
+            f"expected={sorted(expected_ids)} observed={observed_ids} "
+            f"missing={missing_ids} unexpected={unexpected}"
+        )
+
+    def _probe_identities_on_configured_ports(self) -> dict[str, int | None]:
+        """Read one dial identity from each configured COM port."""
+
+        out: dict[str, int | None] = {}
+        for port in self._configured_ports:
+            out[port] = _probe_port_identity(
+                port=port,
+                baudrate=self._baudrate,
+                serial_factory=self._serial_factory,
+                now_fn=self._now,
+                timeout_s=_IDENTITY_AUDIT_TIMEOUT_S,
+            )
+        return out
+
+    def _is_identity_set_valid(self, observed_ids: list[int], expected_ids: set[int]) -> bool:
+        """Return True when observed IDs exactly match the expected team set."""
+
+        if len(observed_ids) != len(self._expected_dial_ids):
+            return False
+        if len(set(observed_ids)) != len(observed_ids):
+            return False
+        return set(observed_ids) == expected_ids
+
+    def _attempt_single_default_id_repair(
+        self,
+        observed: dict[str, int | None],
+        expected_ids: set[int],
+    ) -> bool:
+        """Try one safe auto-repair for a single missing team identity.
+
+        Safe repair rule:
+        - all six configured ports responded,
+        - exactly one expected ID is missing,
+        - exactly one board reports a default identity (0 or 1).
+        """
+
+        if any(value is None for value in observed.values()):
+            return False
+
+        observed_ids = [int(observed[port]) for port in self._configured_ports]
+        missing_ids = sorted(expected_ids - set(observed_ids))
+        if len(missing_ids) != 1:
+            return False
+        missing_id = int(missing_ids[0])
+
+        default_id_ports = [
+            port
+            for port, dial_id in observed.items()
+            if dial_id is not None and int(dial_id) in (0, 1)
+        ]
+        if len(default_id_ports) != 1:
+            return False
+
+        repair_port = default_id_ports[0]
+        print(
+            f"[haptic_io.{self._team}] identity audit: repairing {repair_port} "
+            f"to missing dial_id={missing_id}",
+            flush=True,
+        )
+        if not _set_port_identity(
+            port=repair_port,
+            baudrate=self._baudrate,
+            target_dial_id=missing_id,
+            serial_factory=self._serial_factory,
+            now_fn=self._now,
+            timeout_s=_IDENTITY_AUDIT_TIMEOUT_S,
+        ):
+            return False
+
+        recheck = self._probe_identities_on_configured_ports()
+        if any(value is None for value in recheck.values()):
+            return False
+        recheck_ids = [int(recheck[port]) for port in self._configured_ports]
+        if not self._is_identity_set_valid(recheck_ids, expected_ids):
+            return False
+        print(
+            f"[haptic_io.{self._team}] identity audit: auto-repair succeeded "
+            f"for {repair_port} -> dial_id {missing_id}",
+            flush=True,
+        )
+        return True
 
     def _robot_to_dial(self, idx: int, robot_rad: float) -> float:
         """Convert robot joint radians to dial radians via per-axis gear ratio."""
@@ -717,3 +844,172 @@ def _rad_to_decideg(value: float) -> int:
 
 def _decideg_to_rad(value: int) -> float:
     return math.radians(float(value) / 10.0)
+
+
+def _probe_port_identity(
+    *,
+    port: str,
+    baudrate: int,
+    serial_factory: Callable[[], Any],
+    now_fn: Callable[[], float],
+    timeout_s: float,
+) -> int | None:
+    """Open one port and return its current dial_id, or None on timeout/error."""
+
+    try:
+        with _opened_serial_for_identity(
+            port=port,
+            baudrate=baudrate,
+            serial_factory=serial_factory,
+        ) as ser:
+            query_seq = 1
+            _serial_write_ascii_line(ser, f"I,{query_seq}")
+            return _wait_for_identity_response(
+                ser,
+                now_fn=now_fn,
+                timeout_s=timeout_s,
+                expected_query_seq=query_seq,
+            )
+    except Exception:
+        return None
+
+
+def _set_port_identity(
+    *,
+    port: str,
+    baudrate: int,
+    target_dial_id: int,
+    serial_factory: Callable[[], Any],
+    now_fn: Callable[[], float],
+    timeout_s: float,
+) -> bool:
+    """Set one port's dial_id and verify the persisted value via readback."""
+
+    try:
+        with _opened_serial_for_identity(
+            port=port,
+            baudrate=baudrate,
+            serial_factory=serial_factory,
+        ) as ser:
+            set_seq = 1
+            _serial_write_ascii_line(ser, f"I,{set_seq},{int(target_dial_id)}")
+            set_value = _wait_for_identity_response(
+                ser,
+                now_fn=now_fn,
+                timeout_s=timeout_s,
+                expected_query_seq=set_seq,
+            )
+            if set_value != int(target_dial_id):
+                return False
+
+            verify_seq = 2
+            _serial_write_ascii_line(ser, f"I,{verify_seq}")
+            verify_value = _wait_for_identity_response(
+                ser,
+                now_fn=now_fn,
+                timeout_s=timeout_s,
+                expected_query_seq=verify_seq,
+            )
+            return verify_value == int(target_dial_id)
+    except Exception:
+        return False
+
+
+class _opened_serial_for_identity:
+    """Small context manager for short identity query/set transactions."""
+
+    def __init__(
+        self,
+        *,
+        port: str,
+        baudrate: int,
+        serial_factory: Callable[[], Any],
+    ) -> None:
+        self._port = port
+        self._baudrate = int(baudrate)
+        self._serial_factory = serial_factory
+        self._ser = None
+
+    def __enter__(self):
+        ser = self._serial_factory()
+        ser.port = self._port
+        ser.baudrate = self._baudrate
+        ser.timeout = 0.05
+        ser.write_timeout = 0.0
+        ser.dtr = False
+        ser.rts = False
+        ser.open()
+        ser.reset_input_buffer()
+        self._ser = ser
+        return ser
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        ser = self._ser
+        self._ser = None
+        if ser is not None:
+            try:
+                if getattr(ser, "is_open", False):
+                    ser.close()
+            except Exception:
+                pass
+
+
+def _serial_write_ascii_line(ser: Any, line: str) -> None:
+    """Write one newline-terminated ASCII protocol frame."""
+
+    ser.write((line + "\n").encode("ascii"))
+
+
+def _wait_for_identity_response(
+    ser: Any,
+    *,
+    now_fn: Callable[[], float],
+    timeout_s: float,
+    expected_query_seq: int,
+) -> int | None:
+    """Read serial lines until identity query response or timeout.
+
+    Accepts telemetry (`T`) as a fallback identity source because firmware may
+    emit it before the explicit query reply on busy startup links.
+    """
+
+    deadline = float(now_fn()) + float(timeout_s)
+    buffer = bytearray()
+    fallback_telem_id: int | None = None
+    expected_seq_text = str(int(expected_query_seq))
+
+    while float(now_fn()) < deadline:
+        try:
+            waiting = int(getattr(ser, "in_waiting", 0) or 0)
+            read_size = waiting if waiting > 0 else 256
+            chunk = ser.read(read_size)
+        except Exception:
+            return fallback_telem_id
+
+        if not chunk:
+            time.sleep(0.01)
+            continue
+        buffer.extend(chunk)
+
+        while True:
+            newline = buffer.find(b"\n")
+            if newline < 0:
+                break
+            raw = bytes(buffer[:newline])
+            del buffer[: newline + 1]
+            line = raw.decode("ascii", errors="ignore").strip().rstrip("\r")
+            if not line:
+                continue
+            parts = line.split(",")
+            if parts[0] == "I" and len(parts) >= 3 and parts[1] == expected_seq_text:
+                try:
+                    return int(parts[2])
+                except (TypeError, ValueError):
+                    continue
+            if parts[0] == "T" and len(parts) >= 2:
+                try:
+                    fallback_telem_id = int(parts[1])
+                except (TypeError, ValueError):
+                    continue
+
+    return fallback_telem_id

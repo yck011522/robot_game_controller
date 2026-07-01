@@ -7,7 +7,7 @@
 serial_ports:
   # Team haptic dial boards. Empty means "configured disconnected"; runtime
   # will not scan unrelated COM ports during launcher startup.
-  haptic_a: ["COM23", "COM25", "COM21", "COM28", "COM55", "COM60"]
+  haptic_a: ["COM25", "COM21", "COM23", "COM28", "COM55", "COM60"]
   haptic_b: ["COM53", "COM52", "COM51", "COM50", "COM49", "COM48"]
 
   # Shared serial hardware.

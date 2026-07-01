@@ -34,10 +34,12 @@ class _FakeSerial:
         self,
         scripts_by_port: dict[str, str],
         writes_by_port: dict[str, list[str]],
+        ids_by_port: dict[str, int] | None = None,
         baudrates_by_port: dict[str, int] | None = None,
     ):
         self._scripts_by_port = scripts_by_port
         self._writes_by_port = writes_by_port
+        self._ids_by_port = ids_by_port
         self._baudrates_by_port = baudrates_by_port
         self.port = ""
         self.baudrate = 0
@@ -76,6 +78,17 @@ class _FakeSerial:
         line = payload.decode("ascii").strip()
         self._writes_by_port.setdefault(self.port, []).append(line)
         parts = line.split(",")
+        if len(parts) >= 2 and parts[0] == "I":
+            if self._ids_by_port is not None and len(parts) >= 3:
+                try:
+                    self._ids_by_port[self.port] = int(parts[2])
+                except ValueError:
+                    pass
+            dial_id = None
+            if self._ids_by_port is not None:
+                dial_id = self._ids_by_port.get(self.port)
+            if dial_id is not None:
+                self._buffer.extend(f"I,{parts[1]},{dial_id}\n".encode("ascii"))
         if len(parts) >= 4 and parts[0] == "S":
             self._buffer.extend(
                 f"S,{parts[1]},{parts[2]},{parts[3]}\n".encode("ascii")
@@ -133,7 +146,11 @@ def test_real_backend_discovers_and_drives() -> None:
         baudrates_by_port: dict[str, int] = {}
 
         def serial_factory():
-            return _FakeSerial(scripts_by_port, writes_by_port, baudrates_by_port)
+            return _FakeSerial(
+                scripts_by_port,
+                writes_by_port,
+                baudrates_by_port=baudrates_by_port,
+            )
 
         rig = RealHaptic(
             team="b",
@@ -258,6 +275,92 @@ def test_real_backend_runtime_tracking_kp_write_is_confirmed_once() -> None:
             rig.close()
             device_connection.DEFAULT_DEVICE_CONNECTION_PATH = original
             device_connection.clear_cache()
+
+
+def test_identity_audit_auto_repairs_single_default_id() -> None:
+    """Startup audit should repair one default-ID board to the missing team ID."""
+
+    with TemporaryDirectory() as tmpdir:
+        original = device_connection.DEFAULT_DEVICE_CONNECTION_PATH
+        device_connection.clear_cache()
+        device_connection.DEFAULT_DEVICE_CONNECTION_PATH = Path(tmpdir) / "device_ports_and_addr.yaml"
+        _write_device_connection_config(
+            device_connection.DEFAULT_DEVICE_CONNECTION_PATH,
+            "  haptic_a: [COM1, COM2, COM3, COM4, COM5, COM6]\n",
+        )
+        # One board fell back to default ID 0 while team A expects 11..16.
+        ids_by_port = {
+            "COM1": 11,
+            "COM2": 12,
+            "COM3": 0,
+            "COM4": 14,
+            "COM5": 15,
+            "COM6": 16,
+        }
+        writes_by_port: dict[str, list[str]] = {}
+
+        def serial_factory():
+            return _FakeSerial({}, writes_by_port, ids_by_port)
+
+        rig = RealHaptic(
+            team="a",
+            profile=_make_profile(),
+            serial_factory=serial_factory,
+        )
+        try:
+            assert ids_by_port["COM3"] == 13
+            assert any(
+                line.startswith("I,") and line.endswith(",13")
+                for line in writes_by_port.get("COM3", [])
+            )
+            print("[test] startup identity audit auto-repair: OK")
+        finally:
+            rig.close()
+            device_connection.DEFAULT_DEVICE_CONNECTION_PATH = original
+            device_connection.clear_cache()
+
+
+def test_identity_audit_hard_fails_when_missing_id_is_not_default_case() -> None:
+    """Startup audit should reject mismatches it cannot safely auto-repair."""
+
+    with TemporaryDirectory() as tmpdir:
+        original = device_connection.DEFAULT_DEVICE_CONNECTION_PATH
+        device_connection.clear_cache()
+        device_connection.DEFAULT_DEVICE_CONNECTION_PATH = Path(tmpdir) / "device_ports_and_addr.yaml"
+        _write_device_connection_config(
+            device_connection.DEFAULT_DEVICE_CONNECTION_PATH,
+            "  haptic_a: [COM1, COM2, COM3, COM4, COM5, COM6]\n",
+        )
+        ids_by_port = {
+            "COM1": 11,
+            "COM2": 12,
+            "COM3": 7,
+            "COM4": 14,
+            "COM5": 15,
+            "COM6": 16,
+        }
+        writes_by_port: dict[str, list[str]] = {}
+
+        def serial_factory():
+            return _FakeSerial({}, writes_by_port, ids_by_port)
+
+        try:
+            RealHaptic(
+                team="a",
+                profile=_make_profile(),
+                serial_factory=serial_factory,
+            )
+        except RuntimeError as exc:
+            text = str(exc)
+            assert "startup identity audit failed" in text
+            assert "missing=[13]" in text
+            print("[test] startup identity audit hard-fail path: OK")
+            return
+        finally:
+            device_connection.DEFAULT_DEVICE_CONNECTION_PATH = original
+            device_connection.clear_cache()
+
+        raise AssertionError("RuntimeError not raised for non-repairable startup identity mismatch")
 
 
 def test_config_rejects_profile_hardware_block() -> None:
@@ -386,6 +489,8 @@ def main() -> int:
     test_oob_kick_enable_defaults_to_protocol_enabled()
     test_real_backend_static_bounds_convert_to_dial_space()
     test_real_backend_runtime_tracking_kp_write_is_confirmed_once()
+    test_identity_audit_auto_repairs_single_default_id()
+    test_identity_audit_hard_fails_when_missing_id_is_not_default_case()
     test_config_rejects_profile_hardware_block()
     test_device_config_rejects_bad_haptic_port_list()
     test_device_config_empty_disables_haptic_scan()
