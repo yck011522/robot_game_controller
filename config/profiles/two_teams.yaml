@@ -19,6 +19,14 @@
 profile_name: dev_two_teams_led_integration
 description: "Team A + Team B real haptic/robot + real light_column (two-team LED integration bring-up)"
 
+# Per-game Parquet + ledger-CSV recording (see GAMEPLAY_RECORDER_PLAN.md). This
+# is the same enabled/dir default gameplay_recorder already uses when this
+# block is omitted entirely -- written explicitly here so production recording
+# behavior is visible in the profile rather than implied.
+gameplay_recording:
+  enabled: true
+  dir: recordings
+
 active_teams: [a, b]
 
 subsystems:

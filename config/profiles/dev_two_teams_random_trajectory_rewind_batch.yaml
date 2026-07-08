@@ -35,6 +35,13 @@
 profile_name: dev_two_teams_random_trajectory_rewind_batch
 description: "Two-team synthetic random-trajectory rewind/shortcut + gameplay_recorder validation"
 
+# Per-game Parquet + ledger-CSV recording (see GAMEPLAY_RECORDER_PLAN.md).
+# Separate output dir from the default "recordings" so synthetic batch-test
+# games never mix into the real production games_index.csv/games/ tree.
+gameplay_recording:
+  enabled: true
+  dir: recordings_dev
+
 active_teams: [a, b]
 
 subsystems:
@@ -173,5 +180,6 @@ tuning:
     trajectory_output_dir: logs/sim_trajectory_recording_two_teams
 
 # gameplay_recorder is on by default (see GAMEPLAY_RECORDER_PLAN.md); each
-# completed game/team pair is also captured under recordings/games/<date>/<time>/
+# completed game/team pair is also captured under
+# recordings_dev/games/<date>/<time>/ (see gameplay_recording.dir above)
 # alongside this batch-validation output, for later cross-checking.
