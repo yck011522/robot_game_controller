@@ -63,7 +63,10 @@ def main(argv: list[str] | None = None) -> int:
         sample = impl.sample()
         if sample is None:
             return
-        env = bus.make_envelope(p.proc)
+        # with_wall=True: gameplay_recorder aligns telem.haptic samples across
+        # streams/processes using this wall clock (BUS.md 4.1); ts_mono_ns alone
+        # is process-local and unsuitable for that.
+        env = bus.make_envelope(p.proc, with_wall=True)
         env.update({"team": team, **sample})
         bus.publish(pub, topic, env)
 

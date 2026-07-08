@@ -541,6 +541,23 @@ def main(argv: list[str] | None = None) -> int:
             exit_code = 1
             return exit_code
 
+        # ---- tier 9: gameplay recorder -----------------------------------
+        # Per-game Parquet + ledger-CSV recorder (see core.gameplay_recording
+        # and GAMEPLAY_RECORDER_PLAN.md). Launched by default like the
+        # dashboard/broadcaster; a profile opts out via
+        # `gameplay_recording: {enabled: false}`, which the process itself
+        # checks internally -- it still spawns and heartbeats, it just idles
+        # instead of recording, mirroring the disabled-recorder behavior in
+        # the (unimplemented) EventRecorder design in docs/architecture/LOGGING.md.
+        children["gameplay_recorder"] = _spawn("gameplay_recorder", profile_path,
+                                                module_registry=module_registry)
+        if not _wait_for_first_heartbeat(sub, poller, "gameplay_recorder",
+                                          STARTUP_HEARTBEAT_TIMEOUT_S,
+                                          children, seen_first,
+                                          last_recv_mono_ns, last_loop_hz, recv_window):
+            exit_code = 1
+            return exit_code
+
         print(f"[launcher] all children up: {list(children.keys())}", flush=True)
 
         # ---- main watchdog loop ----------------------------------------

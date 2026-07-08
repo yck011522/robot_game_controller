@@ -85,3 +85,15 @@ subsystems:
     fps_target: 120.0
     fps_min: 30.0
     heartbeat_age_max: 1100
+
+  gameplay_recorder:
+    # Poll/wake rate only. Event-driven: drains every queued message from
+    # state.full / telem.haptic.* / telem.robot.actual.* / telem.weight each
+    # tick (never latest-wins) and buffers them in memory for the in-progress
+    # game; nothing is dropped between wakeups at this rate. See
+    # GAMEPLAY_RECORDER_PLAN.md for the aggregate-publish-rate sizing math
+    # that justifies 120 Hz here (comfortably above the ~460 msg/s worst case
+    # with both teams active, well under ZMQ's default 1000-message SUB HWM).
+    fps_target: 120.0
+    fps_min: 30.0
+    heartbeat_age_max: 1100

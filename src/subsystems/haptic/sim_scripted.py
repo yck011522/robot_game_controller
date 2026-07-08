@@ -43,6 +43,7 @@ class ScriptedHaptic:
         return {
             "dial_pos_rad": pos,
             "dial_vel_rad_s": vel,
+            "torque_ma": [0.0] * 6,  # sim source, no real force feedback to report
             "board_connected": [True] * 6,
             "board_loop_hz": [200] * 6,
         }

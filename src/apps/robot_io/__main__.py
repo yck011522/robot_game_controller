@@ -42,6 +42,14 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     headless = bool(proc.profile.tuning.get("robot", {}).get("headless", False))
+    # Optional per-team override: {a: bool, b: bool}. Lets a two-team sim run
+    # one team headless (DIRECT) and the other with the PyBullet GUI, since
+    # PyBullet only comfortably supports one visible debug-visualizer window
+    # at a time on most machines. Falls back to the shared `headless` value
+    # above when this team has no entry (or the block is absent entirely).
+    headless_by_team = proc.profile.tuning.get("robot", {}).get("headless_by_team")
+    if isinstance(headless_by_team, dict) and team in headless_by_team:
+        headless = bool(headless_by_team[team])
     initial_pose_deg = proc.profile.tuning.get("robot", {}).get(
         "initial_pose_deg", [0.0, -90.0, 90.0, 0.0, 0.0, 0.0]
     )
@@ -185,7 +193,10 @@ def main(argv: list[str] | None = None) -> int:
                 snapshot = impl.status_snapshot()
                 if isinstance(snapshot, dict):
                     robot_status = snapshot
-            env = bus.make_envelope(p.proc, seq=seq)
+            # with_wall=True: gameplay_recorder aligns telem.robot.actual samples
+            # across streams/processes using this wall clock (BUS.md 4.1);
+            # ts_mono_ns alone is process-local and unsuitable for that.
+            env = bus.make_envelope(p.proc, with_wall=True, seq=seq)
             env.update({
                 "team": team,
                 "q_rad": q,

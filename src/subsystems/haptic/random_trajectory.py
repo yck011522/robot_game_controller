@@ -218,6 +218,7 @@ class RandomTrajectoryHaptic:
         return {
             "dial_pos_rad": dial_pos_rad,
             "dial_vel_rad_s": dial_vel_rad_s,
+            "torque_ma": [0.0] * 6,  # synthetic source, no real force feedback to report
             "board_connected": [True] * 6,
             "board_loop_hz": [int(PUBLISH_HZ)] * 6,
             "validation": {

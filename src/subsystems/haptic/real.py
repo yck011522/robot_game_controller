@@ -397,6 +397,7 @@ class RealHaptic:
 
         dial_pos_rad: list[float] = []
         dial_vel_rad_s: list[float] = []
+        torque_ma: list[int] = []  # firmware-reported applied torque, milliamps (force feedback amount)
         board_connected: list[bool] = []
         board_loop_hz: list[int] = []
         # Diagnostic-only raw firmware fields (observe; no behavior change).
@@ -411,6 +412,7 @@ class RealHaptic:
             telem = board.telemetry if board is not None else _DialTelemetry()
             dial_pos_rad.append(_decideg_to_rad(telem.angle_decideg))
             dial_vel_rad_s.append(_decideg_to_rad(telem.speed_decideg_s))
+            torque_ma.append(int(telem.torque_ma))
             board_connected.append(bool(board and board.connected))
             board_loop_hz.append(int(telem.foc_rate_hz))
             dial_pos_decideg.append(int(telem.angle_decideg))
@@ -420,6 +422,7 @@ class RealHaptic:
         return {
             "dial_pos_rad": dial_pos_rad,
             "dial_vel_rad_s": dial_vel_rad_s,
+            "torque_ma": torque_ma,
             "board_connected": board_connected,
             "board_loop_hz": board_loop_hz,
             "dial_pos_decideg": dial_pos_decideg,
