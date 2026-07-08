@@ -16,8 +16,10 @@ from core import bus  # noqa: E402
 from core.config import default_runtime_setting, load as load_profile  # noqa: E402
 from core.device_connection import require_robot_endpoint  # noqa: E402
 from core.proc import Proc, banner, parse_proc_args  # noqa: E402
-from subsystems.robot.joint_limits import clamp_joint_target_rad, resolve_joint_limits_rad  # noqa: E402
-
+from subsystems.robot.joint_limits import (
+    clamp_joint_target_rad,
+    resolve_joint_limits_rad,
+)  # noqa: E402
 
 # Internal tick rate. We poll the cmd sub at this rate and step
 # pybullet at its own STEP_HZ inside the impl; telemetry is rate-limited
@@ -32,13 +34,20 @@ def main(argv: list[str] | None = None) -> int:
     """Run one robot I/O process and bridge bus traffic into the selected backend."""
     args, _ = parse_proc_args(argv, default_proc="robot_io.a")
     profile = load_profile(args.profile_path)
-    target_hz = profile.subsystem_float("robot_io", "fps_target", default_runtime_setting("robot_io", "fps_target", DEFAULT_TICK_HZ))
+    target_hz = profile.subsystem_float(
+        "robot_io",
+        "fps_target",
+        default_runtime_setting("robot_io", "fps_target", DEFAULT_TICK_HZ),
+    )
     proc = Proc(args, profile, target_hz=target_hz)
     team = proc.proc.split(".")[-1]
     impl_name = proc.profile.subsystems.get("robot_io", {}).get(team)
     if impl_name is None:
-        print(f"[{proc.proc}] no impl configured for team {team!r}",
-              file=sys.stderr, flush=True)
+        print(
+            f"[{proc.proc}] no impl configured for team {team!r}",
+            file=sys.stderr,
+            flush=True,
+        )
         return 2
 
     headless = bool(proc.profile.tuning.get("robot", {}).get("headless", False))
@@ -53,8 +62,12 @@ def main(argv: list[str] | None = None) -> int:
     initial_pose_deg = proc.profile.tuning.get("robot", {}).get(
         "initial_pose_deg", [0.0, -90.0, 90.0, 0.0, 0.0, 0.0]
     )
-    q_min, q_max = resolve_joint_limits_rad(proc.profile.tuning.get("robot", {}), axes=6)
-    safety_enabled = proc.profile.subsystem_impl("safety_barrier_controller") is not None
+    q_min, q_max = resolve_joint_limits_rad(
+        proc.profile.tuning.get("robot", {}), axes=6
+    )
+    safety_enabled = (
+        proc.profile.subsystem_impl("safety_barrier_controller") is not None
+    )
     safety_telem_age_max_s = (
         default_runtime_setting(
             "safety_barrier_controller",
@@ -64,6 +77,7 @@ def main(argv: list[str] | None = None) -> int:
         or DEFAULT_SAFETY_TELEM_AGE_MAX_MS
     ) / 1000.0
     import math as _math
+
     initial_pose_rad = [_math.radians(float(v)) for v in initial_pose_deg]
 
     pub = bus.make_pub(proc.ctx)
@@ -126,7 +140,10 @@ def main(argv: list[str] | None = None) -> int:
         command_queue_state["last_drain_ms"] = 0.0
         events = dict(poller.poll(1))
         if state_sub in events:
-            _drain_latest(state_sub, on_msg=lambda body: _update_barrier_state(latest_barrier_state, body))
+            _drain_latest(
+                state_sub,
+                on_msg=lambda body: _update_barrier_state(latest_barrier_state, body),
+            )
         if sub in events:
             drain_started_s = time.perf_counter()
             drain_count = 0
@@ -174,7 +191,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         if latest_q is not None and safety_allows_motion:
             impl.set_target(clamp_joint_target_rad(latest_q, q_min, q_max, axes=6))
-        if latest_clamps is not None and safety_allows_motion and hasattr(impl, "set_clamps"):
+        if (
+            latest_clamps is not None
+            and safety_allows_motion
+            and hasattr(impl, "set_clamps")
+        ):
             impl.set_clamps(latest_clamps)
         if latest_recover_timeout_s is not None and hasattr(impl, "request_recovery"):
             impl.request_recovery(timeout_s=max(0.1, latest_recover_timeout_s))
@@ -197,21 +218,25 @@ def main(argv: list[str] | None = None) -> int:
             # across streams/processes using this wall clock (BUS.md 4.1);
             # ts_mono_ns alone is process-local and unsuitable for that.
             env = bus.make_envelope(p.proc, with_wall=True, seq=seq)
-            env.update({
-                "team": team,
-                "q_rad": q,
-                "qd_rad_s": qd,
-                "rtde_ok": bool(getattr(impl, "rtde_ok", True)),
-                "robot_status": robot_status,
-                "command_queue": {
-                    "last_drain_count": int(command_queue_state["last_drain_count"]),
-                    "max_drain_count": int(command_queue_state["max_drain_count"]),
-                    "total_received": int(command_queue_state["total_received"]),
-                    "last_drain_ms": float(command_queue_state["last_drain_ms"]),
-                    "max_drain_ms": float(command_queue_state["max_drain_ms"]),
-                    "last_target_rad": command_queue_state["last_target_rad"],
-                },
-            })
+            env.update(
+                {
+                    "team": team,
+                    "q_rad": q,
+                    "qd_rad_s": qd,
+                    "rtde_ok": bool(getattr(impl, "rtde_ok", True)),
+                    "robot_status": robot_status,
+                    "command_queue": {
+                        "last_drain_count": int(
+                            command_queue_state["last_drain_count"]
+                        ),
+                        "max_drain_count": int(command_queue_state["max_drain_count"]),
+                        "total_received": int(command_queue_state["total_received"]),
+                        "last_drain_ms": float(command_queue_state["last_drain_ms"]),
+                        "max_drain_ms": float(command_queue_state["max_drain_ms"]),
+                        "last_target_rad": command_queue_state["last_target_rad"],
+                    },
+                }
+            )
             bus.publish(pub, telem_topic, env)
             seq += 1
 
@@ -235,9 +260,11 @@ def _make_impl(
     """Construct the configured robot backend for this process."""
     if name == "sim_pybullet":
         from subsystems.robot.robot_sim_pybullet import SimPybulletRobot
+
         return SimPybulletRobot(headless=headless, initial_pose_rad=initial_pose_rad)
     if name == "real_rtde":
         from subsystems.robot.robot_real_rtde import RealRtdeRobot
+
         endpoint = require_robot_endpoint(team)
         return RealRtdeRobot(host=endpoint.host, port=endpoint.port, servo_hz=servo_hz)
     raise NotImplementedError(f"robot_io impl {name!r} not available yet")

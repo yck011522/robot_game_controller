@@ -139,6 +139,9 @@ class FontBook:
         self._medium_path = str(base / "Roboto-Medium.ttf")
         self._bold_path = str(base / "Roboto-Bold.ttf")
         self._cache: dict[tuple[str, int], pygame.font.Font] = {}
+        # Paths we've already warned about, so a missing font only prints
+        # one console warning (not once per requested size).
+        self._missing_warned: set[str] = set()
 
     def regular(self, size: int) -> pygame.font.Font:
         return self._font(self._regular_path, size)
@@ -153,7 +156,21 @@ class FontBook:
         key = (path, size)
         font = self._cache.get(key)
         if font is None:
-            font = pygame.font.Font(path, size)
+            try:
+                font = pygame.font.Font(path, size)
+            except FileNotFoundError:
+                # Roboto assets are gitignored (font licensing) and must be
+                # downloaded locally; tolerate their absence rather than
+                # crashing the whole dashboard/launcher over missing text
+                # rendering, falling back to pygame's bundled default font.
+                if path not in self._missing_warned:
+                    print(
+                        f"[gamemaster_ui] WARNING: font file not found: {path}; "
+                        "falling back to the default system font",
+                        flush=True,
+                    )
+                    self._missing_warned.add(path)
+                font = pygame.font.Font(None, size)
             self._cache[key] = font
         return font
 
