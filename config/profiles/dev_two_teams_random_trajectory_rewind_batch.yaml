@@ -1,0 +1,146 @@
+# Two-team, hardware-free shortcut/rewind validation using synthetic random
+# trajectories on both teams simultaneously.
+#
+# Based on dev_random_trajectory_rewind_batch.yaml (team A only), extended to
+# both teams so the gameplay_recorder's per-team folder split and the
+# rewind-shortcut batch validation can both be exercised with two teams
+# active at once.
+#
+# PyBullet GUI note: PyBullet only comfortably supports one visible debug
+# window at a time on this machine, so running two GUI sim robots together is
+# unreliable. tuning.robot.headless_by_team keeps team A headless (DIRECT,
+# no window) and team B with the GUI (visible), so you still get one
+# window to watch while both teams actually run. Flip/edit that block if you
+# want the other team visible instead.
+#
+# Deliberately short stages for synthetic input:
+#   * tutorial.duration_s: 5 -- the random-trajectory haptic source cannot
+#     scroll the tutorial dial to completion, so tutorial only ever ends via
+#     this timer, not via player readiness.
+#   * game.practice_enabled is omitted (defaults to false) -- the practice
+#     sub-stage expects one player at a time jogging to a target pose, which
+#     the random generator cannot do; leaving it disabled lets play begin
+#     immediately in normal (non-practice) mode.
+#   * game.duration_s: 120 (2 minutes) per game, per the requested short test.
+#
+# batch_validation.game_count is the number of games to simulate back to
+# back; set it to whatever you need for one run (10 here as a first test --
+# raise it for a longer unattended validation sweep, matching the 100-game
+# overnight pattern in dev_random_trajectory_rewind_batch.yaml).
+#
+# Run from the repository root:
+#   $env:PYTHONPATH = "src"
+#   & C:/Users/leungp/anaconda3/envs/game/python.exe -m apps.launcher --profile config/profiles/dev_two_teams_random_trajectory_rewind_batch.yaml
+
+profile_name: dev_two_teams_random_trajectory_rewind_batch
+description: "Two-team synthetic random-trajectory rewind/shortcut + gameplay_recorder validation"
+
+active_teams: [a, b]
+
+subsystems:
+  haptic_io:
+    a: random_trajectory
+    b: random_trajectory
+  robot_io:
+    a: sim_pybullet
+    b: sim_pybullet
+  jogging_planner:
+    a: in_process
+    b: in_process
+  weight_sensor_io: null
+  light_column_1_3: null
+  light_column_4_5: null
+  light_column_6_8: null
+  display_broadcaster: null
+  scoreboard_broadcaster: null
+  bucket_controller: null
+  button_controller: null
+  safety_barrier_controller: null
+  collision_workers:
+    count: 16                      # Split across both teams' collision checks.
+  collision_broker: null
+  event_recorder: null
+  gamemaster_ui: null
+  bus_broker:
+    impl: real
+
+tuning:
+  haptic:
+    gear_ratio: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+    bounds_deg_min: [-180, -180, -180, -180, -180, -180]
+    bounds_deg_max: [180, 180, 180, 180, 180, 180]
+    input_mode: absolute
+
+  robot:
+    q_limits_min_deg: [-180, -180, -180, -180, -180, -180]
+    q_limits_max_deg: [180, 180, 180, 180, 180, 180]
+    max_velocity_deg_s: [15, 20, 30, 40, 50, 50]
+    max_acceleration_deg_s2: [45, 65, 65, 115, 115, 115]
+    headless: true                 # Shared fallback; overridden per team below.
+    headless_by_team:
+      a: true                      # Team A runs headless (DIRECT), no window.
+      b: false                     # Team B shows the PyBullet GUI window.
+    initial_pose_deg: [0.0, -90.0, 90.0, 0.0, 0.0, 0.0]
+
+  collision:
+    check_self: true
+    check_world: true
+    timeout_ms: 60
+    retries: 2
+    bundle_size: 1
+
+  jogging:
+    n_forward_steps: 18
+    forward_step_deg: 1.0
+    path_cutoff_deg: 3.0
+    forward_bundle_size: 1
+    probe_half_deg: 10
+    prox_floor: 0.6
+    forward_timeout_ms: 40
+
+  random_trajectory_validation:
+    seed: 20260701                 # Game 1 base seed; batch mode offsets per game/team.
+    enabled_on_start: true
+    ui_enabled: false              # PyBullet remains the only validation window.
+    speed_scale: 0.7
+    min_axis_speed_fraction: 0.2
+    path_turnaround_distance_deg: 7.0
+    proximity_flip_distance_deg: 10.0
+    proximity_stale_ticks: 12
+    limit_margin_deg: 3.0
+
+  tutorial:
+    duration_s: 5                  # Short: synthetic input can't scroll to 100%.
+    tracking_kp: 2.0
+
+  game:
+    duration_s: 120                # 2-minute games, per the requested short test.
+    sum_score_rate_unit_per_s: 100
+    start_stage: tutorial
+    practice_enabled: false        # Explicit: random input can't complete practice.
+    rewind_enabled: true
+    rewind_speed_fraction: 1.0     # 100% of configured per-joint velocity limits.
+    rewind_arrival_tolerance_deg: 0.5
+
+  rewind_shortcut:
+    enabled: true
+    optimization_budget_s: 3.0
+    collision_step_deg: 1.0
+    collision_batch_size: 8
+    random_seed: null              # Batch mode supplies an independent per-team seed.
+
+  batch_validation:
+    enabled: true
+    game_count: 10                 # Number of games to simulate; raise for a longer sweep.
+    base_seed: 20260701             # Gameplay seed = base + zero-based game index (+ team index).
+    auto_restart: true              # Reset completion jumps directly to tutorial.
+    shutdown_when_complete: true    # Ask launcher to stop every child after the last game.
+    output_jsonl: logs/rewind_batch_validation_two_teams.jsonl
+    summary_json: logs/rewind_batch_validation_two_teams_summary.json
+    # One gzip JSON file per completed gameplay per team; filenames already
+    # include the team ("..._team_a.json.gz" / "..._team_b.json.gz").
+    trajectory_output_dir: logs/sim_trajectory_recording_two_teams
+
+# gameplay_recorder is on by default (see GAMEPLAY_RECORDER_PLAN.md); each
+# completed game/team pair is also captured under recordings/games/<date>/<time>/
+# alongside this batch-validation output, for later cross-checking.
