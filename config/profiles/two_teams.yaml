@@ -16,7 +16,7 @@
 # Boot stage is "daydreaming"; turn a dial to wake to idle, scroll a dial up to
 # start the tutorial, then watch both the console STAGE banners and the LEDs.
 
-profile_name: dev_two_teams_led_integration
+profile_name: two_teams
 description: "Team A + Team B real haptic/robot + real light_column (two-team LED integration bring-up)"
 
 # Per-game Parquet + ledger-CSV recording (see GAMEPLAY_RECORDER_PLAN.md). This
