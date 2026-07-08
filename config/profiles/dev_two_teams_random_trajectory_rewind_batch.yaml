@@ -66,16 +66,32 @@ subsystems:
 
 tuning:
   haptic:
+    # NOT aligned with two_teams.yaml's negative sign: that sign exists only
+    # for real-dial ergonomics (so a human's wrist rotation feels natural).
+    # RandomTrajectoryHaptic generates directly in robot-space and only
+    # divides by gear_ratio right before publishing (_robot_to_dial_rad),
+    # while the game controller multiplies by the same ratio on the way back
+    # -- the round trip is sign-independent for this generator, and a
+    # negative value produced unreasonable jogging direction in testing.
     gear_ratio: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
     bounds_deg_min: [-180, -180, -180, -180, -180, -180]
     bounds_deg_max: [180, 180, 180, 180, 180, 180]
+    bounds_kp: 20.0             # Aligned with two_teams.yaml.
+    tracking_kp: 10.0           # Aligned with two_teams.yaml.
+    tracking_kd: 0.1            # Aligned with two_teams.yaml.
+    tracking_max_torque: 5.0    # Aligned with two_teams.yaml.
+    oob_kick:                   # Aligned with two_teams.yaml.
+      enabled: true
+      amplitude: 2.0
+      pulse_interval_ms: 40
+    telemetry_interval_ms: 10   # Aligned with two_teams.yaml.
     input_mode: absolute
 
   robot:
     q_limits_min_deg: [-180, -180, -180, -180, -180, -180]
     q_limits_max_deg: [180, 180, 180, 180, 180, 180]
-    max_velocity_deg_s: [15, 20, 30, 40, 50, 50]
-    max_acceleration_deg_s2: [45, 65, 65, 115, 115, 115]
+    max_velocity_deg_s: [15, 18, 25, 40, 50, 50]        # Aligned with two_teams.yaml.
+    max_acceleration_deg_s2: [35, 75, 75, 105, 110, 110] # Aligned with two_teams.yaml.
     headless: true                 # Shared fallback; overridden per team below.
     headless_by_team:
       a: true                      # Team A runs headless (DIRECT), no window.
@@ -85,18 +101,33 @@ tuning:
   collision:
     check_self: true
     check_world: true
-    timeout_ms: 60
+    timeout_ms: 200                # Aligned with two_teams.yaml (was 60).
     retries: 2
     bundle_size: 1
 
   jogging:
-    n_forward_steps: 18
+    n_forward_steps: 16             # Aligned with two_teams.yaml (was 18).
     forward_step_deg: 1.0
     path_cutoff_deg: 3.0
     forward_bundle_size: 1
     probe_half_deg: 10
+    probe_far_offsets_deg: [15, 20, 30, 45, 60]
     prox_floor: 0.6
     forward_timeout_ms: 40
+
+  safety_barrier:
+    # Aligned with two_teams.yaml (was missing here). safety_barrier_controller
+    # is null in this profile so this block is validation-only, but every
+    # profile is expected to carry it (tests/test_safety_barrier.py).
+    bypass_channels:
+      SBarr11: false
+      SBarr12: false
+      SBarr21: false
+      SBarr22: false
+      SBarr31: false
+      SBarr32: false
+      SBarr41: false
+      SBarr42: false
 
   random_trajectory_validation:
     seed: 20260701                 # Game 1 base seed; batch mode offsets per game/team.
@@ -119,7 +150,7 @@ tuning:
     start_stage: tutorial
     practice_enabled: false        # Explicit: random input can't complete practice.
     rewind_enabled: true
-    rewind_speed_fraction: 1.0     # 100% of configured per-joint velocity limits.
+    rewind_speed_fraction: 0.60    # Aligned with two_teams.yaml (was 1.0).
     rewind_arrival_tolerance_deg: 0.5
 
   rewind_shortcut:
