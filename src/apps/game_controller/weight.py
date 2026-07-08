@@ -34,21 +34,21 @@ def _initial_weight_state(*, enabled: bool, min_increment_g: float = 0.0) -> dic
         "last_recv_mono_s": None,
         "tare_seq": 0,
         "cycle_seq": 0,
-        # True between publishing the play-entry tare request and verifying
+        # True between publishing the game-start tare request and verifying
         # near-zero tared telemetry. While true, bucket scores stay at zero.
         "play_tare_pending": False,
-        # Tare sequence observed when the play-entry command was requested; the
+        # Tare sequence observed when the game-start command was requested; the
         # next accepted telemetry must have a larger sequence number.
         "play_tare_start_seq": 0,
-        # Per-cell absolute gram tolerance for accepting a play-entry tare.
+        # Per-cell absolute gram tolerance for accepting a game-start tare.
         "play_tare_zero_tolerance_g": PLAY_TARE_ZERO_TOLERANCE_G,
         # Seconds to wait after an acknowledged but non-zero tare before retry.
         "play_tare_retry_interval_s": PLAY_TARE_RETRY_INTERVAL_S,
-        # Automatic retries after the initial play-entry tare command.
+        # Automatic retries after the initial game-start tare command.
         "play_tare_max_retries": PLAY_TARE_MAX_RETRIES,
-        # Number of retry commands already sent for the current play entry.
+        # Number of retry commands already sent for the current game start.
         "play_tare_retry_count": 0,
-        # Monotonic timestamp when the latest play-entry tare command was sent.
+        # Monotonic timestamp when the latest game-start tare command was sent.
         "play_tare_last_request_mono_s": None,
     }
 
@@ -80,7 +80,7 @@ def _begin_play_weight_tare(
 ) -> bool:
     """Start the game-start tare handshake and blank live bucket values.
 
-    Called by ``game_controller`` exactly when it enters ``play``. The caller
+    Called by ``game_controller`` when a new game is being prepared. The caller
     owns publishing ``cmd.weight.tare``; this helper only marks local state so
     stale load-cell readings cannot be copied into team bucket values while the
     asynchronous tare command is still in flight.
@@ -113,10 +113,10 @@ def _begin_play_weight_tare(
 def _mark_play_weight_tare_published(
     weight_state: dict[str, Any], *, now_s: float
 ) -> None:
-    """Record when the latest play-entry tare command was published.
+    """Record when the latest game-start tare command was published.
 
     Called by ``game_controller`` immediately after it sends ``cmd.weight.tare``
-    for a play-entry tare. The retry timer starts from this timestamp, not from
+    for a game-start tare. The retry timer starts from this timestamp, not from
     the earlier local bucket blanking step.
 
     Args:
@@ -135,7 +135,7 @@ def _tick_play_weight_tare_verification(
     now_s: float,
     publish_tare: Callable[[], None],
 ) -> str | None:
-    """Verify the play-entry tare and retry briefly if readings are non-zero.
+    """Verify the game-start tare and retry briefly if readings are non-zero.
 
     Called once per ``game_controller`` tick after fresh ``telem.weight`` has
     been drained. A tare is accepted only when a newer tare sequence has arrived

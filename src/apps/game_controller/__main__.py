@@ -119,6 +119,7 @@ TICK_HZ = 60.0
 BUCKET_COMMAND_TOPIC = "cmd.bucket"
 WEIGHT_TARE_TOPIC = "cmd.weight.tare"
 RECOVERY_TIMEOUT_S = 4.0
+BUCKET_CLOSE_RETRY_DELAY_S = 10.0  # Quick hardware workaround: reissue close_all after the first reset close.
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -497,9 +498,10 @@ def main(argv: list[str] | None = None) -> int:
         enabled=weight_sensor_enabled,
         min_increment_g=game_cfg.get("score_min_increment_g", 0.0),
     )
-    # Booting directly into play needs the same tare as a normal transition,
-    # but the PUB/SUB sockets are more reliable once the process loop is ticking.
+    # Booting directly into tutorial/play needs the same tare as a normal
+    # transition, but the PUB/SUB sockets are more reliable once ticking.
     play_entry_tare_publish_pending = False
+    bucket_close_retry_at_s: float | None = None  # Monotonic time for the delayed close_all retry, if scheduled.
 
     def _publish_weight_tare() -> None:
         """Publish one tare command for the weight_sensor_io process."""
@@ -537,6 +539,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     if batch_session is not None and stage_state["stage"] == "play":
         batch_session.mark_play_started()
+    if stage_state["stage"] == "tutorial":
+        _request_play_entry_weight_tare(publish_now=False)
     if stage_state["stage"] == "play":
         _request_play_entry_weight_tare(publish_now=False)
     last_haptic_tracking_kp_stage_by_team: dict[str, str] = {}
@@ -639,7 +643,7 @@ def main(argv: list[str] | None = None) -> int:
         bucket_command_seq += 1
 
     def tick(p: Proc) -> None:
-        nonlocal state_seq, play_entry_tare_publish_pending
+        nonlocal state_seq, play_entry_tare_publish_pending, bucket_close_retry_at_s
         # Tick flow summary:
         # 1) Ingest operator inputs + safety + latest telem from haptic/robot.
         # 2) Publish assistive haptic command (cmd.haptic.<team>) with the
@@ -648,13 +652,17 @@ def main(argv: list[str] | None = None) -> int:
         #    cmd.robot.target.<team>.
         # 4) Publish one authoritative state.full snapshot for UIs and
         #    downstream process consumers.
+        now_s = time.perf_counter()
         now_ns = time.perf_counter_ns()
         if play_entry_tare_publish_pending:
             _publish_weight_tare()
             _mark_play_weight_tare_published(
-                weight_state, now_s=time.perf_counter()
+                weight_state, now_s=now_s
             )
             play_entry_tare_publish_pending = False
+        if bucket_close_retry_at_s is not None and now_s >= bucket_close_retry_at_s:
+            _publish_bucket_command("close_all", reason="conclusion_reset_retry")
+            bucket_close_retry_at_s = None
         if button_sub is not None:
             _drain_latest(
                 button_sub, on_msg=lambda body: _update_button_state(button_state, body)
@@ -1146,6 +1154,10 @@ def main(argv: list[str] | None = None) -> int:
         if batch_session is not None and batch_session.shutdown_requested:
             _publish_batch_shutdown()
         _publish_stage_haptic_tracking_kp()
+        if stage_before_tick != "tutorial" and stage_state["stage"] == "tutorial":
+            # Fresh-game tare begins during tutorial so empty buckets settle back
+            # to zero before play starts.
+            _request_play_entry_weight_tare()
         if stage_before_tick != "play" and stage_state["stage"] == "play":
             # Stage transitions happen after the per-team motion loop. Issue
             # the coordinate-reset command now, on that same transition tick;
@@ -1159,11 +1171,9 @@ def main(argv: list[str] | None = None) -> int:
                     haptic_cfg,
                     now=time.perf_counter(),
                 )
-            # Re-tare the load cells at the start of EVERY game. The buckets are
-            # empty the instant play begins (nothing dropped yet), so this
-            # captures a fresh empty-bucket baseline each round - the once-at-
-            # startup / once-at-conclusion-exit tare alone left game 2+ reading
-            # against a stale zero.
+            # Final fresh-game tare at play entry. Tutorial entry starts the
+            # tare early; this second request makes the play baseline explicit
+            # right before buckets begin collecting balls.
             _request_play_entry_weight_tare()
             if batch_session is not None:
                 batch_session.mark_play_started()
@@ -1190,13 +1200,12 @@ def main(argv: list[str] | None = None) -> int:
             )
         if stage_before_tick == "conclusion" and stage_state["stage"] != "conclusion":
             # Leaving conclusion (now conclusion -> idle): close any buckets
-            # opened during scoring and tare the load cells for the next game.
+            # opened during scoring. A second close_all is scheduled because a
+            # bucket door can occasionally stop short before reaching the limit.
             # TODO(conclusion-motion): coordinate close_all with the real
             # return-to-start trajectory once that motion exists.
             _publish_bucket_command("close_all", reason="conclusion_reset")
-            # TODO(reset-flow): tare after close_all completes once bucket
-            # close completion is tracked by GC.
-            _publish_weight_tare()
+            bucket_close_retry_at_s = now_s + BUCKET_CLOSE_RETRY_DELAY_S
 
         countdown_s = _stage_countdown_s(stage_state, game_cfg, tutorial_cfg, now_ns)
 
