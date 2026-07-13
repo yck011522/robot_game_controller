@@ -2,15 +2,15 @@
   "meta": {
     "base_seed": 12345,
     "duration_per_worker_s": 600.0,
-    "generated": "2026-06-21T16:19:42",
+    "generated": "2026-07-13T14:09:53",
     "totals": {
       "distinct_pairs": 65,
-      "n_checks": 2862361,
-      "n_collisions": 2091523,
-      "n_pairs_total": 8792085
+      "n_checks": 3274849,
+      "n_collisions": 2424868,
+      "n_pairs_total": 10241793
     },
-    "wall_s": 603.4169460999838,
-    "workers": 18
+    "wall_s": 606.9570169000654,
+    "workers": 10
   },
   "observed_pairs": [
     "body:bucket_ground <-> tool:Bucket",
