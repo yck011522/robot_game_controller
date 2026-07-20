@@ -16,7 +16,7 @@
 # Boot stage is "daydreaming"; turn a dial to wake to idle, scroll a dial up to
 # start the tutorial, then watch both the console STAGE banners and the LEDs.
 
-profile_name: two_teams
+profile_name: two_teams_slower1
 description: "Team A + Team B real haptic/robot + real light_column (two-team LED integration bring-up)"
 
 # Per-game Parquet + ledger-CSV recording (see GAMEPLAY_RECORDER_PLAN.md). This
@@ -84,8 +84,8 @@ tuning:
   robot:
     q_limits_min_deg: [-180, -180, -180, -180, -180, -180]
     q_limits_max_deg: [180, 180, 180, 180, 180, 180]
-    max_velocity_deg_s: [15, 18, 25, 40, 50, 50]
-    max_acceleration_deg_s2: [35, 75, 75, 105, 110, 110]
+    max_velocity_deg_s: [15, 16, 20, 40, 50, 50]
+    max_acceleration_deg_s2: [35, 50, 50, 80, 80, 90]
     headless: false
     initial_pose_deg: [0.0, -90.0, 90.0, 0.0, 0.0, 0.0]
   collision:
