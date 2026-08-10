@@ -91,6 +91,7 @@ class _FakeRtdeCore:
         self.wait_ready_calls: list[tuple] = []
         self.power_brake_calls: list[tuple] = []
         self.dashboard_status_calls: list[tuple] = []
+        self.dashboard_sequence_calls: list[tuple[str, list[str], float]] = []
         self.connect_receive_calls: list[str] = []
         self.connect_control_calls: list[tuple[str, float]] = []
 
@@ -136,6 +137,7 @@ class _FakeRtdeCore:
         }
 
     def run_dashboard_sequence(self, host: str, commands: list[str], timeout_s: float = 1.0):
+        self.dashboard_sequence_calls.append((host, commands, timeout_s))
         return {
             "connected": True,
             "responses": {command: "ok" for command in commands},
@@ -214,6 +216,7 @@ def main() -> int:
     assert fake.control.stopped is True
     assert fake.control.script_stopped is True
     assert fake.receive.disconnected is True
+    assert ("192.168.0.2", ["power off"], 2.0) in fake.dashboard_sequence_calls
 
     print("P3 RTDE backend smoke test passed")
     return 0

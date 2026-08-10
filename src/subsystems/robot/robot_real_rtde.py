@@ -527,8 +527,41 @@ class RealRtdeRobot:
         return list(self._actual_q), list(self._actual_qd)
 
     def close(self) -> None:
-        """Stop motion and close the RTDE interfaces exactly once."""
+        """Stop robot motion, disconnect RTDE streams, and power off the robot arm.
+
+        This method is invoked exactly once during process shutdown (e.g. when exiting
+        the game or terminating the launcher process via SIGINT/SIGBREAK/ESC).
+
+        It performs a clean, multi-step shutdown sequence:
+          1. Stops active servoJ motion and terminates the UR control script via RTDE.
+          2. Disconnects the RTDE control and receive TCP sockets.
+          3. Issues the Dashboard command "power off" to turn off motor power, which
+             automatically engages the physical mechanical brakes on all robot joints.
+        """
         if self._closed:
             return
         self._closed = True
+
+        # First, cleanly close the RTDE control and receive communication channels.
         self._close_rtde_interfaces(control=self._rtde_c, receive=self._rtde_r, log_errors=False)
+
+        # Issue the Dashboard "power off" command to cut joint motor power.
+        # When motor power is cut on Universal Robots controllers, mechanical brakes
+        # automatically engage to lock all joints in place.
+        try:
+            # power_off_timeout_s: maximum wait time in seconds for the dashboard socket operation.
+            power_off_timeout_s: float = DASHBOARD_TIMEOUT_S
+            self._rtde_helpers.run_dashboard_sequence(
+                self._host,
+                ["power off"],
+                timeout_s=power_off_timeout_s,
+            )
+            print(
+                f"[robot_real_rtde] powered off robot at host={self._host} (mechanical brakes engaged)",
+                flush=True,
+            )
+        except Exception as exc:  # noqa: BLE001 - best-effort cleanup on shutdown
+            print(
+                f"[robot_real_rtde] warning: dashboard power off on close failed: {exc}",
+                flush=True,
+            )
