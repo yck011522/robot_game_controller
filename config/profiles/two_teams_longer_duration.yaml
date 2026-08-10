@@ -1,0 +1,209 @@
+# Two-team real-hardware bring-up profile with longer 600s gameplay duration.
+#
+# Based on config/profiles/two_teams.yaml, with BOTH teams enabled on real
+# hardware, but with gameplay duration extended from 300s (5 min) to 600s (10 min):
+#
+#   * real Team A AND Team B haptic dials + real robots (real_rtde),
+#   * weight_sensor_io DISABLED (null) -- scores seeded from sim_bucket_values,
+#   * light_column ENABLED (real) on COM45/COM39/COM42 for both team strips,
+#   * bucket_controller ENABLED (real) so buckets physically dump for both teams.
+#
+# Hardware addressing comes from config/device_ports_and_addr.yaml:
+#   * haptic_a COM23/25/21/28/55/56, haptic_b COM53/52/51/50/49/48,
+#   * robot a 192.168.0.3:30004, robot b 192.168.0.2:30004.
+#
+# Boot stage is "daydreaming"; turn a dial to wake to idle, scroll a dial up to
+# start the tutorial, then watch both the console STAGE banners and the LEDs.
+
+profile_name: two_teams_longer_duration
+description: "Team A + Team B real haptic/robot + real light_column (600s / 10-minute gameplay duration)"
+
+# Per-game Parquet + ledger-CSV recording (see GAMEPLAY_RECORDER_PLAN.md). This
+# is the same enabled/dir default gameplay_recorder already uses when this
+# block is omitted entirely -- written explicitly here so production recording
+# behavior is visible in the profile rather than implied.
+gameplay_recording:
+  enabled: true
+  dir: recordings
+
+active_teams: [a, b]
+
+subsystems:
+  haptic_io:
+    a: real
+    b: real
+
+  robot_io:
+    a: real_rtde
+    b: real_rtde
+
+  jogging_planner:
+    a: in_process
+    b: in_process
+
+  weight_sensor_io: real      # disabled for the LED integration test
+  light_column: real          # arena LED strips driven by the game state
+  display_broadcaster: real
+  scoreboard_broadcaster: real # per-bucket LED score panels driven by the game state
+  bucket_controller: real     # real bucket motors so buckets physically dump
+  button_controller: real
+  safety_barrier_controller: null
+
+  collision_workers:
+    count: 16
+
+  collision_broker: null
+
+  event_recorder: null
+  gamemaster_ui: null
+  bus_broker:
+    impl: real
+
+tuning:
+  haptic:
+    # Negative gear ratio flips dial -> robot direction in absolute-input mode:
+    # turning the dial in the positive direction now decrements the robot joint.
+    gear_ratio: [-0.1, -0.1, -0.1, -0.1, -0.1, -0.1]
+    # Robot-joint bounds in degrees; runtime converts these to dial-space
+    # C-frame min/max values using gear_ratio before sending the firmware.
+    bounds_deg_min: [-180, -180, -180, -180, -180, -180]
+    bounds_deg_max: [180, 180, 180, 180, 180, 180]
+    bounds_kp: 20.0             # Wall stiffness once a dial angle is outside min/max bounds; raise for a firmer boundary.
+    tracking_kp: 10.0           # Position tracking spring toward the robot-aligned target; raise carefully to reduce lag.
+    tracking_kd: 0.1            # Velocity damping for tracking; raise if the dial oscillates around the target.
+    tracking_max_torque: 5.0    # Torque cap for tracking force; lower for safer/lighter hand feel.
+    oob_kick:
+      enabled: true             # Enables pulsed corrective kicks while outside bounds; set false to disable kick pulses only.
+      amplitude: 2.0            # Kick pulse strength in firmware torque units; raise in small steps if kicks feel too weak.
+      pulse_interval_ms: 40     # Gap between kick pulses; lower for more frequent pulses.
+    telemetry_interval_ms: 10
+    # Real dials are absolute-position devices. Map dial angle to absolute
+    # robot joint target (via gear_ratio), not delta-velocity semantics.
+    input_mode: absolute
+  robot:
+    q_limits_min_deg: [-180, -180, -180, -180, -180, -180]
+    q_limits_max_deg: [180, 180, 180, 180, 180, 180]
+    max_velocity_deg_s: [15, 16, 20, 40, 50, 50]
+    max_acceleration_deg_s2: [35, 50, 50, 80, 80, 90]
+    headless: false
+    initial_pose_deg: [0.0, -90.0, 90.0, 0.0, 0.0, 0.0]
+  collision:
+    check_self: true
+    check_world: true
+    timeout_ms: 200
+    retries: 2
+    bundle_size: 1
+  jogging:
+    n_forward_steps: 16
+    forward_step_deg: 1.0
+    path_cutoff_deg: 3.0
+    forward_bundle_size: 1
+    probe_half_deg: 10
+    # Sparse probes beyond the dense +/-10deg band (mirrored to +/-). Widen the
+    # visualized/tested proximity range without 1deg density far out. Keep this
+    # list short -- each entry adds 2 collision checks per axis proximity tick.
+    probe_far_offsets_deg: [15, 20, 30, 45, 60]
+    prox_floor: 0.6
+    forward_timeout_ms: 40
+  safety_barrier:
+    bypass_channels:
+      SBarr11: false
+      SBarr12: false
+      SBarr21: false
+      SBarr22: false
+      SBarr31: false
+      SBarr32: false
+      SBarr41: false
+      SBarr42: false
+  light_column:
+    # Per-team strip colors (#RRGGBB or [r, g, b]). Team A blue, Team B red.
+    team_colors:
+      a: "#0000FF"
+      b: "#FF0000"
+    breathing_period_s: 3.0          # daydreaming dim<->bright cycle length (s)
+    breathing_min_brightness: 0.10   # lowest brightness reached while breathing (0..1)
+    play_startup_blackout_s: 0.5     # all-dark hold at the very start of play (s)
+    endgame_flash_window_s: 10.0      # final-countdown white-flash window (s)
+    endgame_flash_period_s: 2.0      # flash cycle length within that window (s)
+    endgame_flash_on_s: 1.0          # white "on" slice of each flash cycle (s)
+    conclusion_post_count_hold_s: 1.0 # hold score bars before crowning winner (s)
+    # Tutorial progress is published per-player by the game controller (0..100%)
+    # and consumed directly here, so the light columns need no scroll-scale tuning.
+  scoreboard:
+    # Per-bucket LED text panels (COM40). The bucket->panel wiring lives in
+    # config/device_ports_and_addr.yaml (scoreboard.bucket_displays); these are
+    # only the text strings and send-pacing knobs.
+    score_digits: 4                 # zero-padded width for bucket-weight readouts (4 -> 0..9999)
+    tutorial_words: ["HOW", "TO", "PLAY"]  # shown on bucket 1/2/3 during the tutorial
+    idle_text: "0000"               # placeholder shown on every bucket panel while idle
+    game_over_text: "GAME,OVER"     # scroll-up text during reset (comma splits the two lines)
+    win_text: "WIN"                 # winning team's panels during the conclusion reveal
+    lose_text: "LOSE"              # losing team's panels during the conclusion reveal
+    tie_text: "TIE"                # all panels on an integer-level tie
+    # --- Colour + brightness ---
+    # Tutorial text is drawn in each team's colour; every other stage (idle,
+    # play, reset, conclusion counting + WIN/LOSE/TIE) uses play_color (white).
+    # team_colors here are OPTIONAL: when omitted the loader reuses the
+    # light_column.team_colors above so both subsystems share one source of
+    # truth. Accepts "#RRGGBB" or [r, g, b]. Uncomment to override per board.
+    # team_colors:
+    #   a: "#0000FF"                # Team A tutorial colour (blue)
+    #   b: "#FF0000"                # Team B tutorial colour (red)
+    play_color: "#FFFFFF"           # text colour for all non-tutorial stages (white)
+    init_brightness: 255            # display + text brightness forced on every panel at startup (0..255)
+    # --- Winner blink (conclusion WIN reveal only) ---
+    blink_period_s: 0.6             # one full on+off cycle of the winning team's WIN text (s)
+    blink_on_fraction: 0.5          # duty cycle of the blink (0.5 = equal on/off); loser/tie stay steady
+    min_refresh_interval_s: 0.05    # max 20 updates/s per panel (throttles the count-down)
+    inter_command_delay_s: 0.0      # 0 flushes all queued lines each tick; raise to pace RS485
+  tutorial:
+    duration_s: 90                  # tutorial countdown length (seconds)
+    tracking_kp: 2.0                # Lower tutorial-only detent tracking spring; normal play uses tuning.haptic.tracking_kp.
+    # --- Tutorial scroll (dial-space, deci-degrees; decideg = deg * 10) ---
+    # Each player scrolls their haptic dial to watch the tutorial. Keep the
+    # original tutorial dial direction even though gameplay uses negative
+    # gear_ratio above: tutorial progress is a raw dial-space interaction and
+    # does not currently follow gear-ratio sign.
+    tutorial_scroll_dial_start_end: [0, -30000]   # [start, end] dial pos (decideg)
+    tutorial_scroll_dial_bound: [-30100, 100]      # [min, max] soft bounds (decideg)
+    # Position-triggered soft-bound zones. When a dial's measured position is
+    # inside active_range, the game controller sends that zone's bound for that
+    # dial only. The zones intentionally do not overlap; dials outside every
+    # zone use tutorial_scroll_dial_bound above.
+    tutorial_scroll_dial_bound_zones:
+      - active_range: [-19500, 100]     # kick region below -16500 while scrolling through the first section
+        bound: [-16500, 100]
+      - active_range: [-30000, -20000]  # kick region above -19500 while scrolling through the final section
+        bound: [-30100, -19500]
+    # Progress percentages at which the dial snaps to a detent. Each tick the
+    # haptic tracking target is set to the nearest detent to the measured
+    # position, so players feel a lock at each step. There is no 0% detent, so
+    # the dial pulls toward the first (10%) detent the instant the tutorial
+    # begins.
+    tutorial_detents_pct: [0, 10, 20, 30, 40, 50, 70, 80, 90, 100]
+
+  game:
+    # --- Core game ---
+    duration_s: 600                  # play-stage length (seconds) -- extended to 600 seconds (10 minutes)
+    sum_score_rate_unit_per_s: 100
+    sim_bucket_values:
+      a: [120, 80, 40]              # seed scores (no weight sensors in this profile)
+      b: [120, 80, 40]              # seed scores for Team B (no weight sensors)
+    # Weight deadband: a bucket's summed load-cell reading must reach at least
+    # this many grams before it counts toward the score (the on-board "counter"
+    # increments). Readings below this are treated as 0, rejecting empty-bucket
+    # drift / noise. Raise if light debris registers; lower for finer sensitivity.
+    score_min_increment_g: 4
+
+    # --- State machine bring-up ---
+    start_stage: daydreaming        # boot into attract mode (LED breathing visible immediately)
+    reset_duration_s: 3.0           # fallback hold; only used if rewind_enabled is false
+    # --- Practice sub-state (per team, first part of the play stage) ---
+    practice_enabled: true          # players 1..6 jog their own joint to the target one at a time
+    practice_arrival_tolerance_deg: 1.0  # active joint counts as arrived within this of target
+    practice_arrival_dwell_s: 0.4   # ...and must hold within tolerance this long before hand-off
+    # --- Geometric rewind (replaces the flat reset timer) ---
+    rewind_enabled: true            # rewind the recorded play path instead of a fixed reset hold
+    rewind_speed_fraction: 0.60     # rewind at 60% of each max_velocity_deg_s
+    rewind_arrival_tolerance_deg: 0.5  # all six measured joints must be within this to finish
+    idle_timeout_s: 60              # idle -> daydreaming after this much quiet (seconds)
