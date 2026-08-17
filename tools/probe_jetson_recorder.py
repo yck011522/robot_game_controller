@@ -2,8 +2,8 @@
 
 Exercises the WebSocket command protocol documented in
 C:/Users/yck01/GitHub/jetson_camera_experiments/skeleton-tracker/jetson/tracker_api.md:
-ping -> get_status -> short skeleton-only recording -> stop -> verify HTTP
-file listing on :9100. Does NOT download files (that's tested separately).
+ping -> get_status -> short skeleton-only recording -> stop -> download one
+file via the URL returned in the stop ack (verbatim, no rewriting).
 
 Run:
     $env:PYTHONPATH = "src"
@@ -21,7 +21,6 @@ import urllib.request
 import websockets
 
 WS_URL = "ws://192.168.0.101:9000"   # Jetson recorder_node WebSocket command port
-HTTP_BASE = "http://192.168.0.101:9100"  # Jetson read-only file server root
 PROBE_DATE = "2099-01-01"            # clearly-fake probe session identity
 PROBE_TIME = "99-99-99"
 
@@ -64,21 +63,23 @@ async def main() -> None:
         print(f"Recording for {ns.seconds} s ...")
         await asyncio.sleep(ns.seconds)
 
-        status = await send_cmd(ws, "get_status")
-        print("get_status (mid-recording) ->", json.dumps(status, indent=2))
-
         stop = await send_cmd(ws, "stop_recording")
         print("stop_recording ->", json.dumps(stop, indent=2))
 
-    # Verify the files are visible over the HTTP file server.
-    for team in ("a", "b"):
-        url = f"{HTTP_BASE}/recordings/{PROBE_DATE}/{PROBE_TIME}/{team}/"
-        try:
-            with urllib.request.urlopen(url, timeout=10) as resp:
-                listing = resp.read().decode(errors="replace")
-            print(f"HTTP listing {url}:\n{listing[:800]}")
-        except Exception as exc:  # noqa: BLE001 - probe: report anything
-            print(f"HTTP listing {url} FAILED: {exc}")
+    # Download one file per team via the URL exactly as returned in the ack —
+    # no host rewriting, so this validates the advertise_host fix end-to-end.
+    rec = stop.get("recording") or {}
+    for team, team_body in rec.get("teams", {}).items():
+        for f in team_body.get("files", []):
+            url = f.get("url", "")
+            try:
+                with urllib.request.urlopen(url, timeout=15) as resp:
+                    data = resp.read()
+                match = "OK " if len(data) == f.get("bytes") else "SIZE-MISMATCH"
+                print(f"  [{match}] GET {url} -> {len(data)} bytes "
+                      f"(ack said {f.get('bytes')})")
+            except Exception as exc:  # noqa: BLE001 - probe: report anything
+                print(f"  [FAIL] GET {url} -> {exc}")
 
 
 if __name__ == "__main__":

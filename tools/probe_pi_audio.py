@@ -47,9 +47,17 @@ def main() -> None:
 
     print(f"Target mic process: {target.label if hasattr(target, 'label') else target} ({ns.ip}:{ns.port})")
 
+    # --- 0. Clear any leftover open session so the probe starts clean ---
+    pre = send_ctrl(target, "query_state", [], ack_timeout=2.0)
+    if pre.ok and "log_open=1" in (pre.message or ""):
+        print("leftover open session detected; discarding it first ...")
+        send_ctrl(target, "log_discard_stop", [], ack_timeout=5.0)
+
     # --- 1. Start a short session (analysis CSVs only unless --audio) ---
-    ack = send_ctrl(target, "log_start", [PROBE_DAY, PROBE_TIME, "5", record_audio])
-    print(f"log_start -> ok={ack.ok} msg={ack.message!r} timed_out={ack.timed_out} ({ack.elapsed_ms:.0f} ms)")
+    # First command after a service restart can be slow; use a generous timeout.
+    ack = send_ctrl(target, "log_start", [PROBE_DAY, PROBE_TIME, "5", record_audio], ack_timeout=5.0)
+    elapsed = f"{ack.elapsed_ms:.0f} ms" if ack.elapsed_ms is not None else "n/a"
+    print(f"log_start -> ok={ack.ok} msg={ack.message!r} timed_out={ack.timed_out} ({elapsed})")
     if not ack.ok:
         print("START FAILED; aborting probe.")
         return
@@ -58,13 +66,16 @@ def main() -> None:
     time.sleep(ns.seconds)
 
     # --- 2. Test idempotent duplicate start (same identity must be a no-op) ---
-    dup = send_ctrl(target, "log_start", [PROBE_DAY, PROBE_TIME, "5", record_audio])
-    print(f"duplicate log_start (idempotency check) -> ok={dup.ok} msg={dup.message!r}")
+    dup = send_ctrl(target, "log_start", [PROBE_DAY, PROBE_TIME, "5", record_audio], ack_timeout=5.0)
+    print(f"duplicate log_start (idempotency check) -> ok={dup.ok} msg={dup.message!r} timed_out={dup.timed_out}")
 
-    # --- 3. Save + stop (save can take longer than the default ACK timeout) ---
+    # --- 3. Save + stop (now async: expect an immediate "saving" ack) ---
+    t0 = time.time()
     ack = send_ctrl(target, "log_save_stop", [], ack_timeout=15.0)
+    first_ms = (time.time() - t0) * 1000
     elapsed = f"{ack.elapsed_ms:.0f} ms" if ack.elapsed_ms is not None else "n/a"
-    print(f"log_save_stop -> ok={ack.ok} msg={ack.message!r} timed_out={ack.timed_out} ({elapsed})")
+    print(f"log_save_stop -> ok={ack.ok} msg={ack.message!r} timed_out={ack.timed_out} "
+          f"(first ack after {first_ms:.0f} ms; server-reported {elapsed})")
 
     # --- 4. SSH in and list what the session wrote ---
     remote_dir = f"{REMOTE_ROOT}/{PROBE_DAY}/{PROBE_TIME}/{mic}"

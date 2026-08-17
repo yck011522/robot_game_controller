@@ -47,4 +47,8 @@ recordings/games/*/*
 recordings/games/*.zip
 
 # Local LAN device credentials (closed network, but keep out of git by convention)
-# config/secrets.yaml
+config/secrets.yaml
+
+# Temporary external-media probe captures (pulled test data, not source)
+logs/full_recording_probe/
+logs/pi_pull_probe/

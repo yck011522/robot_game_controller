@@ -44,6 +44,8 @@ Precedents this plan builds on:
 | Game identity distribution | **Push, not subscribe.** The coordinator sends the game identity string in the start command; devices do not need ZMQ or bus access. |
 | Ledger | **`recordings/games_index.csv` stays byte-for-byte backwards compatible — untouched.** External-media pull status goes in a **separate** ledger, `recordings/external_media_index.csv`, joined by the same `date` + `time` key columns. |
 | Raw media toggles | `keep_raw_video` / `keep_raw_audio` are profile config, sent **in the start command** (both protocols support this natively). Default profile `two_teams.yaml`: both **off** (skeleton/prosody only). `two_teams_longer_duration.yaml`: both **on** (MP4 + FLAC pulled too). |
+| Concurrent start/stop | **All 12 mic commands are fanned out concurrently (one thread per mic), never in a sequential loop.** A save holds the Pi's single-threaded OSC listener while it flushes the FLAC buffer to SD; sequential stops stack those delays so later mics over-record and the earliest time out. Verified: concurrent stop → all mics 120.7–122.0 s on a 120 s target; sequential stop → 160–250 s staircase + 15 s ACK timeouts (§10). Same applies to `log_start`. Matches the audio doc §7 bridge-process guidance. |
+| File formats / compression | **Prosody/VAD CSVs → Parquet, converted on this PC during the pull step** (Pis keep writing CSV; no Pi redeploy). Measured on real 6-min data: openSMILE CSV → Parquet(zstd) is ~34–44% of original (~3× smaller), typed, and matches the rest of `recordings/` (all Parquet/pyarrow). **FLAC and MP4 left as-is** — both already compressed (FLAC→gzip only ~57% on near-silent test audio, ~100% on real audio; MP4→zip ~100%). Size levers stay the `keep_raw_*` toggles, not post-hoc compression. `skeleton.parquet` is already zstd. |
 
 ## 2. Hardware topology (as described by user)
 
@@ -62,35 +64,58 @@ rpi5-12→a3/a4, rpi5-13→a5/a6, rpi5-14(0.14)→b1/b2, rpi5-15(0.15)→b3/b4,
 rpi5-16(0.16)→b5/b6. Same convention as `display_broadcast.hosts` in
 `config/device_ports_and_addr.yaml`, duplicated so it can diverge later.
 
-## 3. On-disk layout (destination on this PC)
+## 3. On-disk layout (destination on this PC) — FINALIZED 2026-08-17
 
-Extends the existing gameplay-recorder layout — no new root, no new ledger:
+Extends the existing gameplay-recorder layout — no new root, and
+`games_index.csv` is untouched (backwards compatible). External media slots
+into the **same** `<date>/<time>/` game folder, as two sibling subfolders
+next to `a/`/`b/`, plus a manifest. Preview below uses real 6-min pull sizes
+with `keep_raw_video` + `keep_raw_audio` ON (the `two_teams_longer_duration`
+shape); with both OFF, `video.mp4` and `audio.flac`/`audio.json` are absent.
 
 ```
 recordings/
-  games_index.csv                 # existing ledger (unchanged schema)
+  games_index.csv                 # existing ledger (UNCHANGED schema)
+  external_media_index.csv        # NEW ledger, joined by date+time (§3.1)
   games/
     <date>/                       # e.g. 2026-08-17  (HK local, existing)
-      <time>/                     # e.g. 14-32-05    (HK local, existing)
-        state_global.parquet      # existing
-        a/  b/                    # existing per-team Parquet
-        skeleton/                 # NEW - pulled from Jetson (HTTP :9100)
-          a/skeleton.parquet      #   mirrors Jetson on-device layout
-          a/frames.parquet
-          a/video.mp4             #   only when keep_raw_video: true
-          b/ …
-        audio/                    # NEW - pulled from Pis (SCP over SSH)
-          <pi_id>/MIC1/opensmile_lld.csv, vad.csv, emotion.csv,
-          <pi_id>/MIC1/audio.flac, audio.json   # only when keep_raw_audio: true
-          <pi_id>/MIC2/ …         #   6 Pis x 2 mics = 12 folders
-        external_media_manifest.json   # NEW - per-device pull status (§4.4)
+      <time>/                     # e.g. 15-58-45    (HK local, existing) - one game
+        state_global.parquet      # existing: shared game state
+        a/  b/                    # existing: per-team gameplay Parquet
+        external_media_manifest.json   # NEW: per-device pull status (§4.4)
+
+        skeleton/                 # from Jetson (HTTP :9100 pull) - PER TEAM
+          a/
+            skeleton.parquet      #   pose rows (already zstd)
+            frames.parquet        #   per-frame companion table
+            video.mp4             #   ONLY when keep_raw_video (mp4v, ~205-247 MB / 6 min)
+          b/  …                   #   cam 0 -> a, cam 2 -> b (fixed on Jetson)
+
+        audio/                    # from 6 Pis (SFTP pull, then CSV->Parquet) - PER PLAYER
+          a1/                     #   player folder = team+player, from the mic map (§2)
+            opensmile_lld.parquet #   CONVERTED from opensmile_lld.csv (~3x smaller, zstd)
+            vad.parquet           #   CONVERTED from vad.csv
+            audio.flac            #   ONLY when keep_raw_audio (~1.3 MB / 6 min / mic)
+            audio.json            #   alignment sidecar; kept with audio.flac
+          a2/  a3/  a4/  a5/  a6/ #   rpi5-11..13
+          b1/  b2/  b3/  b4/  b5/  b6/   # rpi5-14..16
 ```
 
-The `audio/<pi_id>/<MIC>/` nesting preserves the Pi-side path structure
-verbatim (`<pi_id>` = `rpi5-11`…`rpi5-16`) — the mic→player mapping stays in
-config instead of being baked into folder names, so a mapping change never
-invalidates old recordings. Player-level symlinks/copies can be added by
-analysis tooling later if wanted.
+Locked layout decisions (2026-08-17):
+
+- **`skeleton/<team>/`** — team-level (Jetson produces one skeleton/frames/video
+  per *team*, not per player). Mirrors the Jetson's own on-device layout.
+- **`audio/<player>/`** (a1…b6) — **per-player**, mapping applied at pull time
+  (each mic is one player). Analysis-ready; if the mic→player mapping ever
+  changes, that game's mapping is recorded in `external_media_manifest.json`
+  so old folders stay interpretable.
+- **CSV → Parquet on pull, then DELETE the source `.csv`** after a successful
+  conversion (Parquet is the only copy). `audio.json` stays JSON.
+- Raw media (`video.mp4`, `audio.flac`) is **not** post-compressed — already
+  compressed at the source.
+
+Size per 6-min game: ~22 MB with raw OFF (parquet only), ~510 MB with raw ON
+(dominated by the two `video.mp4`).
 
 ### 3.1 `recordings/external_media_index.csv` (NEW ledger)
 
@@ -237,18 +262,31 @@ Written into each game folder; updated asynchronously as pulls complete:
 
 ```jsonc
 {
-  "folder": "recordings/games/2026-08-17/14-32-05",
+  "folder": "recordings/games/2026-08-17/15-58-45",
+  "raw_video": true,               // toggles this game was started with
+  "raw_audio": true,
+  // The mic->player mapping used to lay out audio/<player>/ for THIS game,
+  // recorded so the folder names stay interpretable if the map ever changes.
+  "mic_player_map": {
+    "rpi5-11": {"MIC1": "a1", "MIC2": "a2"},
+    "rpi5-12": {"MIC1": "a3", "MIC2": "a4"}
+    // … rpi5-16
+  },
   "devices": {
-    "jetson":              {"status": "ok", "files": 4, "bytes": 183600497},
-    "pi:rpi5-11:MIC1":     {"status": "ok", "files": 2, "bytes": 410233},
-    "pi:rpi5-11:MIC2":     {"status": "pending", "files": null, "bytes": null}
+    "jetson":              {"status": "ok", "files": 6, "bytes": 452100000},
+    "pi:rpi5-11:MIC1":     {"status": "ok", "files": 2, "bytes": 1490000,
+                            "player": "a1"},
+    "pi:rpi5-11:MIC2":     {"status": "pending", "files": null, "bytes": null,
+                            "player": "a2"}
   }
 }
 ```
 
 Status enum: `pending | pulling | ok | partial | unreachable_at_start |
-permanently_failed`. The roll-up of this manifest is what lands in
-`external_media_index.csv` (§3.1) once every device is terminal.
+permanently_failed`. `files`/`bytes` count the *stored* artifacts (Parquet
+after CSV→Parquet conversion, not the transient CSV). The roll-up of this
+manifest is what lands in `external_media_index.csv` (§3.1) once every device
+is terminal.
 
 ## 5. Configuration
 
@@ -344,37 +382,35 @@ Profile/launcher wiring:
   manifest.
 - Hardware: one-Pi bring-up profile before enabling all 6 + Jetson.
 
-## 8. External-repo changes (implemented locally; push + redeploy pending)
+## 8. External-repo changes (implemented; Jetson deployed+verified, Pi pending)
 
-Both repos are cloned on this machine. The fixes below are **edited and
-tested locally**; the user will push to GitHub and redeploy to the devices.
-None block our Stage 1–2 sim work.
+Both repos are cloned on this machine. Fixes are edited + tested locally;
+the user pushes to GitHub and redeploys to the devices.
 
-**Jetson** — `C:/Users/yck01/GitHub/jetson_camera_experiments/skeleton-tracker/jetson/`:
+**Jetson** — `C:/Users/yck01/GitHub/jetson_camera_experiments/skeleton-tracker/jetson/`
+— **✅ DEPLOYED + verified live 2026-08-17 (see §9):**
 1. **Conditional max-duration** — `recorder_node.py`: new
    `max_duration_skeleton_sec` (default = `max_duration_sec`); `expired()`
    picks the cap from the session's `record_video` flag (stored at `start`).
    `config.yaml`: `max_duration_sec: 1200` (video) + new
-   `max_duration_skeleton_sec: 3600` (skeleton-only). Compiles; YAML verified.
-2. **Advertise-host URL fix** — `config.yaml` new `jetson.advertise_host:
-   "192.168.0.101"` so `stop_recording` acks return LAN-reachable URLs
-   (was defaulting to `localhost` when bound to 0.0.0.0). Code comment added
-   at the `advertise_host` resolution. (`tracker_api.md`'s `/recordings/`
-   URL prefix is stale — server root is already the recordings dir; real
-   path is `http://<jetson>:9100/<date>/<time>/<team>/<file>`.)
-   **Needs redeploy + restart of `recorder_node.py` on the Jetson.**
+   `max_duration_skeleton_sec: 3600` (skeleton-only).
+2. **Advertise-host URL fix** — `config.yaml` `jetson.advertise_host:
+   "192.168.0.101"` → `stop_recording` acks now return LAN-reachable URLs.
+   (`tracker_api.md`'s `/recordings/` URL prefix is stale — server root is
+   already the recordings dir; real path is
+   `http://<jetson>:9100/<date>/<time>/<team>/<file>`.)
 
-**Pis** — `C:/Users/yck01/GitHub/voiceAnonymizer_PI/strip_monitor.py`:
-3. **Async save ACK** — `_handle_ctrl_command` now special-cases
-   `log_save_stop` / `raw_save_stop`: sends an immediate `"saving"` ACK and
-   runs the blocking save on a daemon thread (`_run_save_command`), which
-   streams per-file `/saved` notices and sends the final completion ack.
-   Also un-blocks the single-threaded ctrl listener during saves. Compiles;
-   dispatch logic unit-verified (immediate ack + 2 saved notices + final
-   ack). **Needs redeploy of the latest `strip_monitor.py` (which also has
-   the `log_start` idempotency fix) to all 6 Pis + restart.**
-4. **Pi SSH** — resolved: password auth works (`pi` / `pi1234`), stored in
-   gitignored `config/secrets.yaml`. No key setup needed.
+**Pis** — `C:/Users/yck01/GitHub/voiceAnonymizer_PI/strip_monitor.py`
+— **✅ DEPLOYED + verified live 2026-08-17 (see §9):**
+3. **Async save ACK** — `_handle_ctrl_command` special-cases `log_save_stop`
+   / `raw_save_stop`: immediate `"saving"` ACK, blocking save on a daemon
+   thread (`_run_save_command`), per-file `/saved` notices + final completion
+   ack. Verified live: immediate ack ~7 ms, files land right after, full
+   SFTP pull works.
+4. **Idempotent `log_start`** — verified live: duplicate start with the same
+   identity acks as a no-op (session preserved).
+5. **Pi SSH** — resolved: password auth works (`pi` / `pi1234`), stored in
+   gitignored `config/secrets.yaml`. SFTP pull verified (<10 ms/file).
 
 ## 9. Hardware verification log (2026-08-17)
 
@@ -383,16 +419,57 @@ None block our Stage 1–2 sim work.
 | Ping Jetson 192.168.0.101 | ✅ 1 ms |
 | Ping all 6 Pis (.11–.16) | ✅ all reply (first batch needed ARP warm-up) |
 | Jetson WS :9000 + HTTP :9100 open | ✅ |
-| Jetson ping / get_status / start / stop | ✅ acks correct; status shows both cameras 15–16 fps |
+| Jetson ping / get_status / start / stop | ✅ acks correct; status shows both cameras 13–15 fps |
 | Jetson skeleton-only 6 s session + HTTP pull | ✅ `skeleton.parquet` + `frames.parquet` per team, pulled over HTTP |
 | Jetson auto-stop saves partial file | ✅ confirmed in code (`expired()`→`stop()`→`_close_locked(discard=False)`) |
+| **Jetson advertise_host fix (post-redeploy)** | ✅ stop acks return `http://192.168.0.101:9100/...`; all 4 files downloaded via returned URLs verbatim, byte counts match |
+| **Jetson conditional duration cap (post-redeploy)** | ✅ code path live (skeleton-only session runs new `expired()` branch); cap value not exposed over protocol, config key verified loaded (`max_duration_skeleton_sec=3600`) |
 | Pi OSC log_start (rpi5-11 MIC1) | ✅ ack ~5 ms |
-| Pi duplicate log_start idempotency | ❌ discarded session (pre-idempotency firmware) → fixed in new build, redeploy pending (§8.3) |
-| Pi log_save_stop | ✅ worked but blocked the listener ~1.7 s → now async: immediate "saving" ack + per-file saved notices + final ack (§8.3) |
-| Pi SSH password auth + file listing | ✅ `pi`/`pi1234`, listed session dir |
+| **Pi idempotent log_start (post-redeploy)** | ✅ duplicate start acks no-op ~3 ms, session preserved |
+| **Pi async log_save_stop (post-redeploy)** | ✅ immediate "saving" ack ~7 ms; `opensmile_lld.csv` + `vad.csv` land right after |
+| **Pi raw audio path (post-redeploy)** | ✅ `record_audio=1` → `audio.flac` + `audio.json` sidecar alongside CSVs |
+| **Pi SFTP pull (post-redeploy)** | ✅ all 4 files pulled <10 ms each; CSV headers + audio.json valid |
+| Pi SSH password auth | ✅ `pi`/`pi1234` |
 
 Probe scripts kept as `tools/probe_jetson_recorder.py` and
-`tools/probe_pi_audio.py` (reusable for Stage 3 hardware bring-up). A probe
-session folder `2099-01-01/` remains on the Jetson (read-only HTTP server,
-needs on-device `rm` to clear) — harmless, tiny.
+`tools/probe_pi_audio.py` (reusable for Stage 3 hardware bring-up). Probe
+session folders `2099-01-01/` and `2099-01-02/` remain on the Jetson
+(read-only HTTP server; clear with on-device `rm -rf recordings/2099-01-0*`) —
+harmless, a few KB each.
+
+## 10. Full-fidelity stress probe (2026-08-17) — `tools/probe_full_recording.py`
+
+End-to-end run mirroring the coordinator's game-end flow: all 12 Pi mics +
+Jetson, **raw audio + raw video ON**, then pull everything back and validate.
+
+**2-minute pass — ✅ PASS** (session `2026-08-17/15-58-45`):
+
+| Check | Result |
+|---|---|
+| Jetson 6/6 files (skeleton+frames+video ×2 teams) | ✅ 150 MB total; duration exactly 120.0 s; videos ~69/83 MB pull in ~6–7 s over HTTP |
+| Pi 48/48 files (12 mics × opensmile/vad/flac/json) | ✅ 20.4 MB total |
+| Per-mic `audio.json` duration | ✅ all 120.7–122.0 s (target 120) — no drift once stop is concurrent |
+| Prosody/VAD CSV last `time_ms` | ✅ ~117–120 s across all 12 mics |
+| Concurrent `log_save_stop` | ✅ all 12 ack "saving" in 2–41 ms |
+
+**First attempt (sequential stop) — failed by probe design, not hardware:**
+`log_save_stop` was sent one mic at a time; each save holds the Pi's OSC
+listener while flushing the 2-min FLAC to SD, so later mics kept recording
+(160–250 s staircase) and the first 8 timed out at 15 s. Fixed by fanning
+stop out concurrently (§1 "Concurrent start/stop"). Lesson baked into the
+coordinator design.
+
+**6-minute pass — ✅ PASS** (session `2026-08-17/16-02-10`):
+
+| Check | Result |
+|---|---|
+| Jetson 6/6 files | ✅ **452 MB** total; duration exactly 360.0 s; videos pull fine |
+| Pi 48/48 files | ✅ **59.4 MB** total |
+| Per-mic `audio.json` duration | ✅ all 360.7–361.9 s (target 360) — tight, no drift |
+| Prosody/VAD CSV last `time_ms` | ✅ ~356–359 s across all 12 mics |
+| Concurrent `log_save_stop` | ✅ all 12 ack "saving" in 2–30 ms |
+
+Both durations pass with raw audio + raw video. **Full workflow (record →
+concurrent stop → pull → validate) is production-ready on the hardware side.**
+Remaining work is the our-side `external_media_coordinator` (Stage 1–3).", "oldString": "**6-minute pass — pending.**"}
 
