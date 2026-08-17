@@ -45,3 +45,6 @@ logs/rewind_batch_*validation*.log
 logs/sim_trajectory_recording/
 recordings/games/*/*
 recordings/games/*.zip
+
+# Local LAN device credentials (closed network, but keep out of git by convention)
+# config/secrets.yaml
