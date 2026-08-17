@@ -168,3 +168,41 @@ display_broadcast:
     rpi5-23:
       ip: "192.168.0.16"
       players: ["b5", "b6"]
+
+# Audio capture fleet (voiceAnonymizer_PI): the same six Raspberry Pis each run
+# one recording process per microphone. Each mic is hard-wired to one player.
+#
+# This is the single source of truth for the mic -> (team, player) mapping used
+# by the external_media_coordinator to lay out per-player `audio/<player>/`
+# folders. It intentionally mirrors the display_broadcast host order today, but
+# is kept as a SEPARATE block so the audio wiring can be changed independently
+# later without touching the display mapping.
+#
+#   mic 1 -> OSC control port 9001, mic 2 -> port 9002 (see the Pi docs).
+audio_capture:
+  # Per-mic processing toggles + OSC timing, shared by the whole fleet.
+  max_minutes: 15        # Pi in-RAM recording cap; must exceed the game duration.
+  ack_timeout_s: 5.0     # per-command OSC ack timeout (the async save acks fast).
+  emotion: false         # record emotion.csv too? off = prosody + VAD only.
+
+  # Pi hostname -> its IP + the player each of its two mics listens to.
+  # A player id is the team letter (a/b) + 1-based player number.
+  hosts:
+    rpi5-11:
+      ip: "192.168.0.11"
+      mic_players: {mic1: "a1", mic2: "a2"}
+    rpi5-12:
+      ip: "192.168.0.12"
+      mic_players: {mic1: "a3", mic2: "a4"}
+    rpi5-13:
+      ip: "192.168.0.13"
+      mic_players: {mic1: "a5", mic2: "a6"}
+    rpi5-14:
+      ip: "192.168.0.14"
+      mic_players: {mic1: "b1", mic2: "b2"}
+    rpi5-15:
+      ip: "192.168.0.15"
+      mic_players: {mic1: "b3", mic2: "b4"}
+    rpi5-16:
+      ip: "192.168.0.16"
+      mic_players: {mic1: "b5", mic2: "b6"}

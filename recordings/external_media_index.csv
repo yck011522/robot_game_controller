@@ -1,0 +1,2 @@
+date,time,skeleton_status,audio_status,skeleton_files,skeleton_bytes,audio_files,audio_bytes,raw_video,raw_audio,devices_missing
+2026-08-17,16-49-28,ok,partial,4,1565893,22,14611711,0,0,pi:rpi5-12:MIC1

@@ -558,6 +558,24 @@ def main(argv: list[str] | None = None) -> int:
             exit_code = 1
             return exit_code
 
+        # ---- tier 10: external media coordinator ------------------------
+        # Orchestrates per-game recording on the external skeleton (Jetson)
+        # and audio (Pi) devices, then pulls files back into the game folder
+        # (see EXTERNAL_RECORDING_PLAN.md). Unlike gameplay_recorder this is
+        # opt-in per profile: it only spawns when the profile sets
+        # `subsystems.external_media_coordinator` non-null, and it idles
+        # unless that profile also sets `external_recording.enabled: true`.
+        if profile.is_enabled("external_media_coordinator"):
+            children["external_media_coordinator"] = _spawn(
+                "external_media_coordinator", profile_path,
+                module_registry=module_registry)
+            if not _wait_for_first_heartbeat(sub, poller, "external_media_coordinator",
+                                              STARTUP_HEARTBEAT_TIMEOUT_S,
+                                              children, seen_first,
+                                              last_recv_mono_ns, last_loop_hz, recv_window):
+                exit_code = 1
+                return exit_code
+
         print(f"[launcher] all children up: {list(children.keys())}", flush=True)
 
         # ---- main watchdog loop ----------------------------------------

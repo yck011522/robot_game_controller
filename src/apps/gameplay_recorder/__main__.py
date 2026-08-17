@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import math
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -104,6 +105,25 @@ def main(argv: list[str] | None = None) -> int:
         "last_score": {},  # most recently seen {"a": int, "b": int} score
     }
 
+    def _publish_game_event(event: str, recording) -> None:
+        """Publish a `recorder.game` lifecycle event for the external-media
+        coordinator (and any other consumer that needs the game folder).
+
+        Emitted on the same stage edges that drive the recording lifecycle:
+        `game_started` on Tutorial entry, `game_ended` on the edge out of
+        Play. Carries the on-disk folder + date/time so consumers never have
+        to re-derive the HK-local naming convention (single source of truth
+        is core.gameplay_recording.local_folder_names)."""
+        if recording is None:
+            return
+        bus.publish(pub, "recorder.game", {
+            "event": event,
+            "folder": str(recording.folder),
+            "date": recording.date_str,
+            "time": recording.time_str,
+            "ts_wall_ns": time.time_ns(),
+        })
+
     def tick(_p: Proc) -> None:
         """Drain every queued bus message and route it into the active recording."""
 
@@ -112,7 +132,8 @@ def main(argv: list[str] | None = None) -> int:
             return
         for topic, body in _drain_all(sub):
             _handle_message(
-                rec_state, topic, body, root_dir, profile.name, active_teams, gear_ratio
+                rec_state, topic, body, root_dir, profile.name, active_teams,
+                gear_ratio, on_game_event=_publish_game_event,
             )
 
     def teardown(_p: Proc) -> None:
@@ -165,11 +186,13 @@ def _handle_message(
     profile_name: str,
     active_teams: list[str],
     gear_ratio: list[float],
+    on_game_event=None,
 ) -> None:
     """Route one drained bus message to the right handler by topic."""
 
     if topic == "state.full":
-        _handle_state_full(rec_state, body, root_dir, profile_name, active_teams)
+        _handle_state_full(rec_state, body, root_dir, profile_name, active_teams,
+                           on_game_event=on_game_event)
         return
     if topic == "telem.weight":
         _handle_weight(rec_state, body)
@@ -189,16 +212,17 @@ def _handle_state_full(
     root_dir: str,
     profile_name: str,
     active_teams: list[str],
+    on_game_event=None,
 ) -> None:
     """Advance the recording lifecycle and buffer one state.full-derived tick.
 
     Stage edges drive everything:
     * ``-> "tutorial"``: start a new `GameRecording` (any previous unfinished
       one never reached Play end and is silently discarded -- see the module
-      docstring's teardown note).
+      docstring's teardown note). Fires a `game_started` event.
     * ``-> "play"``: mark this game's `play_entered_at`.
-    * ``"play" ->``: finalize (write Parquet + append the ledger row) and
-      clear the active recording.
+    * ``"play" ->``: finalize (write Parquet + append the ledger row), fire a
+      `game_ended` event, and clear the active recording.
     """
 
     stage = body.get("active_stage")
@@ -213,6 +237,8 @@ def _handle_state_full(
             tutorial_entered_wall_ns=ts_wall_ns,
         )
         rec_state["last_score"] = {}
+        if on_game_event is not None:
+            on_game_event("game_started", rec_state["recording"])
 
     recording: GameRecording | None = rec_state["recording"]
 
@@ -247,6 +273,11 @@ def _handle_state_full(
         and stage != "play"
         and isinstance(ts_wall_ns, int)
     ):
+        # Notify BEFORE finalize so the external-media coordinator can start
+        # its stop/pull (network) work while the recorder does its Parquet
+        # write -- the two are independent and this overlaps their latency.
+        if on_game_event is not None:
+            on_game_event("game_ended", recording)
         recording.finalize(
             play_ended_wall_ns=ts_wall_ns, final_score=dict(rec_state["last_score"])
         )

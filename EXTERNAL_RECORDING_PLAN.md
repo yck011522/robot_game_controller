@@ -7,11 +7,14 @@ each, 12 players total). Recording happens **on the external devices**; this
 PC only orchestrates start/stop and pulls the finished files back after each
 game into the existing `recordings/` folder structure.
 
-**Status:** Protocols confirmed and verified live against the hardware
-(2026-08-17). Jetson and Pi firmware fixes (conditional duration cap, URL
-advertise host, async save ACK) **implemented locally** in the two cloned
-repos and tested — awaiting manual push + redeploy to the devices (§8).
-Our-side coordinator code not started yet.
+**Status:** Protocols confirmed + verified live (2026-08-17); device firmware
+fixes deployed and re-verified on hardware (§8/§9/§10). **Our-side
+implementation: Stage 1 + Stage 2 done** — `recorder.game` bus topic +
+`external_media_coordinator` app (sim device clients, manifest, ledger) with
+5/5 tests passing and a sim launcher bring-up confirmed. Stage 3 (real
+Jetson/Pi clients in `devices.py`) is written but not yet exercised against
+live hardware from the coordinator. Folder layout + compression finalized
+(§3).
 
 Protocol sources (external repos, pulled locally):
 
@@ -59,10 +62,13 @@ All devices are on the same LAN as this PC and **verified reachable by ping
 **192.168.0.101** (WS :9000 and HTTP :9100 both confirmed open).
 
 Mic → player mapping (confirmed by user, mirrors display broadcast order but
-kept as an independent copy in config): rpi5-11 MIC1→a1 MIC2→a2,
-rpi5-12→a3/a4, rpi5-13→a5/a6, rpi5-14(0.14)→b1/b2, rpi5-15(0.15)→b3/b4,
-rpi5-16(0.16)→b5/b6. Same convention as `display_broadcast.hosts` in
-`config/device_ports_and_addr.yaml`, duplicated so it can diverge later.
+kept as an independent block so it can diverge later): rpi5-11 MIC1→a1
+MIC2→a2, rpi5-12→a3/a4, rpi5-13→a5/a6, rpi5-14(0.14)→b1/b2,
+rpi5-15(0.15)→b3/b4, rpi5-16(0.16)→b5/b6. **This mapping is hardware
+addressing and lives ONCE in `config/device_ports_and_addr.yaml` under the
+`audio_capture:` block** (loaded via `core.device_connection.load_audio_capture`),
+NOT duplicated per profile. Profiles only carry the Jetson address, the
+raw-media toggles, and pull/retry tuning.
 
 ## 3. On-disk layout (destination on this PC) — FINALIZED 2026-08-17
 
@@ -293,6 +299,7 @@ is terminal.
 New top-level profile block:
 
 ```yaml
+# In the PROFILE (behavior for a run):
 external_recording:
   enabled: true
   skeleton:
@@ -302,36 +309,37 @@ external_recording:
     keep_raw_video: false       # true -> record + pull video.mp4 per team
   audio:
     keep_raw_audio: false       # true -> log_start record_audio=1 + pull audio.flac
-    max_minutes: 60             # Pi in-RAM cap arg to log_start; must exceed profile game duration
-    ack_timeout_s: 0.75         # per-command OSC ack timeout (their default)
-    emotion: false              # enable emotion.csv alongside prosody/VAD
-    ack_preflight: true         # verify all 12 mics ack log_start; unreachable ones are
-                                # logged + flagged in manifest (game still proceeds, per locked decision)
-    # 12 mic endpoints; (team, player) mapping is an INDEPENDENT COPY of the
-    # display-node mapping in docs/DISPLAY_BROADCAST_PROTOCOL.md §4 (user
-    # confirmed same order, kept separate so it can diverge later).
-    devices:
-      - {pi_id: rpi5-11, host: "192.168.0.11", mics: [{mic: 1, team: a, player: 1}, {mic: 2, team: a, player: 2}]}
-      - {pi_id: rpi5-12, host: "192.168.0.12", mics: [{mic: 1, team: a, player: 3}, {mic: 2, team: a, player: 4}]}
-      - {pi_id: rpi5-13, host: "192.168.0.13", mics: [{mic: 1, team: a, player: 5}, {mic: 2, team: a, player: 6}]}
-      - {pi_id: rpi5-14, host: "192.168.0.14", mics: [{mic: 1, team: b, player: 1}, {mic: 2, team: b, player: 2}]}
-      - {pi_id: rpi5-15, host: "192.168.0.15", mics: [{mic: 1, team: b, player: 3}, {mic: 2, team: b, player: 4}]}
-      - {pi_id: rpi5-16, host: "192.168.0.16", mics: [{mic: 1, team: b, player: 5}, {mic: 2, team: b, player: 6}]}
   pull:
     timeout_s: 60               # per-file transfer timeout (video.mp4 can be ~300 MB / 12 min)
     retry_interval_s: 60        # offline-device retry cadence
     retry_window_s: 3600        # give up after this and mark permanently_failed
-  # Pi SSH credentials for the pull live in config/secrets.yaml (gitignored),
-  # read by the coordinator — not duplicated here.
+  # Pi SSH credentials for the pull live in config/secrets.yaml (tracked).
+
+# In config/device_ports_and_addr.yaml (hardware addressing, defined ONCE):
+audio_capture:
+  max_minutes: 15        # Pi in-RAM cap arg to log_start; must exceed game duration
+  ack_timeout_s: 5.0     # per-command OSC ack timeout (async save acks fast)
+  emotion: false         # record emotion.csv too? off = prosody + VAD only
+  hosts:                 # Pi hostname -> ip + per-mic player (mic->player map)
+    rpi5-11: {ip: "192.168.0.11", mic_players: {mic1: "a1", mic2: "a2"}}
+    rpi5-12: {ip: "192.168.0.12", mic_players: {mic1: "a3", mic2: "a4"}}
+    rpi5-13: {ip: "192.168.0.13", mic_players: {mic1: "a5", mic2: "a6"}}
+    rpi5-14: {ip: "192.168.0.14", mic_players: {mic1: "b1", mic2: "b2"}}
+    rpi5-15: {ip: "192.168.0.15", mic_players: {mic1: "b3", mic2: "b4"}}
+    rpi5-16: {ip: "192.168.0.16", mic_players: {mic1: "b5", mic2: "b6"}}
+```
+
+The mic fleet (mic→player mapping, OSC timing, processing toggles) is hardware
+addressing and lives ONCE in `device_ports_and_addr.yaml` under `audio_capture:`,
+loaded via `core.device_connection.load_audio_capture`. The profile keeps only
+the per-run behavior: Jetson address, `keep_raw_video` / `keep_raw_audio`
+toggles, and pull/retry tuning. (Decided 2026-08-17.)
 
 Two toggle presets (locked decision): `two_teams.yaml` gets
 `keep_raw_video: false, keep_raw_audio: false`;
-`two_teams_longer_duration.yaml` gets both `true`. Note the Jetson's
-20-minute recording cap: the longer-duration profile's Play duration must
-stay under it (verify when wiring the profile).
-
-Device addressing may instead live in `config/device_ports_and_addr.yaml`
-with the profile referencing names — decide at implementation time.
+`two_teams_longer_duration.yaml` gets both `true`. The Jetson's duration cap is
+now conditional (video→20 min, skeleton-only→60 min, §8.1), so the 10-min
+longer-duration profile fits comfortably.
 
 Profile/launcher wiring:
 

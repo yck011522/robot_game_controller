@@ -1,0 +1,78 @@
+# Dev profile: external_media_coordinator in SIM mode (no hardware).
+#
+# Brings up the minimal headless team-A sim stack (scripted haptic -> game
+# controller -> headless pybullet robot) PLUS the external_media_coordinator
+# running against no-hardware sim device clients, so the coordinator's
+# start/stop/pull/manifest/ledger lifecycle can be exercised without the
+# Jetson or the Pis. External media lands under recordings_sim_external/ so it
+# never touches the production recordings/ folder.
+#
+# Run:
+#   $env:PYTHONPATH = "src"
+#   & C:/Users/yck01/miniconda3/envs/game/python.exe -m apps.launcher \
+#       --profile config/profiles/dev_external_media_sim.yaml
+
+profile_name: dev_external_media_sim
+description: "Headless team-A sim + external_media_coordinator (sim devices, no hardware)"
+
+gameplay_recording:
+  enabled: true
+  dir: recordings_sim_external   # isolated output root for this dev profile
+
+# Sim external-recording: sim device clients, raw toggles ON so the pull path
+# produces video.mp4 + audio.flac placeholders too.
+external_recording:
+  enabled: true
+  sim: true
+  skeleton:
+    keep_raw_video: true
+  audio:
+    keep_raw_audio: true
+    # The sim mic fleet (mapping, timing, toggles) comes from
+    # config/device_ports_and_addr.yaml `audio_capture:` like the real path.
+  pull:
+    timeout_s: 10
+    retry_interval_s: 5
+    retry_window_s: 60
+
+active_teams: [a]
+
+subsystems:
+  haptic_io:
+    a: sim_scripted
+    b: null
+  robot_io:
+    a: sim_pybullet
+    b: null
+  jogging_planner:
+    a: in_process
+    b: null
+
+  weight_sensor_io: null
+  light_column_1_3: null
+  light_column_4_5: null
+  light_column_6_8: null
+  display_broadcaster: null
+  scoreboard_broadcaster: null
+  bucket_controller: null
+  button_controller: null
+  safety_barrier_controller: null
+
+  collision_workers:
+    count: 2
+
+  collision_broker: null
+
+  event_recorder: null
+  gamemaster_ui: null
+  external_media_coordinator: sim   # spawn the coordinator (sim devices)
+  bus_broker:
+    impl: real
+
+tuning:
+  haptic:
+    gear_ratio: [10.0, 10.0, 10.0, 5.0, 5.0, 5.0]
+  robot:
+    q_limits_min_deg: [-180, -180, -180, -180, -180, -180]
+    q_limits_max_deg: [180, 180, 180, 180, 180, 180]
+    headless: true

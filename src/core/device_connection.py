@@ -312,6 +312,142 @@ def resolve_display_players(
     return None
 
 
+@dataclass(frozen=True)
+class AudioMicAssignment:
+    """One microphone on one audio Pi, mapped to the player it listens to.
+
+    Attributes
+    ----------
+    pi_id:
+        Pi hostname, e.g. ``"rpi5-11"`` (also the manifest/folder identity).
+    host:
+        Pi IP address.
+    mic:
+        Mic number on the Pi: 1 or 2 (selects OSC control port 9001/9002).
+    team:
+        ``"a"`` or ``"b"``.
+    player:
+        1-based player index within the team.
+    """
+
+    pi_id: str
+    host: str
+    mic: int
+    team: str
+    player: int
+
+    @property
+    def ctrl_port(self) -> int:
+        """OSC control port for this mic process (9001 for mic 1, 9002 for mic 2)."""
+        return 9000 + self.mic
+
+    @property
+    def mic_label(self) -> str:
+        """Pi-side folder name for this mic, e.g. ``"MIC1"``."""
+        return f"MIC{self.mic}"
+
+    @property
+    def player_label(self) -> str:
+        """Per-player destination folder name, e.g. ``"a1"``."""
+        return f"{self.team}{self.player}"
+
+    @property
+    def device_key(self) -> str:
+        """Manifest key for this mic, e.g. ``"pi:rpi5-11:MIC1"``."""
+        return f"pi:{self.pi_id}:{self.mic_label}"
+
+
+@dataclass(frozen=True)
+class AudioCapture:
+    """Resolved audio-capture fleet: shared processing settings + mic map.
+
+    Attributes
+    ----------
+    max_minutes:
+        Pi in-RAM recording cap passed to ``log_start``; must exceed the game
+        duration.
+    ack_timeout_s:
+        Per-command OSC ack timeout.
+    emotion:
+        Whether to record ``emotion.csv`` alongside prosody/VAD.
+    mics:
+        One ``AudioMicAssignment`` per microphone (12 for a six-Pi fleet).
+    source:
+        Provenance string for error messages.
+    """
+
+    max_minutes: int
+    ack_timeout_s: float
+    emotion: bool
+    mics: tuple[AudioMicAssignment, ...]
+    source: str
+
+
+def load_audio_capture(path: str | Path | None = None) -> AudioCapture:
+    """Return the audio-capture fleet config from ``device_ports_and_addr.yaml``.
+
+    This is the single source of truth for the mic -> (team, player) mapping
+    used by the external_media_coordinator to lay out per-player
+    ``audio/<player>/`` folders. Raises ValueError when the ``audio_capture``
+    block is missing or malformed.
+    """
+
+    data = load_device_connection(path)
+    node = data.get("audio_capture")
+    source = f"{_path_from_arg(path)}:audio_capture"
+    if not isinstance(node, dict):
+        raise ValueError(f"missing audio_capture mapping in {_path_from_arg(path)}")
+
+    def _float(key: str, default: float) -> float:
+        try:
+            return float(node.get(key, default))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{source}.{key} must be a number") from exc
+
+    mics: list[AudioMicAssignment] = []
+    hosts_node = node.get("hosts") or {}
+    if not isinstance(hosts_node, dict):
+        raise ValueError(f"{source}.hosts must be a mapping")
+    for pi_id, entry in hosts_node.items():
+        if not isinstance(entry, dict):
+            raise ValueError(f"{source}.hosts.{pi_id} must be a mapping")
+        host = str(entry.get("ip") or "").strip()
+        if not host:
+            raise ValueError(f"{source}.hosts.{pi_id}.ip must be a non-empty string")
+        mic_players = entry.get("mic_players") or {}
+        if not isinstance(mic_players, dict) or not mic_players:
+            raise ValueError(f"{source}.hosts.{pi_id}.mic_players must be a mapping")
+        for mic_key, player_id in mic_players.items():
+            # mic_key is "mic1"/"mic2"; player_id is "a1"/"b3"/...
+            try:
+                mic_num = int(str(mic_key).lower().replace("mic", ""))
+            except ValueError as exc:
+                raise ValueError(
+                    f"{source}.hosts.{pi_id}.mic_players key {mic_key!r} must be mic1/mic2"
+                ) from exc
+            player_text = str(player_id).strip()
+            team = player_text[:1].lower()
+            try:
+                player_num = int(player_text[1:])
+            except (ValueError, IndexError) as exc:
+                raise ValueError(
+                    f"{source}.hosts.{pi_id}.mic_players.{mic_key}={player_id!r} "
+                    "must look like 'a1'/'b3'"
+                ) from exc
+            mics.append(AudioMicAssignment(
+                pi_id=str(pi_id), host=host, mic=mic_num,
+                team=team, player=player_num,
+            ))
+
+    return AudioCapture(
+        max_minutes=int(_float("max_minutes", 15.0)),
+        ack_timeout_s=_float("ack_timeout_s", 5.0),
+        emotion=bool(node.get("emotion", False)),
+        mics=tuple(mics),
+        source=source,
+    )
+
+
 def clear_cache() -> None:
     """Clear the YAML cache; useful for tests and discovery writers."""
 

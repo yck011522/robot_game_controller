@@ -97,3 +97,12 @@ subsystems:
     fps_target: 120.0
     fps_min: 30.0
     heartbeat_age_max: 1100
+
+  external_media_coordinator:
+    # Poll/wake rate only. Event-driven: it acts on rare `recorder.game` bus
+    # events (game start/end) and harvests background device pulls each tick,
+    # so a modest rate is plenty -- all blocking network I/O (OSC, WebSocket,
+    # SFTP/HTTP pulls) runs on worker threads, never on this loop.
+    fps_target: 20.0
+    fps_min: 5.0
+    heartbeat_age_max: 1100

@@ -1,7 +1,8 @@
 # Two-team real-hardware bring-up profile with longer 600s gameplay duration.
 #
-# Based on config/profiles/two_teams.yaml, with BOTH teams enabled on real
-# hardware, but with gameplay duration extended from 300s (5 min) to 600s (10 min):
+# Identical to config/profiles/two_teams.yaml EXCEPT: profile name, the play
+# duration (600 s instead of 300 s), and external-media raw audio + raw video
+# are enabled. Everything else (hardware, tuning, daydream, rewind) is the same.
 #
 #   * real Team A AND Team B haptic dials + real robots (real_rtde),
 #   * weight_sensor_io DISABLED (null) -- scores seeded from sim_bucket_values,
@@ -25,6 +26,26 @@ description: "Team A + Team B real haptic/robot + real light_column (600s / 10-m
 gameplay_recording:
   enabled: true
   dir: recordings
+
+# External media recording (EXTERNAL_RECORDING_PLAN.md): skeleton from the
+# Jetson + prosody/audio from the 6 Pis, pulled back per game. This is the
+# longer-duration profile -> raw media ON (video.mp4 + audio.flac pulled too).
+external_recording:
+  enabled: true
+  skeleton:
+    host: "192.168.0.101"   # Jetson Nano (verified reachable)
+    ws_port: 9000
+    http_port: 9100
+    keep_raw_video: true    # pull video.mp4 per team
+  audio:
+    keep_raw_audio: true    # pull audio.flac + audio.json per mic
+    # The mic fleet (mic -> team/player mapping, OSC timing, processing
+    # toggles) is hardware addressing and lives ONCE in
+    # config/device_ports_and_addr.yaml under `audio_capture:` -- not here.
+  pull:
+    timeout_s: 60
+    retry_interval_s: 60
+    retry_window_s: 3600
 
 active_teams: [a, b]
 
@@ -56,6 +77,7 @@ subsystems:
 
   event_recorder: null
   gamemaster_ui: null
+  external_media_coordinator: real   # pull skeleton+audio per game (external_recording above)
   bus_broker:
     impl: real
 
@@ -184,7 +206,7 @@ tuning:
 
   game:
     # --- Core game ---
-    duration_s: 600                  # play-stage length (seconds) -- extended to 600 seconds (10 minutes)
+    duration_s: 600                  # play-stage length (seconds) -- 600 s (10 minutes)
     sum_score_rate_unit_per_s: 100
     sim_bucket_values:
       a: [120, 80, 40]              # seed scores (no weight sensors in this profile)
@@ -207,3 +229,42 @@ tuning:
     rewind_speed_fraction: 0.60     # rewind at 60% of each max_velocity_deg_s
     rewind_arrival_tolerance_deg: 0.5  # all six measured joints must be within this to finish
     idle_timeout_s: 60              # idle -> daydreaming after this much quiet (seconds)
+    # Wake daydreaming -> idle when a dial is pushed this far OFF its tracking
+    # target (dial-space deg). Dials follow the robot/playback, so only a human
+    # pushing against the spring trips this. gear 0.1 -> 450 dial deg ~= 45 robot.
+    daydream_to_idle_error_deg: 250
+    idle_to_tutorial_dial_deg: 180  # any dial moved this far (dial-space deg) starts tutorial
+    # Movement-detection (rolling window): wake/tutorial triggers compare each
+    # dial's peak-to-peak range over the last movement_window_s seconds against
+    # the *_dial_deg thresholds above, so slow drift around a set point never
+    # accumulates into a false trigger. movement_glitch_trim discards that many
+    # most-extreme samples at each end of the window before measuring, rejecting
+    # brief encoder glitches. Detection only arms after a full clean window is
+    # collected post startup-alignment. Raise window for more drift rejection;
+    # raise trim if dials glitch in longer bursts.
+    movement_window_s: 2.0          # rolling window length (seconds)
+    movement_glitch_trim: 3         # extreme samples dropped per end (glitch reject)
+  rewind_shortcut:
+    enabled: true                   # smooth/optimize the rewind path before replaying it
+    optimization_budget_s: 3.0      # search wall-time budget before rewind begins
+    collision_step_deg: 1.0         # certify every proposed edge at <=1 degree
+    collision_batch_size: 8         # keep all eight collision workers occupied
+    random_seed: null               # fresh production shortcut search each game
+
+  daydream:
+    # Attract-mode robot playback. Replays the newest recorded game's first
+    # play segment: forward = verbatim recording (no smoothing), then a smoothed
+    # rewind back to the play-entry pose, looping until a dial wake / skip. On
+    # interrupt it rewinds from the current point, then enters idle. Needs a
+    # recording under recording_dir; otherwise the LEDs just breathe.
+    enabled: false
+    per_team_own_trajectory: true   # each robot replays its own path (false -> all use team a)
+    recording_dir: logs/display_broadcast_recording
+    rewind_speed_fraction: 0.40     # smoothed rewind at 40% of each max_velocity_deg_s
+    rewind_arrival_tolerance_deg: 0.5
+    rewind_shortcut:
+      enabled: true                 # collision-smooth the rewind path
+      optimization_budget_s: 3.0
+      collision_step_deg: 1.0
+      collision_batch_size: 2
+      random_seed: null
