@@ -1,0 +1,9 @@
+{
+  "name": "robot-record-player",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22 <25" },
+  "scripts": { "start": "node server.mjs", "test": "node --test tests/*.test.mjs" },
+  "dependencies": { "three": "0.180.0" }
+}

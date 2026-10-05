@@ -1,0 +1,6 @@
+.venv/
+.runtime/
+.cache/
+node_modules/
+test-results/
+*.log

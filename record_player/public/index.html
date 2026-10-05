@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Record Player · Robot Game Lab</title><link rel="stylesheet" href="/style.css">
+<script type="importmap">{"imports":{"three":"/vendor/build/three.module.js","three/addons/":"/vendor/examples/jsm/"}}</script>
+</head><body>
+<header class="brand"><a href="/" aria-label="Record Player home"><span class="brand-mark">◈</span> RECORD PLAYER</a><span class="subtle">ROBOT GAME LAB <span class="pill">PROTOTYPE 01</span></span><button id="guide">Evaluation guide ↗</button></header>
+<main>
+<section id="library">
+  <div class="page-heading"><div><p class="eyebrow">THE RECORDING LIBRARY</p><h1>Find a moment worth exploring.</h1><p class="muted">Compare games, follow the players, and see how intent becomes motion.</p></div><span class="local-badge">● LOCAL & READ-ONLY</span></div>
+  <div class="summary" id="summary"></div>
+  <div class="toolbar"><label class="search">⌕ <input id="search" type="search" placeholder="Search date, time, profile or flag…" aria-label="Search recordings"></label><label><input id="localOnly" type="checkbox" checked> On this computer</label><label><input id="shortOnly" type="checkbox"> Short play (&lt;60s)</label><label>Sort <select id="sortMetric"><option value="id">Newest recording</option><option value="play_duration">Play duration</option><option value="lead_a">Lead P95 A</option><option value="lead_b">Lead P95 B</option><option value="limited_a">Limited time A</option><option value="limited_b">Limited time B</option><option value="coverage_a">Coverage A</option><option value="coverage_b">Coverage B</option><option value="travel_a">Joint travel A</option><option value="travel_b">Joint travel B</option></select></label><button id="refresh">Refresh index</button><span id="rowCount" class="muted"></span></div>
+  <p class="table-note">Click a column to sort. Lead P95 and limited time are exploratory, Play-only metrics; <b>—</b> means not yet analyzed or unavailable. Open a game to analyze it.</p>
+  <div class="table-scroll"><table id="games"><thead><tr>
+    <th data-sort="id">Recording ↓</th><th data-sort="play_duration">Play / total</th><th data-sort="score_a">Score A</th><th data-sort="score_b">Score B</th><th data-sort="travel_a">Travel A · rad</th><th data-sort="travel_b">Travel B · rad</th><th data-sort="lead_a">Lead P95 A / B · °</th><th data-sort="limited_a">Limited A / B · %</th><th>Availability / clues</th><th></th>
+  </tr></thead><tbody></tbody></table></div>
+  <div class="pagination"><button id="previous">← Previous</button><span id="pageInfo"></span><button id="next">Next →</button></div>
+</section>
+<section id="player" hidden>
+  <div class="player-heading"><div><button id="back" class="quiet">← Recordings</button><h1 id="gameTitle">Loading recording…</h1><p id="gameSubtitle" class="muted"></p></div><div id="gameScores" class="score-pair"></div></div>
+  <div id="loadStatus" class="notice" role="status"></div>
+  <details class="settings"><summary>View & alignment settings <span class="muted">Confidence, sound, controller guides, geometry</span></summary>
+    <div class="settings-grid">
+      <label>Pose confidence <input id="confidence" type="range" min="0.05" max="0.95" step="0.05" value="0.35"><output id="confidenceValue">0.35</output></label>
+      <label><input id="crop" type="checkbox" checked> Focus on lower camera area</label>
+      <label><input id="halos" type="checkbox" checked> Hand loudness halos (inferred association)</label>
+      <label>Loudness gain <input id="gain" type="range" min="0.1" max="8" step="0.1" value="1"></label>
+      <label>Audio offset · seconds <input id="audioOffset" type="number" min="-120" max="120" step="0.1" value="0"></label>
+      <label><input id="anchors" type="checkbox"> Show / drag controller guides</label>
+      <button id="suggestAnchors">Suggest guides from paired hands</button><button id="resetAnchors">Reset guides</button>
+      <label><input id="barriers" type="checkbox"> Show ceiling & player barriers</label><button id="resetCamera">Reset 3D cameras</button>
+      <label>Trace range <select id="traceRange"><option value="full">Full recording</option><option value="play" selected>Play stage</option><option value="window">30 s around playhead</option></select></label>
+    </div><p class="table-note">P1 is at the left of each camera. Controller guides and hand-to-microphone association are provisional; drag guides to calibrate. Saved per camera in this browser. Positive audio offset delays sound relative to gameplay. Loudness is openSMILE intensity, not dB SPL.</p>
+    <div id="geometryOptions" class="geometry-options"></div>
+  </details>
+  <div class="teams-head"><h2><i class="dot a"></i> TEAM A <span id="status-a"></span></h2><h2><i class="dot b"></i> TEAM B <span id="status-b"></span></h2></div>
+  <div class="paired" id="skeletonRow"></div>
+  <div class="paired" id="dialRow"></div>
+  <div class="paired" id="robotRow"></div>
+  <div class="paired" id="chartRow"></div>
+  <details class="diagnostics"><summary>Data quality & interpretation notes</summary><div id="quality"></div></details>
+  <div class="timeline">
+    <div class="transport"><button id="play" class="primary" disabled>▶ Play</button><button id="stepBack" aria-label="Back one preview frame">− frame</button><button id="stepForward" aria-label="Forward one preview frame">+ frame</button><label>Speed <select id="speed"><option>0.25</option><option>0.5</option><option selected>1</option><option>2</option><option>4</option></select>×</label><strong id="timeLabel">0:00.0 / 0:00.0</strong><span id="stage" class="pill">—</span><button id="jumpPlay">Jump to Play</button><span class="keyboard-hint">Space play · ← → 1 sec · Shift 10 sec</span></div>
+    <div class="scrub-track"><div id="playRegion"></div><input id="scrubber" aria-label="Playback time in seconds" type="range" min="0" max="1" value="0" step="0.05"></div><div class="timeline-labels"><span>TUTORIAL / RECORDING START</span><span id="playMarker"></span><span>END</span></div>
+  </div>
+</section>
+</main>
+<dialog id="guideDialog"><button id="closeGuide" class="close">Close ×</button><p class="eyebrow">YOUR FIRST EXPLORATION</p><h2>What makes the data useful?</h2><p>Start with a normal game, a short game, and one with a large A/B difference. These are observations to discuss, not automatic player ratings.</p><ol>
+<li><b>Orient yourself.</b> Are P1–P6 left-to-right for both cameras? Try full frame and the lower-area crop. Which makes hands and bodies easier to read?</li>
+<li><b>Follow one player.</b> Click a dial card and scrub its traces. Can you distinguish a small steady lead from continued turning while the robot is limited?</li>
+<li><b>Compare speeds.</b> Does the joint-equivalent dial speed make sense alongside robot speed? Do you need raw dial speed or torque visible more often?</li>
+<li><b>Check alignment.</b> Find a clear hand movement, robot response, and loudness event. Does audio need an offset? Relative audio starts and cross-device clocks are not verified.</li>
+<li><b>Inspect the scene.</b> Orbit and zoom. Which environment pieces obstruct the view? Are the bucket tool and scoring buckets legible?</li>
+<li><b>Try controller guides.</b> Suggest positions, then drag them with a populated frame visible. Do they stay close to held controllers across several games?</li>
+<li><b>Evaluate the browser.</b> Do duration, travel, lead P95, and limited time help you find contrasting games? Which flags are misleading?</li>
+</ol><p>When sharing feedback, note the recording ID, timestamp, team/player, and what you expected to see. Short games, large lead, and loudness alone do not establish player skill or intent.</p></dialog>
+<script type="module" src="/app.mjs"></script></body></html>
